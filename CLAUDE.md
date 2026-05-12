@@ -69,6 +69,130 @@ The backend uses two S3 endpoint settings:
 
 When the backend creates a presigned URL for browser-direct upload, it uses `S3_PUBLIC_ENDPOINT` (falling back to `S3_ENDPOINT`) as the signing endpoint. See `parseBaseS3Config()` in `packages/backend/src/config/parseConfig.ts`.
 
+<!-- AUTO-MANAGED: architecture -->
+## Protopie Fork — Sales Ops Module
+
+This repo is a **Protopie-specific fork** of Lightdash. A `protopie/` module is being built to replace ChurnZero (expires **2026-07-30**) with three deliverables:
+
+1. **Churn Score engine** — 9-factor weighted score (0–100) per Account (`team_id`), nightly recompute via Graphile Worker, reading `mart_account_usage_90d` from Amazon Redshift via Lightdash's existing `WarehouseClient`. **Score is computed in the backend, NOT in dbt** — do not add a dbt scoring model; dashboards will silently diverge if you do.
+2. **Forms system** — Schema-driven Zod forms for sales reps (account touchpoints, renewal status, score overrides). Submissions → `protopie_form_submissions` → dbt source → Redshift marts.
+3. **MCP write tools** — 10 tools (5 read-extended + 5 write) extending the existing read-only `McpService`. Write tools wrap `CoderService` (slug-based, idempotent). Gated by `mcp:write` OAuth scope via `requireMcpWrite()` helper + org-level opt-in (`protopie_organization_settings`). Default OFF per org.
+
+**Non-technical stakeholder overview: [`docs/POC.md`](./docs/POC.md)** — explains *what* we're building and *why* for sales leadership, product, finance, and project sponsors. Plain language, no code, no file paths. Covers the idea, what each role gains, timeline, risks, and success criteria. **Not a step-by-step engineering walkthrough.**
+
+**Engineers starting implementation:** Read [`docs/protopie-docs/README.md`](./docs/protopie-docs/README.md) for the index, then the numbered design docs `00–15` in order. Begin with `00-context.md` then `02-isolation-strategy.md`. dbt project is a **separate repo** at `/Users/mamur/Documents/projects/data-modeling` (Amazon Redshift warehouse).
+
+### Implementation phases (hard deadline 2026-07-30)
+
+| Phase | Goal |
+|-------|------|
+| P1 | Foundations: folder skeletons, migrations (8 tables), dbt marts skeleton |
+| P2 | Forms + score backend: `FormService`, `ChurnScoreService`, Graphile Worker task |
+| P3 | Dashboards & UI: Lightdash explores, Usage Data + Churn Score dashboards, frontend |
+| P4 | MCP write tools (parallel; independent of P1–P3) |
+| P4.5 | Deployment plumbing: ECR, GitHub Actions image build, ECS Fargate wiring (parallel) |
+| P5 | Hardening, UAT, ChurnZero parallel run, reconciliation sign-off, cutover |
+
+### Isolation rule — ONE folder per package
+
+ALL Protopie code lives under `packages/*/src/protopie/`. Only 7 minimal wire-up touch points touch Lightdash core (each <5 lines). Controlled by `PROTOPIE_ENABLED=true|false`.
+
+| # | Touch point file | What is added |
+|---|-----------------|---------------|
+| 1 | `packages/backend/src/App.ts` | `registerProtopieModule()` call |
+| 2 | `packages/backend/knexfile.ts` | Add `src/protopie/database/migrations` directory |
+| 3 | `packages/backend/src/scheduler/SchedulerWorker.ts` | Register `recomputeChurnScore` task |
+| 4 | `packages/backend/src/ee/services/McpService/McpService.ts` | `registerProtopieWriteTools(server, deps)` + inject `coderService` |
+| 5 | `packages/common/src/index.ts` | `export * as Protopie from './protopie'` |
+| 6 | `packages/frontend/src/Routes.tsx` | Spread `protopieRoutes` |
+| 7 | `packages/frontend/src/components/NavBar/MainNavBarContent.tsx` | `<ProtopieNavEntry />` |
+
+### Protopie folder layout
+
+```
+packages/
+├── backend/src/protopie/    controllers/ services/ models/ database/migrations/ scheduler/ mcp/writeTools/
+├── common/src/protopie/     forms/schemas/ churn/ mcp/
+└── frontend/src/protopie/   pages/ components/ hooks/ api/
+docs/protopie-docs/          design docs 00–15
+```
+
+Dashboard + chart YAML files live in the **data-modeling repo** at `lightdash/charts/protopie-*.yml` and `lightdash/dashboards/protopie-*.yml`.
+
+### Account identity
+
+The canonical Account key is **`team_id`** (from `dim_team_summary` in the warehouse). Secondary identifiers: `namespace` (human-readable, used for joins into `dim_enterprise_summary`), `cloud_url` (the URL shown to sales; from `dim_team_summary.url`), `salesforce_account_id` (nullable). Sales never sees `team_id` directly — dashboards display `namespace` / `cloud_url`.
+
+### Protopie Postgres tables (all prefixed `protopie_`)
+
+- `protopie_form_definitions` — form metadata + JSON schema, versioned; synced from code on startup
+- `protopie_form_submissions` — JSONB payload validated by Zod before insert; `supersedes_submission_uuid` for corrections; extracted join columns: `account_key` (= `team_id`), `cloud_url`, `salesforce_account_id`
+- `protopie_churn_score_configs` — one row per score config version; immutable once `status='active'`; `risk_band_thresholds` JSONB controls band cutoffs
+- `protopie_churn_score_factors` — N factors (weights, goals, event groups as JSONB) per config; FK to `protopie_churn_score_configs`
+- `protopie_churn_score` — daily score per Account per `config_uuid`; `factor_scores` JSONB breakdown inline; unique on `(account_key, scored_for_date, lookback_days, config_uuid)`
+- `protopie_churn_score_factor_results` — optional normalized factor breakdown; defer to v1.1
+- `protopie_churn_score_runs` — audit log per recompute run
+- `protopie_account_overrides` — force scores / exclusions; `valid_until` for time-bounded overrides
+- `protopie_organization_settings` — org-level MCP write-tools toggle (`mcp_write_tools_enabled`, default FALSE); one row per org
+- `protopie_mcp_audit_log` — every MCP write tool call: `auth_method`, `tool_name`, `input_summary` (slugs only, no full payloads), `outcome`
+
+### dbt integration (data-modeling repo)
+
+New folders added to `/Users/mamur/Documents/projects/data-modeling` (dbt/Redshift repo):
+- `models/staging/protopie_app/` — thin views over Lightdash Postgres (via Airflow hourly dump or FDW)
+- `models/intermediate/protopie/int_protopie_team_user_event_counts.sql` and `int_account_event_group_counts.sql`
+- `models/marts/warehouse/protopie/daily/` — `mart_account_usage_90d`, `mart_churn_score_latest`, `mart_sales_touchpoints`, `mart_account_overrides_active`
+- `seeds/protopie/dim_churn_score_event_groups.csv` — declarative OR-semantics for event groups; parity-tested against Postgres `event_group` JSONB
+
+Tags: `protopie` on all new models; `lightdash` on marts surfaced in Lightdash explores.
+
+```bash
+# Run only Protopie models (from /Users/mamur/Documents/projects/data-modeling)
+dbt run --select tag:protopie
+dbt build --select +marts.warehouse.protopie
+```
+
+### Three repos, one initiative
+
+| Repo | Path | Purpose |
+|------|------|---------|
+| Lightdash fork | `/Users/mamur/Documents/projects/lightdash` | This repo — `github.com/ProtoPie/lightdash` |
+| dbt / data-modeling | `/Users/mamur/Documents/projects/data-modeling` | Redshift marts, staging models, chart/dashboard YAMLs |
+| lightdash-infra | `/Users/mamur/Documents/projects/lightdash-infra` | Terraform IaC — ECS Fargate, RDS, S3, ALB, Route53 |
+
+### Deployment (AWS ECS Fargate)
+
+- **Stack**: ECS Fargate (single container per task) + Postgres 15 RDS + S3 + ALB, Terraform-managed
+- **Terraform dirs**: `/Users/mamur/Documents/projects/lightdash-infra/infra/{dev,prod}/` — `dev/` uses AWS profile `xid-dev`, `prod/` uses `xid-prod`
+- **AWS region**: `us-west-2`
+- **Docker image**: Custom image built via GitHub Actions (`.github/workflows/build-image.yml`), pushed to AWS ECR `protopie/lightdash`. Replaces the upstream `lightdash/lightdash:latest` reference in `ecs.tf` (`var.lightdash_oci_tag` → ECR URI)
+- **Protopie env vars** (add to `ecs.tf` `container_definitions.environment[]` and `infra/{dev,prod}/.env`):
+  - `PROTOPIE_ENABLED` — set `true` in prod, `false` on dev when not testing
+  - `PROTOPIE_PROJECT_UUID` — Lightdash project UUID that owns Protopie content
+  - `PROTOPIE_WAREHOUSE_MART_TABLE` — e.g. `warehouse.mart_account_usage_90d`
+  - `PROTOPIE_RECOMPUTE_CRON` — default `0 2 * * *`
+- **Single container**: HTTP + Graphile Worker run in the same container (`SCHEDULER_ENABLED=true`). No separate scheduler service in v1.
+- **Rollback**: `terraform apply -var "lightdash_oci_tag=<prior-sha>"` or `aws ecs update-service --task-definition lightdash:<prior-revision>`
+- **Logs**: CloudWatch `/ecs/lightdash-log-groups`; add `SENTRY_DSN` env var to capture backend errors in Sentry
+
+### Protopie coding constraints
+
+- **Account key** is `team_id` on all Postgres tables — `cloud_url` is a display/secondary identifier only
+- **Score computation is backend-only** — `ChurnScoreService.recomputeAll()` reads `mart_account_usage_90d` via `WarehouseClient`, applies weights from Postgres config, writes `protopie_churn_score`; never replicate this in dbt SQL
+- **Score history default is "as-was"** — past rows keep their `config_uuid`; backfill is opt-in via admin action, not automatic on weight change
+- **Forms** are code-defined (TypeScript Zod schemas in `packages/common/src/protopie/forms/schemas/`) — no DB-defined forms in v1
+- **Do NOT add custom CASL scopes** in v1 — doing so requires editing `projectMemberAbility.ts`, `roleToScopeMapping.ts`, `serviceAccountAbility.ts`, which violates the isolation rule; use inline role checks in controllers
+- **TSOA** auto-discovers `**/*Controller.ts` globs — Protopie controllers need no extra wiring beyond `pnpm generate-api`
+- **Service injection** — use `getProtopieServices(repository)` typed adapter inside Protopie controllers; do NOT augment Lightdash's `ServiceRepository` type
+- **Scoring function** — linear for v1: `LEAST(actual/goal, 1) * weight`; step-wise supported in schema (`step_thresholds` JSONB) for future; versioning uses `config_uuid` (immutable per version)
+- **Dashboard seeding** uses `CoderService` via the idempotent bootstrap endpoint `POST /api/v1/projects/:projectUuid/protopie/churn/dashboards/bootstrap`; YAML lives in the data-modeling repo
+- **MCP write tools** live in `packages/backend/src/protopie/mcp/` (Option A — isolatable); wrap `CoderService` only — never raw `DashboardService.create()`; all Protopie slugs prefixed `protopie-`; org-level setting in `protopie_organization_settings` (default OFF)
+- **MCP write tool permission model** has three layers: (1) `mcp:write` OAuth scope via `requireMcpWrite()`, (2) org opt-in via `protopie_organization_settings`, (3) per-call CASL via the underlying service
+- **Warehouse** is Amazon Redshift — backend reads marts via `WarehouseClient` (Lightdash's existing abstraction); never connect to Redshift with a side-channel credential
+- **Public space sharing** is disabled for the `protopie/sales-ops` space — set `inheritParentPermissions: false` with no public-share config at space-creation time (Account names + MRR would be exposed otherwise)
+
+<!-- END AUTO-MANAGED -->
+
 ## Common Development Commands
 
 -   Assume the dev-server is always running
