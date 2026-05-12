@@ -61,9 +61,13 @@ import { McpContextModel } from '../../../models/McpContextModel';
 import { ProjectModel } from '../../../models/ProjectModel/ProjectModel';
 import { SearchModel } from '../../../models/SearchModel';
 import { UserAttributesModel } from '../../../models/UserAttributesModel';
+import { registerProtopieMcpTools } from '../../../protopie/mcp/registerProtopieMcpTools';
+import { ProtopieMcpAuditLogModel } from '../../../protopie/models/McpAuditLogModel';
+import { ProtopieOrganizationSettingsModel } from '../../../protopie/models/OrganizationSettingsModel';
 import { AsyncQueryService } from '../../../services/AsyncQueryService/AsyncQueryService';
 import { BaseService } from '../../../services/BaseService';
 import { CatalogService } from '../../../services/CatalogService/CatalogService';
+import { CoderService } from '../../../services/CoderService/CoderService';
 import { ContentVerificationService } from '../../../services/ContentVerificationService';
 import { CsvService } from '../../../services/CsvService/CsvService';
 import { FeatureFlagService } from '../../../services/FeatureFlag/FeatureFlagService';
@@ -122,6 +126,7 @@ export enum McpToolName {
     LIST_PROJECTS = 'list_projects',
     SET_PROJECT = 'set_project',
     GET_CURRENT_PROJECT = 'get_current_project',
+    LIST_SPACES = 'list_spaces',
     LIST_AGENTS = 'list_agents',
     SET_AGENT = 'set_agent',
     CLEAR_AGENT = 'clear_agent',
@@ -140,6 +145,7 @@ type McpServiceArguments = {
     contentVerificationService: ContentVerificationService;
     projectModel: ProjectModel;
     projectService: ProjectService;
+    coderService: CoderService;
     savedSqlService: SavedSqlService;
     schedulerService: SchedulerService;
     shareService: ShareService;
@@ -150,6 +156,8 @@ type McpServiceArguments = {
     featureFlagService: FeatureFlagService;
     aiOrganizationSettingsService: AiOrganizationSettingsService;
     aiAgentService: AiAgentService;
+    protopieOrganizationSettingsModel?: ProtopieOrganizationSettingsModel;
+    protopieMcpAuditLogModel?: ProtopieMcpAuditLogModel;
 };
 
 export type ExtraContext = {
@@ -177,6 +185,8 @@ export class McpService extends BaseService {
 
     private projectService: ProjectService;
 
+    private coderService: CoderService;
+
     private savedSqlService: SavedSqlService;
 
     private schedulerService: SchedulerService;
@@ -199,6 +209,10 @@ export class McpService extends BaseService {
 
     private aiAgentService: AiAgentService;
 
+    private protopieOrganizationSettingsModel?: ProtopieOrganizationSettingsModel;
+
+    private protopieMcpAuditLogModel?: ProtopieMcpAuditLogModel;
+
     private mcpServer: McpServer;
 
     private mcpCompatLayer: McpSchemaCompatLayer;
@@ -210,6 +224,7 @@ export class McpService extends BaseService {
         catalogService,
         contentVerificationService,
         projectService,
+        coderService,
         savedSqlService,
         schedulerService,
         shareService,
@@ -221,6 +236,8 @@ export class McpService extends BaseService {
         featureFlagService,
         aiOrganizationSettingsService,
         aiAgentService,
+        protopieOrganizationSettingsModel,
+        protopieMcpAuditLogModel,
     }: McpServiceArguments) {
         super();
         this.lightdashConfig = lightdashConfig;
@@ -229,6 +246,7 @@ export class McpService extends BaseService {
         this.catalogService = catalogService;
         this.contentVerificationService = contentVerificationService;
         this.projectService = projectService;
+        this.coderService = coderService;
         this.savedSqlService = savedSqlService;
         this.schedulerService = schedulerService;
         this.shareService = shareService;
@@ -240,6 +258,9 @@ export class McpService extends BaseService {
         this.featureFlagService = featureFlagService;
         this.aiOrganizationSettingsService = aiOrganizationSettingsService;
         this.aiAgentService = aiAgentService;
+        this.protopieOrganizationSettingsModel =
+            protopieOrganizationSettingsModel;
+        this.protopieMcpAuditLogModel = protopieMcpAuditLogModel;
         this.mcpCompatLayer = new McpSchemaCompatLayer();
         try {
             this.mcpServer = Sentry.wrapMcpServerWithSentry(
@@ -840,6 +861,90 @@ export class McpService extends BaseService {
                                 null,
                                 2,
                             ),
+                        },
+                    ],
+                };
+            },
+        );
+
+        this.mcpServer.registerTool(
+            McpToolName.LIST_SPACES,
+            {
+                description:
+                    'List spaces in a Lightdash project. If projectUuid is omitted, uses the active project selected with set_project. Returns the space count and metadata for each accessible space, including empty spaces.',
+                inputSchema: {
+                    projectUuid: z.string().optional(),
+                },
+                annotations: {
+                    readOnlyHint: true,
+                    destructiveHint: false,
+                    idempotentHint: true,
+                },
+            },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            async (
+                _args: AnyType,
+                extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
+            ) => {
+                const args = _args as { projectUuid?: string };
+                const context = extra as McpProtocolContext;
+                const { user } = this.getAccount(context);
+
+                this.trackToolCall(context, McpToolName.LIST_SPACES);
+
+                const metadata = args.projectUuid
+                    ? null
+                    : await this.getActiveContextMetadata(context);
+                const projectUuid = args.projectUuid ?? metadata?.projectUuid;
+
+                if (!projectUuid) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify(
+                                    {
+                                        error: 'No active project set. Use set_project or pass projectUuid.',
+                                    },
+                                    null,
+                                    2,
+                                ),
+                            },
+                        ],
+                    };
+                }
+
+                const spaces = await this.projectService.getSpaces(
+                    user,
+                    projectUuid,
+                );
+
+                const result = {
+                    projectUuid,
+                    projectName: metadata?.projectName ?? null,
+                    count: spaces.length,
+                    spaces: spaces.map((space) => ({
+                        uuid: space.uuid,
+                        name: space.name,
+                        slug: space.slug,
+                        path: space.path,
+                        parentSpaceUuid: space.parentSpaceUuid,
+                        chartCount: space.chartCount,
+                        dashboardCount: space.dashboardCount,
+                        childSpaceCount: space.childSpaceCount,
+                        appCount: space.appCount,
+                        inheritsFromOrgOrProject:
+                            space.inheritsFromOrgOrProject,
+                        access: space.access,
+                        userAccess: space.userAccess,
+                    })),
+                };
+
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(result, null, 2),
                         },
                     ],
                 };
@@ -1625,6 +1730,23 @@ export class McpService extends BaseService {
                 };
             },
         );
+
+        registerProtopieMcpTools({
+            mcpServer: this.mcpServer,
+            siteUrl: this.lightdashConfig.siteUrl,
+            coderService: this.coderService,
+            spaceService: this.spaceService,
+            getAccount: (context) =>
+                this.getAccount(context as McpProtocolContext),
+            resolveProjectUuid: (context) =>
+                this.resolveProjectUuid(context as McpProtocolContext),
+            getMcpCompatibleSchema: (schema) =>
+                this.getMcpCompatibleSchema(schema),
+            organizationSettingsModel: this.protopieOrganizationSettingsModel,
+            audit: this.protopieMcpAuditLogModel
+                ? (entry) => this.protopieMcpAuditLogModel!.insert(entry)
+                : undefined,
+        });
     }
 
     private async pollSqlJobToCompletion(

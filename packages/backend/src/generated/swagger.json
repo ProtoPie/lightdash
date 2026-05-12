@@ -45,6 +45,312 @@
                 "type": "object",
                 "description": "The Error object is returned from the api any time there is an error.\nThe message contains"
             },
+            "ProtopieOrganizationSettings": {
+                "properties": {
+                    "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "updatedByUserUuid": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "createdByUserUuid": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "mcpWriteEnabled": {
+                        "type": "boolean"
+                    },
+                    "organizationUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "updatedAt",
+                    "createdAt",
+                    "updatedByUserUuid",
+                    "createdByUserUuid",
+                    "mcpWriteEnabled",
+                    "organizationUuid"
+                ],
+                "type": "object"
+            },
+            "ApiSuccess__mcpWriteEnabled-boolean--settings_63_-ProtopieOrganizationSettings__": {
+                "properties": {
+                    "results": {
+                        "properties": {
+                            "settings": {
+                                "$ref": "#/components/schemas/ProtopieOrganizationSettings"
+                            },
+                            "mcpWriteEnabled": {
+                                "type": "boolean"
+                            }
+                        },
+                        "required": ["mcpWriteEnabled"],
+                        "type": "object"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiProtopieMcpSettingsResponse": {
+                "$ref": "#/components/schemas/ApiSuccess__mcpWriteEnabled-boolean--settings_63_-ProtopieOrganizationSettings__"
+            },
+            "UpdateProtopieMcpSettingsBody": {
+                "properties": {
+                    "mcpWriteEnabled": {
+                        "type": "boolean"
+                    }
+                },
+                "required": ["mcpWriteEnabled"],
+                "type": "object"
+            },
+            "ProtopieFormFieldType": {
+                "type": "string",
+                "enum": [
+                    "date",
+                    "number",
+                    "select",
+                    "switch",
+                    "tags",
+                    "text",
+                    "textarea",
+                    "url"
+                ]
+            },
+            "ProtopieFormFieldOption": {
+                "properties": {
+                    "value": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    }
+                },
+                "required": ["value", "label"],
+                "type": "object"
+            },
+            "ProtopieFormField": {
+                "properties": {
+                    "options": {
+                        "items": {
+                            "$ref": "#/components/schemas/ProtopieFormFieldOption"
+                        },
+                        "type": "array"
+                    },
+                    "placeholder": {
+                        "type": "string"
+                    },
+                    "required": {
+                        "type": "boolean"
+                    },
+                    "type": {
+                        "$ref": "#/components/schemas/ProtopieFormFieldType"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    }
+                },
+                "required": ["type", "label", "key"],
+                "type": "object"
+            },
+            "Pick_ProtopieFormDefinition.Exclude_keyofProtopieFormDefinition.schema__": {
+                "properties": {
+                    "key": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "fields": {
+                        "items": {
+                            "$ref": "#/components/schemas/ProtopieFormField"
+                        },
+                        "type": "array"
+                    },
+                    "accountIdFields": {
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "account_key",
+                                "cloud_url",
+                                "salesforce_account_id"
+                            ]
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": [
+                    "key",
+                    "version",
+                    "title",
+                    "fields",
+                    "accountIdFields"
+                ],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Omit_ProtopieFormDefinition.schema_": {
+                "$ref": "#/components/schemas/Pick_ProtopieFormDefinition.Exclude_keyofProtopieFormDefinition.schema__",
+                "description": "Construct a type with the properties of T except for those in type K."
+            },
+            "ProtopieClientFormDefinition": {
+                "$ref": "#/components/schemas/Omit_ProtopieFormDefinition.schema_"
+            },
+            "ApiSuccess_ProtopieClientFormDefinition-Array_": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/ProtopieClientFormDefinition"
+                        },
+                        "type": "array"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiProtopieFormSchemasResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ProtopieClientFormDefinition-Array_"
+            },
+            "Record_string.unknown_": {
+                "properties": {},
+                "additionalProperties": {},
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
+            "ProtopieFormSubmissionRecord": {
+                "properties": {
+                    "deletedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
+                    "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "createdByUserUuid": {
+                        "type": "string"
+                    },
+                    "payload": {
+                        "$ref": "#/components/schemas/Record_string.unknown_"
+                    },
+                    "salesforceAccountId": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "cloudUrl": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "accountKey": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "schemaVersion": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "formKey": {
+                        "type": "string"
+                    },
+                    "formDefinitionUuid": {
+                        "type": "string"
+                    },
+                    "projectUuid": {
+                        "type": "string"
+                    },
+                    "organizationUuid": {
+                        "type": "string"
+                    },
+                    "formSubmissionUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "deletedAt",
+                    "updatedAt",
+                    "createdAt",
+                    "createdByUserUuid",
+                    "payload",
+                    "salesforceAccountId",
+                    "cloudUrl",
+                    "accountKey",
+                    "schemaVersion",
+                    "formKey",
+                    "formDefinitionUuid",
+                    "projectUuid",
+                    "organizationUuid",
+                    "formSubmissionUuid"
+                ],
+                "type": "object"
+            },
+            "ApiSuccess_ProtopieFormSubmissionRecord_": {
+                "properties": {
+                    "results": {
+                        "$ref": "#/components/schemas/ProtopieFormSubmissionRecord"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiProtopieFormSubmissionResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ProtopieFormSubmissionRecord_"
+            },
+            "ApiSuccess_ProtopieFormSubmissionRecord-Array_": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/ProtopieFormSubmissionRecord"
+                        },
+                        "type": "array"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiProtopieFormSubmissionsResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ProtopieFormSubmissionRecord-Array_"
+            },
             "ApiSuccessEmpty": {
                 "properties": {
                     "results": {},
@@ -153,16 +459,16 @@
             },
             "Pick_ServiceAccount.expiresAt-or-description_": {
                 "properties": {
+                    "description": {
+                        "type": "string"
+                    },
                     "expiresAt": {
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
-                    },
-                    "description": {
-                        "type": "string"
                     }
                 },
-                "required": ["expiresAt", "description"],
+                "required": ["description", "expiresAt"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -1438,12 +1744,6 @@
             "ManagedAgentTargetType": {
                 "enum": ["chart", "dashboard", "space", "project"],
                 "type": "string"
-            },
-            "Record_string.unknown_": {
-                "properties": {},
-                "additionalProperties": {},
-                "type": "object",
-                "description": "Construct a type with a set of properties K of type T"
             },
             "ManagedAgentActionUser": {
                 "properties": {
@@ -6212,6 +6512,10 @@
                 "enum": ["scatter", "area", "heatmap", "hexbin"],
                 "type": "string"
             },
+            "MapHexbinSizingMode": {
+                "enum": ["dynamic", "fixed"],
+                "type": "string"
+            },
             "MapTileBackground": {
                 "enum": [
                     "none",
@@ -6277,6 +6581,15 @@
                     },
                     "hexbinConfig": {
                         "properties": {
+                            "fixedResolution": {
+                                "type": "number",
+                                "format": "double",
+                                "description": "H3 resolution (0-15) used when sizingMode is FIXED. Ignored otherwise."
+                            },
+                            "sizingMode": {
+                                "$ref": "#/components/schemas/MapHexbinSizingMode",
+                                "description": "How bin size is determined. Defaults to DYNAMIC if unset."
+                            },
                             "opacity": {
                                 "type": "number",
                                 "format": "double",
@@ -9730,8 +10043,19 @@
             },
             "Pick_AiAgent.uuid-or-name-or-description-or-integrations-or-tags-or-projectUuid-or-organizationUuid-or-createdAt-or-updatedAt-or-instruction-or-imageUrl-or-groupAccess-or-userAccess-or-spaceAccess-or-enableDataAccess-or-enableSelfImprovement-or-version_": {
                 "properties": {
+                    "version": {
+                        "type": "number",
+                        "format": "double"
+                    },
                     "description": {
                         "type": "string",
+                        "nullable": true
+                    },
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
                         "nullable": true
                     },
                     "name": {
@@ -9766,13 +10090,6 @@
                             "type": "object"
                         },
                         "type": "array"
-                    },
-                    "tags": {
-                        "items": {
-                            "type": "string"
-                        },
-                        "type": "array",
-                        "nullable": true
                     },
                     "updatedAt": {
                         "type": "string",
@@ -9809,21 +10126,18 @@
                     },
                     "enableSelfImprovement": {
                         "type": "boolean"
-                    },
-                    "version": {
-                        "type": "number",
-                        "format": "double"
                     }
                 },
                 "required": [
+                    "version",
                     "description",
+                    "tags",
                     "name",
                     "projectUuid",
                     "createdAt",
                     "organizationUuid",
                     "uuid",
                     "integrations",
-                    "tags",
                     "updatedAt",
                     "instruction",
                     "imageUrl",
@@ -9831,8 +10145,7 @@
                     "userAccess",
                     "spaceAccess",
                     "enableDataAccess",
-                    "enableSelfImprovement",
-                    "version"
+                    "enableSelfImprovement"
                 ],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
@@ -9898,8 +10211,19 @@
             },
             "Pick_BaseAiAgent.uuid-or-projectUuid-or-organizationUuid-or-integrations-or-tags-or-name-or-description-or-createdAt-or-updatedAt-or-instruction-or-imageUrl-or-groupAccess-or-userAccess-or-spaceAccess-or-enableDataAccess-or-enableSelfImprovement-or-version_": {
                 "properties": {
+                    "version": {
+                        "type": "number",
+                        "format": "double"
+                    },
                     "description": {
                         "type": "string",
+                        "nullable": true
+                    },
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
                         "nullable": true
                     },
                     "name": {
@@ -9934,13 +10258,6 @@
                             "type": "object"
                         },
                         "type": "array"
-                    },
-                    "tags": {
-                        "items": {
-                            "type": "string"
-                        },
-                        "type": "array",
-                        "nullable": true
                     },
                     "updatedAt": {
                         "type": "string",
@@ -9977,21 +10294,18 @@
                     },
                     "enableSelfImprovement": {
                         "type": "boolean"
-                    },
-                    "version": {
-                        "type": "number",
-                        "format": "double"
                     }
                 },
                 "required": [
+                    "version",
                     "description",
+                    "tags",
                     "name",
                     "projectUuid",
                     "createdAt",
                     "organizationUuid",
                     "uuid",
                     "integrations",
-                    "tags",
                     "updatedAt",
                     "instruction",
                     "imageUrl",
@@ -9999,8 +10313,7 @@
                     "userAccess",
                     "spaceAccess",
                     "enableDataAccess",
-                    "enableSelfImprovement",
-                    "version"
+                    "enableSelfImprovement"
                 ],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
@@ -10320,8 +10633,19 @@
             },
             "Pick_AiAgent.projectUuid-or-integrations-or-tags-or-name-or-description-or-instruction-or-imageUrl-or-groupAccess-or-userAccess-or-spaceAccess-or-enableDataAccess-or-enableSelfImprovement-or-version_": {
                 "properties": {
+                    "version": {
+                        "type": "number",
+                        "format": "double"
+                    },
                     "description": {
                         "type": "string",
+                        "nullable": true
+                    },
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
                         "nullable": true
                     },
                     "name": {
@@ -10346,13 +10670,6 @@
                             "type": "object"
                         },
                         "type": "array"
-                    },
-                    "tags": {
-                        "items": {
-                            "type": "string"
-                        },
-                        "type": "array",
-                        "nullable": true
                     },
                     "instruction": {
                         "type": "string",
@@ -10385,26 +10702,22 @@
                     },
                     "enableSelfImprovement": {
                         "type": "boolean"
-                    },
-                    "version": {
-                        "type": "number",
-                        "format": "double"
                     }
                 },
                 "required": [
+                    "version",
                     "description",
+                    "tags",
                     "name",
                     "projectUuid",
                     "integrations",
-                    "tags",
                     "instruction",
                     "imageUrl",
                     "groupAccess",
                     "userAccess",
                     "spaceAccess",
                     "enableDataAccess",
-                    "enableSelfImprovement",
-                    "version"
+                    "enableSelfImprovement"
                 ],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
@@ -10414,8 +10727,19 @@
             },
             "Partial_Pick_AiAgent.projectUuid-or-integrations-or-tags-or-name-or-description-or-instruction-or-imageUrl-or-groupAccess-or-userAccess-or-spaceAccess-or-enableDataAccess-or-enableSelfImprovement-or-version__": {
                 "properties": {
+                    "version": {
+                        "type": "number",
+                        "format": "double"
+                    },
                     "description": {
                         "type": "string",
+                        "nullable": true
+                    },
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
                         "nullable": true
                     },
                     "name": {
@@ -10440,13 +10764,6 @@
                             "type": "object"
                         },
                         "type": "array"
-                    },
-                    "tags": {
-                        "items": {
-                            "type": "string"
-                        },
-                        "type": "array",
-                        "nullable": true
                     },
                     "instruction": {
                         "type": "string",
@@ -10479,10 +10796,6 @@
                     },
                     "enableSelfImprovement": {
                         "type": "boolean"
-                    },
-                    "version": {
-                        "type": "number",
-                        "format": "double"
                     }
                 },
                 "type": "object",
@@ -10961,12 +11274,12 @@
                                                             "topMatchingFields": {
                                                                 "items": {
                                                                     "properties": {
-                                                                        "searchRank": {
+                                                                        "chartUsage": {
                                                                             "type": "number",
                                                                             "format": "double",
                                                                             "nullable": true
                                                                         },
-                                                                        "chartUsage": {
+                                                                        "searchRank": {
                                                                             "type": "number",
                                                                             "format": "double",
                                                                             "nullable": true
@@ -10997,16 +11310,16 @@
                                                             "exploreSearchResults": {
                                                                 "items": {
                                                                     "properties": {
-                                                                        "searchRank": {
-                                                                            "type": "number",
-                                                                            "format": "double",
-                                                                            "nullable": true
-                                                                        },
                                                                         "joinedTables": {
                                                                             "items": {
                                                                                 "type": "string"
                                                                             },
                                                                             "type": "array",
+                                                                            "nullable": true
+                                                                        },
+                                                                        "searchRank": {
+                                                                            "type": "number",
+                                                                            "format": "double",
                                                                             "nullable": true
                                                                         },
                                                                         "label": {
@@ -11081,12 +11394,12 @@
                                                                         "results": {
                                                                             "items": {
                                                                                 "properties": {
-                                                                                    "searchRank": {
+                                                                                    "chartUsage": {
                                                                                         "type": "number",
                                                                                         "format": "double",
                                                                                         "nullable": true
                                                                                     },
-                                                                                    "chartUsage": {
+                                                                                    "searchRank": {
                                                                                         "type": "number",
                                                                                         "format": "double",
                                                                                         "nullable": true
@@ -11186,6 +11499,10 @@
             },
             "Pick_AiArtifact.artifactUuid-or-versionNumber-or-versionUuid-or-title-or-description-or-artifactType_": {
                 "properties": {
+                    "title": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "description": {
                         "type": "string",
                         "nullable": true
@@ -11200,21 +11517,17 @@
                     "versionUuid": {
                         "type": "string"
                     },
-                    "title": {
-                        "type": "string",
-                        "nullable": true
-                    },
                     "artifactType": {
                         "type": "string",
                         "enum": ["dashboard", "chart"]
                     }
                 },
                 "required": [
+                    "title",
                     "description",
                     "artifactUuid",
                     "versionNumber",
                     "versionUuid",
-                    "title",
                     "artifactType"
                 ],
                 "type": "object",
@@ -11600,6 +11913,10 @@
             },
             "Pick_AiArtifact.Exclude_keyofAiArtifact.chartConfig-or-dashboardConfig__": {
                 "properties": {
+                    "title": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "description": {
                         "type": "string",
                         "nullable": true
@@ -11617,10 +11934,6 @@
                     },
                     "versionUuid": {
                         "type": "string"
-                    },
-                    "title": {
-                        "type": "string",
-                        "nullable": true
                     },
                     "artifactType": {
                         "type": "string",
@@ -11656,12 +11969,12 @@
                     }
                 },
                 "required": [
+                    "title",
                     "description",
                     "createdAt",
                     "artifactUuid",
                     "versionNumber",
                     "versionUuid",
-                    "title",
                     "artifactType",
                     "threadUuid",
                     "promptUuid",
@@ -11969,6 +12282,9 @@
             },
             "Pick_AiAgentEvaluation.evalUuid-or-agentUuid-or-title-or-description-or-createdAt-or-updatedAt_": {
                 "properties": {
+                    "title": {
+                        "type": "string"
+                    },
                     "description": {
                         "type": "string",
                         "nullable": true
@@ -11981,9 +12297,6 @@
                         "type": "string",
                         "format": "date-time"
                     },
-                    "title": {
-                        "type": "string"
-                    },
                     "evalUuid": {
                         "type": "string"
                     },
@@ -11992,10 +12305,10 @@
                     }
                 },
                 "required": [
+                    "title",
                     "description",
                     "createdAt",
                     "updatedAt",
-                    "title",
                     "evalUuid",
                     "agentUuid"
                 ],
@@ -13099,6 +13412,9 @@
             },
             "Pick_CreateSnowflakeCredentials.Exclude_keyofCreateSnowflakeCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
+                    "schema": {
+                        "type": "string"
+                    },
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.SNOWFLAKE"
                     },
@@ -13118,9 +13434,6 @@
                         "type": "string"
                     },
                     "warehouse": {
-                        "type": "string"
-                    },
-                    "schema": {
                         "type": "string"
                     },
                     "threads": {
@@ -13165,11 +13478,11 @@
                     }
                 },
                 "required": [
+                    "schema",
                     "type",
                     "account",
                     "database",
-                    "warehouse",
-                    "schema"
+                    "warehouse"
                 ],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
@@ -13187,14 +13500,14 @@
             },
             "Pick_CreateRedshiftCredentials.Exclude_keyofCreateRedshiftCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
+                    "schema": {
+                        "type": "string"
+                    },
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.REDSHIFT"
                     },
                     "requireUserCredentials": {
                         "type": "boolean"
-                    },
-                    "schema": {
-                        "type": "string"
                     },
                     "threads": {
                         "type": "number",
@@ -13252,7 +13565,7 @@
                         "type": "boolean"
                     }
                 },
-                "required": ["type", "schema", "host", "port", "dbname"],
+                "required": ["schema", "type", "host", "port", "dbname"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -13269,6 +13582,9 @@
             },
             "Pick_CreatePostgresCredentials.Exclude_keyofCreatePostgresCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
+                    "schema": {
+                        "type": "string"
+                    },
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.POSTGRES"
                     },
@@ -13276,9 +13592,6 @@
                         "type": "boolean"
                     },
                     "role": {
-                        "type": "string"
-                    },
-                    "schema": {
                         "type": "string"
                     },
                     "threads": {
@@ -13346,7 +13659,7 @@
                         "type": "string"
                     }
                 },
-                "required": ["type", "schema", "host", "port", "dbname"],
+                "required": ["schema", "type", "host", "port", "dbname"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -13509,14 +13822,14 @@
             },
             "Pick_CreateTrinoCredentials.Exclude_keyofCreateTrinoCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
+                    "schema": {
+                        "type": "string"
+                    },
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.TRINO"
                     },
                     "requireUserCredentials": {
                         "type": "boolean"
-                    },
-                    "schema": {
-                        "type": "string"
                     },
                     "startOfWeek": {
                         "allOf": [
@@ -13547,8 +13860,8 @@
                     }
                 },
                 "required": [
-                    "type",
                     "schema",
+                    "type",
                     "host",
                     "port",
                     "dbname",
@@ -13570,14 +13883,14 @@
             },
             "Pick_CreateClickhouseCredentials.Exclude_keyofCreateClickhouseCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
+                    "schema": {
+                        "type": "string"
+                    },
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.CLICKHOUSE"
                     },
                     "requireUserCredentials": {
                         "type": "boolean"
-                    },
-                    "schema": {
-                        "type": "string"
                     },
                     "startOfWeek": {
                         "allOf": [
@@ -13605,7 +13918,7 @@
                         "type": "boolean"
                     }
                 },
-                "required": ["type", "schema", "host", "port"],
+                "required": ["schema", "type", "host", "port"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -13626,6 +13939,9 @@
             },
             "Pick_CreateAthenaCredentials.Exclude_keyofCreateAthenaCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
+                    "schema": {
+                        "type": "string"
+                    },
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.ATHENA"
                     },
@@ -13636,9 +13952,6 @@
                         "$ref": "#/components/schemas/AthenaAuthenticationType"
                     },
                     "database": {
-                        "type": "string"
-                    },
-                    "schema": {
                         "type": "string"
                     },
                     "threads": {
@@ -13680,9 +13993,9 @@
                     }
                 },
                 "required": [
+                    "schema",
                     "type",
                     "database",
-                    "schema",
                     "region",
                     "s3StagingDir"
                 ],
@@ -13702,6 +14015,9 @@
             },
             "Pick_CreateDuckdbCredentials.Exclude_keyofCreateDuckdbCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
+                    "schema": {
+                        "type": "string"
+                    },
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.DUCKDB"
                     },
@@ -13709,9 +14025,6 @@
                         "type": "boolean"
                     },
                     "database": {
-                        "type": "string"
-                    },
-                    "schema": {
                         "type": "string"
                     },
                     "threads": {
@@ -13730,7 +14043,7 @@
                         "type": "string"
                     }
                 },
-                "required": ["type", "database", "schema"],
+                "required": ["schema", "type", "database"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -14785,6 +15098,10 @@
             },
             "Pick_AiAgentThreadSummary_AiAgentUser-and-_slackUserId-string-or-null--email-string-or-null__.user-or-createdAt-or-createdFrom-or-title-or-uuid_": {
                 "properties": {
+                    "title": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "createdAt": {
                         "type": "string"
                     },
@@ -14812,19 +15129,15 @@
                     "uuid": {
                         "type": "string"
                     },
-                    "title": {
-                        "type": "string",
-                        "nullable": true
-                    },
                     "createdFrom": {
                         "type": "string"
                     }
                 },
                 "required": [
+                    "title",
                     "createdAt",
                     "user",
                     "uuid",
-                    "title",
                     "createdFrom"
                 ],
                 "type": "object",
@@ -16258,16 +16571,16 @@
             },
             "Pick_PersonalAccessToken.expiresAt-or-description_": {
                 "properties": {
+                    "description": {
+                        "type": "string"
+                    },
                     "expiresAt": {
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
-                    },
-                    "description": {
-                        "type": "string"
                     }
                 },
-                "required": ["expiresAt", "description"],
+                "required": ["description", "expiresAt"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -23179,22 +23492,22 @@
                     }
                 ]
             },
-            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined--xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
+            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
                 "properties": {},
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
-            "PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined--xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
+            "PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
                 "properties": {
                     "chart": {
-                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined--xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
+                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
                     }
                 },
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
             "PartialDeep_ChartAsCodeLanguageMap._recurseIntoArrays-true__": {
-                "$ref": "#/components/schemas/PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined--xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
+                "$ref": "#/components/schemas/PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
                 "description": "Create a type from another type with all keys and nested keys set to optional.\n\nUse-cases:\n- Merging a default settings/config object with another object, the second object would be a deep partial of the default object.\n- Mocking and testing complex entities, where populating an entire object with its keys would be redundant in terms of the mock or test."
             },
             "ContentAsCodeType.SPACE": {
@@ -23549,22 +23862,22 @@
                     }
                 ]
             },
-            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
+            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
                 "properties": {},
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
-            "PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
+            "PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
                 "properties": {
                     "dashboard": {
-                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
+                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
                     }
                 },
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
             "PartialDeep_DashboardAsCodeLanguageMap._recurseIntoArrays-true__": {
-                "$ref": "#/components/schemas/PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
+                "$ref": "#/components/schemas/PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
                 "description": "Create a type from another type with all keys and nested keys set to optional.\n\nUse-cases:\n- Merging a default settings/config object with another object, the second object would be a deep partial of the default object.\n- Mocking and testing complex entities, where populating an entire object with its keys would be redundant in terms of the mock or test."
             },
             "ApiDashboardAsCodeListResponse": {
@@ -23638,6 +23951,11 @@
             },
             "Pick_ChartAsCode.Exclude_keyofChartAsCode.chartConfig-or-description__": {
                 "properties": {
+                    "version": {
+                        "type": "number",
+                        "format": "double",
+                        "description": "Schema version for this chart configuration"
+                    },
                     "name": {
                         "type": "string",
                         "description": "Display name of the chart"
@@ -23650,11 +23968,6 @@
                         "type": "string",
                         "format": "date-time",
                         "description": "Not modifiable by user, but useful to know if it has been updated. Defaults to now if omitted."
-                    },
-                    "version": {
-                        "type": "number",
-                        "format": "double",
-                        "description": "Schema version for this chart configuration"
                     },
                     "slug": {
                         "type": "string",
@@ -23738,8 +24051,8 @@
                     }
                 },
                 "required": [
-                    "name",
                     "version",
+                    "name",
                     "slug",
                     "tableName",
                     "metricQuery",
@@ -23907,6 +24220,10 @@
             },
             "Pick_SqlChartAsCode.Exclude_keyofSqlChartAsCode.config-or-description__": {
                 "properties": {
+                    "version": {
+                        "type": "number",
+                        "format": "double"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -23917,10 +24234,6 @@
                     "updatedAt": {
                         "type": "string",
                         "format": "date-time"
-                    },
-                    "version": {
-                        "type": "number",
-                        "format": "double"
                     },
                     "slug": {
                         "type": "string"
@@ -23943,9 +24256,9 @@
                     }
                 },
                 "required": [
+                    "version",
                     "name",
                     "limit",
-                    "version",
                     "slug",
                     "spaceSlug",
                     "sql",
@@ -23974,6 +24287,10 @@
             },
             "Pick_DashboardAsCode.Exclude_keyofDashboardAsCode.tiles-or-description__": {
                 "properties": {
+                    "version": {
+                        "type": "number",
+                        "format": "double"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -23984,10 +24301,6 @@
                         "type": "string",
                         "format": "date-time",
                         "description": "Not modifiable by user, but useful to know if it has been updated. Defaults to now if omitted."
-                    },
-                    "version": {
-                        "type": "number",
-                        "format": "double"
                     },
                     "slug": {
                         "type": "string"
@@ -24048,7 +24361,7 @@
                         "description": "Declarative verification state.\n`true` verifies the dashboard on upload, `false` unverifies it, `undefined` leaves the\ncurrent state untouched. Download sets this to `true` when the dashboard is verified."
                     }
                 },
-                "required": ["name", "version", "slug", "tabs", "spaceSlug"],
+                "required": ["version", "name", "slug", "tabs", "spaceSlug"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -27142,6 +27455,12 @@
             },
             "Pick_Explore.SummaryExploreFields_": {
                 "properties": {
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -27150,12 +27469,6 @@
                     },
                     "label": {
                         "type": "string"
-                    },
-                    "tags": {
-                        "items": {
-                            "type": "string"
-                        },
-                        "type": "array"
                     },
                     "groupLabel": {
                         "type": "string",
@@ -27192,7 +27505,7 @@
                         "description": "Non-fatal warnings from partial compilation.\nPresent when some joins or fields failed to compile but the explore is still usable.\nOnly populated when PARTIAL_COMPILATION_ENABLED=true."
                     }
                 },
-                "required": ["name", "label", "tags"],
+                "required": ["tags", "name", "label"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -27213,6 +27526,12 @@
             },
             "Pick_ExploreError.SummaryExploreErrorFields_": {
                 "properties": {
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -27221,12 +27540,6 @@
                     },
                     "label": {
                         "type": "string"
-                    },
-                    "tags": {
-                        "items": {
-                            "type": "string"
-                        },
-                        "type": "array"
                     },
                     "groupLabel": {
                         "type": "string",
@@ -27310,6 +27623,12 @@
             },
             "Pick_Explore.Exclude_keyofExplore.unfilteredTables__": {
                 "properties": {
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -27340,12 +27659,6 @@
                     },
                     "parameters": {
                         "$ref": "#/components/schemas/Record_string.LightdashProjectParameter_"
-                    },
-                    "tags": {
-                        "items": {
-                            "type": "string"
-                        },
-                        "type": "array"
                     },
                     "warehouse": {
                         "type": "string"
@@ -27426,9 +27739,9 @@
                     }
                 },
                 "required": [
+                    "tags",
                     "name",
                     "label",
-                    "tags",
                     "baseTable",
                     "joinedTables",
                     "tables",
@@ -32076,7 +32389,7 @@
     },
     "info": {
         "title": "Lightdash API",
-        "version": "0.2903.4",
+        "version": "0.2904.0",
         "description": "Open API documentation for all public Lightdash API endpoints. # Authentication Before you get started, you might need to create a Personal Access Token to authenticate via the API. You can create a token by following this guide: https://docs.lightdash.com/references/personal_tokens\n",
         "license": {
             "name": "MIT"
@@ -32088,6 +32401,251 @@
         }
     },
     "paths": {
+        "/api/v1/protopie/mcp-settings": {
+            "get": {
+                "operationId": "GetProtopieMcpSettings",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiProtopieMcpSettingsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Get Protopie MCP write settings for the current organization.",
+                "summary": "Get Protopie MCP settings",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": []
+            },
+            "patch": {
+                "operationId": "UpdateProtopieMcpSettings",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiProtopieMcpSettingsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Enable or disable Protopie MCP write tools for the current organization.",
+                "summary": "Update Protopie MCP settings",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UpdateProtopieMcpSettingsBody"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/forms/schemas": {
+            "get": {
+                "operationId": "ListProtopieFormSchemas",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiProtopieFormSchemasResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "List code-defined Protopie forms available for the project.",
+                "summary": "List Protopie forms",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/forms/{formKey}/submissions": {
+            "post": {
+                "operationId": "SubmitProtopieForm",
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiProtopieFormSubmissionResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Submit a Protopie form payload.",
+                "summary": "Submit Protopie form",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "formKey",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Record_string.unknown_"
+                            }
+                        }
+                    }
+                }
+            },
+            "get": {
+                "operationId": "ListProtopieFormSubmissions",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiProtopieFormSubmissionsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "List submitted Protopie form payloads.",
+                "summary": "List Protopie form submissions",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "formKey",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "accountKey",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "limit",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "offset",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    }
+                ]
+            }
+        },
         "/api/v1/snowflake/sso/is-authenticated": {
             "get": {
                 "operationId": "ssoIsAuthenticated",

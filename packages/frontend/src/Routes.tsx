@@ -43,6 +43,7 @@ import SqlRunner from './pages/SqlRunner';
 import UserActivity from './pages/UserActivity';
 import VerifyEmailPage from './pages/VerifyEmail';
 import ViewSqlChart from './pages/ViewSqlChart';
+import { protopieProjectRoutes } from './protopie/routes';
 import { TrackPage } from './providers/Tracking/TrackingProvider';
 import { PageName } from './types/Events';
 
@@ -331,6 +332,7 @@ const PROJECT_LAYOUT_ROUTES: RouteObject[] = [
     ...DASHBOARD_LIST_ROUTES,
     ...SPACES_ROUTES,
     ...METRICS_ROUTES,
+    ...protopieProjectRoutes,
     {
         path: 'home',
         element: (

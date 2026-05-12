@@ -3,6 +3,7 @@ import { type FC } from 'react';
 import { Link } from 'react-router';
 import { useHasMetricsInCatalog } from '../../features/metricsCatalog/hooks/useMetricsCatalog';
 import Omnibar from '../../features/omnibar';
+import { ProtopieNavButton } from '../../protopie/ProtopieNavButton';
 import useApp from '../../providers/App/useApp';
 import Logo from '../../svgs/logo-icon.svg?react';
 import { AiAgentsButton } from './AiAgentsButton';
@@ -57,6 +58,9 @@ export const MainNavBarContent: FC<Props> = ({
                             {hasMetrics && (
                                 <MetricsLink projectUuid={activeProjectUuid} />
                             )}
+                            <ProtopieNavButton
+                                projectUuid={activeProjectUuid}
+                            />
                             <AiAgentsButton />
                         </Button.Group>
                         <Omnibar projectUuid={activeProjectUuid} />

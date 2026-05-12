@@ -93,6 +93,15 @@ const returnHeaderIfUnauthenticated = (
     }
 };
 
+const allowMcpAuthentication: express.RequestHandler = (req, res, next) => {
+    if (!req.headers.authorization && !req.isAuthenticated()) {
+        next();
+        return;
+    }
+
+    allowApiKeyAuthentication(req, res, next);
+};
+
 // MCP endpoint - supports Streamable HTTP
 // Keep the MCP router as raw Express because:
 // - MCP protocol requirements don't align with REST/TSOA patterns
@@ -100,7 +109,7 @@ const returnHeaderIfUnauthenticated = (
 // - It follows the same pattern as other protocol-specific endpoints (OAuth)
 mcpRouter.all(
     '/',
-    allowApiKeyAuthentication,
+    allowMcpAuthentication,
     returnHeaderIfUnauthenticated,
     async (req, res) => {
         try {

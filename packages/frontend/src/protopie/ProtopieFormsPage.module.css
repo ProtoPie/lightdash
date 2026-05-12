@@ -1,0 +1,17 @@
+.page {
+    padding: var(--mantine-spacing-lg);
+}
+
+.section {
+    max-width: 1280px;
+}
+
+.formPanel {
+    border-radius: var(--mantine-radius-sm);
+}
+
+.payloadCell {
+    max-width: 520px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}

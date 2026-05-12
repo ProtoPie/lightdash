@@ -1,10 +1,11 @@
-import { ForbiddenError } from '@lightdash/common';
+import { ForbiddenError, MissingConfigError } from '@lightdash/common';
 import express, { Express } from 'express';
 import { AppArguments } from '../App';
 import { lightdashConfig } from '../config/lightdashConfig';
 import Logger from '../logging/logger';
 import { McpContextModel } from '../models/McpContextModel';
 import { registerPreAggregateStream } from '../nats/natsConfig';
+import { getProtopieModels } from '../protopie/services';
 import { AsyncQueryService } from '../services/AsyncQueryService/AsyncQueryService';
 import { DeployService } from '../services/DeployService';
 import { InstanceConfigurationService } from '../services/InstanceConfigurationService/InstanceConfigurationService';
@@ -56,6 +57,70 @@ type EnterpriseAppArguments = Pick<
 
 export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArguments> {
     if (!lightdashConfig.license.licenseKey) {
+        if (lightdashConfig.mcp.enabled) {
+            Logger.info(
+                'MCP is enabled without an enterprise license. Registering MCP service only.',
+            );
+
+            const unavailableAiOrganizationSettingsService = {
+                isEligibleForTrial: async () => false,
+                getSettings: async () => {
+                    throw new MissingConfigError(
+                        'AI organization settings service is not available without an enterprise license.',
+                    );
+                },
+            } as unknown as AiOrganizationSettingsService;
+
+            const unavailableAiAgentService = {
+                listAgents: async () => {
+                    throw new MissingConfigError(
+                        'AI agent service is not available without an enterprise license.',
+                    );
+                },
+                getAgent: async () => {
+                    throw new MissingConfigError(
+                        'AI agent service is not available without an enterprise license.',
+                    );
+                },
+            } as unknown as AiAgentService;
+
+            return {
+                serviceProviders: {
+                    mcpService: ({ context, repository, models }) =>
+                        new McpService({
+                            lightdashConfig: context.lightdashConfig,
+                            analytics: context.lightdashAnalytics,
+                            asyncQueryService:
+                                repository.getAsyncQueryService(),
+                            catalogService: repository.getCatalogService(),
+                            contentVerificationService:
+                                repository.getContentVerificationService(),
+                            projectService: repository.getProjectService(),
+                            coderService: repository.getCoderService(),
+                            savedSqlService: repository.getSavedSqlService(),
+                            schedulerService: repository.getSchedulerService(),
+                            shareService: repository.getShareService(),
+                            userAttributesModel:
+                                models.getUserAttributesModel(),
+                            searchModel: models.getSearchModel(),
+                            spaceService: repository.getSpaceService(),
+                            mcpContextModel: models.getMcpContextModel(),
+                            projectModel: models.getProjectModel(),
+                            featureFlagService:
+                                repository.getFeatureFlagService(),
+                            aiOrganizationSettingsService:
+                                unavailableAiOrganizationSettingsService,
+                            aiAgentService: unavailableAiAgentService,
+                            protopieOrganizationSettingsModel:
+                                getProtopieModels(models)
+                                    .organizationSettingsModel,
+                            protopieMcpAuditLogModel:
+                                getProtopieModels(models).mcpAuditLogModel,
+                        }),
+                },
+            };
+        }
+
         return {};
     }
 
@@ -391,6 +456,7 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     contentVerificationService:
                         repository.getContentVerificationService(),
                     projectService: repository.getProjectService(),
+                    coderService: repository.getCoderService(),
                     savedSqlService: repository.getSavedSqlService(),
                     schedulerService: repository.getSchedulerService(),
                     shareService: repository.getShareService(),
@@ -403,6 +469,10 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     aiOrganizationSettingsService:
                         repository.getAiOrganizationSettingsService(),
                     aiAgentService: repository.getAiAgentService(),
+                    protopieOrganizationSettingsModel:
+                        getProtopieModels(models).organizationSettingsModel,
+                    protopieMcpAuditLogModel:
+                        getProtopieModels(models).mcpAuditLogModel,
                 }),
             slackService: ({ repository, clients }) =>
                 new CommercialSlackService({
