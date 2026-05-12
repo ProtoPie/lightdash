@@ -205,11 +205,8 @@ Proof of completion:
 
 Work needed:
 
-- build account touchpoint form,
-- build renewal status form,
-- build account override form,
+- build one dummy churn score input form,
 - save submissions in Postgres,
-- support corrections without overwriting history,
 - expose form data to dbt and dashboards.
 
 Important v1 decision:
@@ -219,9 +216,9 @@ Important v1 decision:
 
 Proof of completion:
 
-- a sales rep can submit a touchpoint,
+- a sales rep can submit the dummy churn score input form,
 - the row is saved in the database,
-- the row appears in the sales touchpoint mart and dashboard.
+- the row is available for dbt/modeling work that will later feed churn score calculation.
 
 ---
 
@@ -383,17 +380,17 @@ Proof of completion:
 
 This is the non-technical demo we should show stakeholders.
 
-### Scene 1 - Sales logs a touchpoint
+### Scene 1 - Sales submits churn input
 
 Show:
 
 - Lightdash Sales Ops page,
-- account touchpoint form,
+- dummy churn score input form,
 - successful submission.
 
 Message:
 
-> Sales can now enter account context inside Lightdash instead of ChurnZero.
+> Sales can now enter churn-score input data inside Lightdash instead of ChurnZero.
 
 ### Scene 2 - The data is saved
 
@@ -403,7 +400,7 @@ Show:
 
 Message:
 
-> The touchpoint is stored as structured data, so it can be used in dashboards and future scoring.
+> The submission is stored as structured data, so it can be used by the churn score formula later.
 
 ### Scene 3 - Churn score is calculated
 

@@ -1,23 +1,24 @@
 # 05 — Forms System
 
-> **Goal.** A code-defined, schema-driven form framework so sales reps can record Account touchpoints, renewal status, and overrides directly inside Lightdash. Submissions land in Postgres (`protopie_form_submissions`) and become first-class dbt sources.
+> **Goal.** A code-defined, schema-driven form framework so sales reps can submit account-level churn score inputs directly inside Lightdash. Submissions land in Postgres (`protopie_form_submissions`) and become first-class dbt sources.
 >
 > **Non-goal.** A drag-and-drop form builder for non-engineers. Forms are defined in TypeScript with Zod schemas; adding a new form is a code change reviewed via PR. This is intentional — keeps the surface area small, lets dbt model submissions confidently.
+>
+> **Current POC.** The active registry intentionally exposes one dummy form only: `churn_score_input`. Final fields will be defined later by Sales/CS and implemented by developers.
 
 ## Design at a glance
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ FORM DEFINITION (code)                                                  │
-│   packages/common/src/protopie/forms/schemas/accountTouchpoint.ts       │
+│   packages/common/src/protopie/forms/schemas/churnScoreInput.ts         │
 │      ↓                                                                  │
-│   export const accountTouchpointForm = defineForm({                     │
-│      key: 'account_touchpoint',                                         │
+│   export const churnScoreInputForm = defineForm({                       │
+│      key: 'churn_score_input',                                          │
 │      version: 1,                                                        │
-│      title: 'Log Account Touchpoint',                                   │
+│      title: 'Churn score input',                                        │
 │      fields: { ...Zod-typed fields... },                                │
-│      requiresAccount: true,                                             │
-│      requiredScope: 'protopie:forms:account_touchpoint:submit'          │
+│      requiresAccount: true                                              │
 │   });                                                                   │
 └─────────────────────────────────────────────────────────────────────────┘
                           ↓ (imported by both backend and frontend)
@@ -37,15 +38,15 @@
 ## Defining a form (the developer experience)
 
 ```ts
-// packages/common/src/protopie/forms/schemas/accountTouchpoint.ts
+// packages/common/src/protopie/forms/schemas/churnScoreInput.ts
 import { z } from 'zod';
 import { defineForm } from '../defineForm';
 
-export const accountTouchpointFormV1 = defineForm({
-    key: 'account_touchpoint',
+export const churnScoreInputForm = defineForm({
+    key: 'churn_score_input',
     version: 1,
-    title: 'Log Account Touchpoint',
-    description: 'Record a sales call, meeting, or significant communication with an Account.',
+    title: 'Churn score input',
+    description: 'Temporary dummy form for sales-owned churn score inputs.',
     accountKeyField: 'cloud_url',         // the field whose value becomes submission.account_key
     secondaryKeyFields: {
         cloud_url: 'cloud_url',
@@ -57,28 +58,18 @@ export const accountTouchpointFormV1 = defineForm({
             .describe('Account tenant URL (e.g. https://acme.protopie.cloud/)'),
         salesforce_account_id: z.string().min(1).optional()
             .describe('Salesforce Account ID, if known'),
-        meeting_date: z.coerce.date().describe('When the touchpoint happened'),
-        touchpoint_type: z.enum(['call', 'video', 'in_person', 'email', 'other'])
-            .describe('Channel'),
-        rep_name: z.string().min(1).max(120).describe('Sales rep'),
-        attendees: z.array(z.string().min(1)).max(20)
-            .describe('Attendees on the Account side'),
-        sentiment: z.enum(['positive', 'neutral', 'negative'])
-            .describe('Overall sentiment of the conversation'),
-        notes_summary: z.string().min(10).max(2000)
-            .describe('Brief summary of the conversation'),
-        follow_up_required: z.boolean().default(false),
-        follow_up_date: z.coerce.date().optional(),
+        signal_date: z.coerce.date().describe('When the signal applies'),
+        signal_name: z.string().min(1).describe('Temporary signal key'),
+        signal_value: z.number().min(0).describe('Temporary signal value'),
+        notes: z.string().min(1).optional(),
     },
     uiHints: {
         fieldOrder: [
-            'cloud_url', 'salesforce_account_id',
-            'meeting_date', 'touchpoint_type', 'rep_name', 'attendees',
-            'sentiment', 'notes_summary', 'follow_up_required', 'follow_up_date',
+            'cloud_url', 'salesforce_account_id', 'signal_date',
+            'signal_name', 'signal_value', 'notes',
         ],
         widgets: {
-            notes_summary: 'textarea',
-            sentiment: 'radio',
+            notes: 'textarea',
         },
     },
 });
@@ -128,8 +119,7 @@ The set of all known forms is a registry:
 ```ts
 // packages/common/src/protopie/forms/registry.ts
 export const FORM_REGISTRY = {
-    [accountTouchpointFormV1.key]: accountTouchpointFormV1,
-    [renewalStatusFormV1.key]: renewalStatusFormV1,
+    [churnScoreInputForm.key]: churnScoreInputForm,
     // ... add new forms here
 } as const;
 
@@ -413,19 +403,18 @@ export function useSubmitForm(formKey: string) {
 dbt declares the Postgres app DB as a source pointing at `protopie_form_submissions`. From there, one mart per form key:
 
 ```sql
--- dbt/models/marts/protopie/mart_sales_touchpoints.sql
+-- dbt/models/marts/protopie/mart_churn_score_form_inputs.sql
 select
     submission_uuid,
     submitted_at,
     submitted_by,
     account_key,
-    (payload->>'meeting_date')::date    as meeting_date,
-    payload->>'rep_name'                 as rep_name,
-    payload->>'sentiment'                as sentiment,
-    payload->>'notes_summary'            as notes_summary,
-    (payload->>'follow_up_required')::boolean as follow_up_required
+    (payload->>'signal_date')::date       as signal_date,
+    payload->>'signal_name'               as signal_name,
+    (payload->>'signal_value')::numeric   as signal_value,
+    payload->>'notes'                     as notes
 from {{ source('protopie_postgres', 'protopie_form_submissions') }}
-where form_key = 'account_touchpoint'
+where form_key = 'churn_score_input'
   and deleted_at is null
 ```
 

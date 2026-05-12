@@ -27,7 +27,7 @@ Resolved local state:
 Once those are available, validate:
 
 - `GET /api/v1/projects/:projectUuid/protopie/forms/schemas`
-- `POST /api/v1/projects/:projectUuid/protopie/forms/account_touchpoint/submissions`
+- `POST /api/v1/projects/:projectUuid/protopie/forms/churn_score_input/submissions`
 - `/projects/:projectUuid/protopie/forms` in the frontend.
 - MCP tool list includes `protopie_*` read and write tools.
 
