@@ -129,3 +129,11 @@ http-client.private.env.json
 scripts/har-replay-server.ts
 *.har
 agent-harness/cloud/credentials.env
+
+# Terraform local state and secrets
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.backup
+infra/**/*.tfstate.*
+infra/**/crash.log
+infra/**/crash.*.log
