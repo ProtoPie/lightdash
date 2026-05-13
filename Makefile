@@ -108,7 +108,8 @@ ensure-ecr-prod: ensure-ecr ## Create or update ECR before a prod build.
 
 .PHONY: build-dev
 build-dev: preflight ensure-ecr-dev ecr-login-dev ## Build and push the dev image to ECR.
-	@ACCOUNT_ID=$$(AWS_PROFILE="$(ECR_AWS_PROFILE)" aws sts get-caller-identity --query Account --output text); \
+	@set -euo pipefail; \
+	ACCOUNT_ID=$$(AWS_PROFILE="$(ECR_AWS_PROFILE)" aws sts get-caller-identity --query Account --output text); \
 	IMAGE_REPO="$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPOSITORY)"; \
 	echo "Building dev image $$IMAGE_REPO:$(DEV_IMAGE_TAG)"; \
 	docker buildx build \
@@ -123,7 +124,8 @@ build-dev: preflight ensure-ecr-dev ecr-login-dev ## Build and push the dev imag
 
 .PHONY: build-prod
 build-prod: preflight ensure-ecr-prod ecr-login-prod ## Build and push the prod image to ECR.
-	@ACCOUNT_ID=$$(AWS_PROFILE="$(ECR_AWS_PROFILE)" aws sts get-caller-identity --query Account --output text); \
+	@set -euo pipefail; \
+	ACCOUNT_ID=$$(AWS_PROFILE="$(ECR_AWS_PROFILE)" aws sts get-caller-identity --query Account --output text); \
 	IMAGE_REPO="$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPOSITORY)"; \
 	echo "Building prod image $$IMAGE_REPO:$(PROD_IMAGE_TAG)"; \
 	docker buildx build \

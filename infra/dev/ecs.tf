@@ -11,12 +11,12 @@ variable "lightdash_memory" {
 
 variable "lightdash_oci_tag" {
   description = "container image tag"
-  default     = "latest"
+  default     = "dev-latest"
 }
 
 variable "lightdash_oci_image" {
   description = "container image repository"
-  default     = "lightdash/lightdash"
+  default     = "750128304405.dkr.ecr.us-west-2.amazonaws.com/protopie/lightdash"
 }
 
 #### resources
@@ -84,6 +84,10 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
         "value" = local.envs["NODE_ENV"]
       },
       {
+        "name" : "MCP_ENABLED",
+        "value" : "true"
+      },
+      {
         "name" : "SECURE_COOKIES",
         "value" : local.envs["SECURE_COOKIES"]
       },
@@ -114,7 +118,7 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
 
       {
         "name" : "PGCONNECTIONURI",
-        "value" : "postgresql://${local.envs["PGUSER"]}:${local.envs["PGPASSWORD"]}@${module.lightdash_db.db_instance_endpoint}/${local.envs["PGDATABASE"]}"
+        "value" : "postgresql://${local.envs["PGUSER"]}:${local.envs["PGPASSWORD"]}@${module.lightdash_db.db_instance_endpoint}/${local.envs["PGDATABASE"]}?sslmode=no-verify"
       },
 
       {
