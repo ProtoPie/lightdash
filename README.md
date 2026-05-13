@@ -133,11 +133,81 @@ Main files:
 - `packages/frontend/src/protopie/ProtopieMcpSettingsPanel.tsx`
 - `packages/frontend/src/protopie/api.ts`
 
-Codex setup for dev:
+## MCP Client Connections
+
+Use the dev endpoint while testing:
+
+```text
+https://lightdash-dev.protopie.io/api/v1/mcp
+```
+
+Use the prod endpoint only after the dev flow is verified:
+
+```text
+https://lightdash.protopie.io/api/v1/mcp
+```
+
+### Codex
+
+Register the dev MCP server:
 
 ```bash
 codex mcp add lightdash-mcp --url https://lightdash-dev.protopie.io/api/v1/mcp
+```
+
+Authorize Codex through Lightdash OAuth:
+
+```bash
 codex mcp login lightdash-mcp --scopes read,write,mcp:read,mcp:write
+```
+
+Check that Codex can see the server:
+
+```bash
+codex mcp list
+codex mcp get lightdash-mcp
+```
+
+After changing the URL, scopes, or OAuth state, restart the Codex session so it
+rediscovers the tools.
+
+For local development:
+
+```bash
+codex mcp add lightdash-local --url http://localhost:3000/api/v1/mcp
+codex mcp login lightdash-local --scopes read,write,mcp:read,mcp:write
+```
+
+If Codex Desktop asks for manual MCP details, use:
+
+```text
+URL: https://lightdash-dev.protopie.io/api/v1/mcp
+Bearer token env var: leave empty for OAuth
+Headers: leave empty unless debugging with a manual bearer token
+```
+
+### Claude Code
+
+Register the dev MCP server:
+
+```bash
+claude mcp add --transport http --scope user lightdash-mcp https://lightdash-dev.protopie.io/api/v1/mcp
+```
+
+Check that Claude Code saved the connection:
+
+```bash
+claude mcp list
+claude mcp get lightdash-mcp
+```
+
+Start a new Claude Code session after adding the server. If Claude prompts for
+OAuth, authorize with the same Lightdash user that should own the API actions.
+
+For local development:
+
+```bash
+claude mcp add --transport http --scope user lightdash-local http://localhost:3000/api/v1/mcp
 ```
 
 If tools are reachable but writes fail with:
