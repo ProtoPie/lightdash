@@ -79,6 +79,7 @@ import { useOrganization } from '../hooks/organization/useOrganization';
 import { useActiveProjectUuid } from '../hooks/useActiveProject';
 import { useProject } from '../hooks/useProject';
 import { useServerFeatureFlag } from '../hooks/useServerOrClientFeatureFlag';
+import ProtopieMcpSettingsPanel from '../protopie/ProtopieMcpSettingsPanel';
 import { Can } from '../providers/Ability';
 import useApp from '../providers/App/useApp';
 import { TrackPage } from '../providers/Tracking/TrackingProvider';
@@ -398,10 +399,10 @@ const Settings: FC = () => {
                 element: (
                     <Stack>
                         <Title order={4}>Integrations</Title>
-                        {!health?.hasSlack &&
-                            !health?.hasGithub &&
-                            !health?.hasGitlab &&
-                            'No integrations available'}
+                        <SettingsGridCard>
+                            <Title order={4}>Protopie MCP</Title>
+                            <ProtopieMcpSettingsPanel />
+                        </SettingsGridCard>
                         {health?.hasSlack && <SlackSettingsPanel />}
                         {health?.hasGithub && <GithubSettingsPanel />}
                         {health?.hasGitlab && <GitlabSettingsPanel />}
