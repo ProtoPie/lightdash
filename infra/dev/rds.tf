@@ -10,9 +10,9 @@ module "lightdash_db" {
   identifier = "lightdash-db-dev"
 
   engine               = "postgres"
-  engine_version       = "15"
-  family               = "postgres15" # DB parameter group
-  major_engine_version = "15"         # DB option group
+  engine_version       = "16.13"
+  family               = "postgres16" # DB parameter group
+  major_engine_version = "16"         # DB option group
   instance_class       = "db.t3.micro"
 
   allocated_storage     = 20
