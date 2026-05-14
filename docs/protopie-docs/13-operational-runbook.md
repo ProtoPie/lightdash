@@ -11,6 +11,7 @@
 | Form submissions not showing up in dbt mart | [§ C — App DB → Redshift stale](#c--app-db--redshift-staleness) |
 | Dashboard tile broken after bootstrap | [§ D — Dashboard rollback](#d--dashboard-rollback) |
 | MCP tool returning 403 | [§ E — MCP write tool denied](#e--mcp-write-tool-denied) |
+| MCP cannot read dbt files | [§ E2 — MCP dbt source access denied or empty](#e2--mcp-dbt-source-access-denied-or-empty) |
 | Need to pause all updates (red flag) | [§ F — Emergency pause](#f--emergency-pause-protopie) |
 | Cutover day procedures | [§ G — Cutover monitoring](#g--cutover-monitoring) |
 | Retention sweep / GDPR purge | [§ H — Retention and deletion](#h--retention-and-deletion) |
@@ -106,9 +107,9 @@ ORDER BY created_at DESC;
 # Check Airflow UI → DAG `protopie_postgres_to_redshift` → recent runs
 
 # 2. Latest submission in Postgres vs Redshift
-psql -h <lightdash-app-db> -c "SELECT MAX(submitted_at) FROM protopie_form_submissions;"
+psql -h <lightdash-app-db> -c "SELECT MAX(created_at) FROM protopie_form_submissions;"
 # Then in Redshift via SQL runner:
-SELECT MAX(submitted_at) FROM protopie_app_raw.protopie_form_submissions;
+SELECT MAX(created_at) FROM protopie_app_raw.protopie_form_submissions;
 # Gap > 4× cadence (cadence is hourly for forms) is the alarm threshold.
 ```
 
@@ -163,7 +164,8 @@ ForbiddenError message says…
 │       OAuth: re-authorize with the scope.
 │       PAT/service account: ensure `protopie_organization_settings.mcp_write_tools_enabled = true`.
 ├─ "MCP write tools are disabled for this organization"
-│     → Org admin must toggle on. /protopie/settings/mcp.
+│     → Org admin must toggle on at Settings → Organization settings → Integrations → Protopie MCP
+│       URL: /generalSettings/integrations.
 ├─ "Insufficient permission" / CASL error
 │     → User lacks manage:ContentAsCode / create:Space.
 │       Check user's role; only admins/editors get manage:ContentAsCode.
@@ -171,6 +173,32 @@ ForbiddenError message says…
    → Search `protopie_mcp_audit_log` for the call:
      SELECT * FROM protopie_mcp_audit_log WHERE outcome='forbidden' ORDER BY created_at DESC LIMIT 10;
 ```
+
+---
+
+## E2 — MCP dbt source access denied or empty
+
+**Signal:** Agent reports `protopie_dbt_list_files`, `protopie_dbt_get_file`, or `protopie_dbt_search_files` returned an empty result, 403, 404, or "outside the allowed dbt repository paths."
+
+**Decision tree:**
+
+```
+Symptom says…
+├─ "outside the allowed dbt repository paths"
+│     → The requested path is not in PROTOPIE_DBT_ALLOWED_PATHS.
+│       Use an allowlisted path such as models/, marts/, macros/, seeds/, dbt_project.yml, packages.yml.
+├─ GitHub 401/403
+│     → PROTOPIE_DBT_GITHUB_TOKEN is missing, expired, or lacks repo access.
+│       Use a fine-grained read-only PAT for ProtoPie/data-modeling with Contents read-only and Metadata read-only.
+├─ GitHub 404
+│     → Check PROTOPIE_DBT_GITHUB_OWNER, PROTOPIE_DBT_GITHUB_REPO, PROTOPIE_DBT_GITHUB_REF, and the requested path.
+├─ Empty list in dev/prod
+│     → Confirm the ECS task definition includes PROTOPIE_DBT_GITHUB_* env vars and the task has been redeployed.
+└─ Empty list locally
+      → Confirm PROTOPIE_DBT_LOCAL_PATH points to /Users/mamur/Documents/projects/data-modeling and the repo exists on disk.
+```
+
+The dbt MCP tools are read-only. They do not run dbt, write GitHub files, or change warehouse state.
 
 ---
 
@@ -190,13 +218,12 @@ ForbiddenError message says…
    DELETE FROM graphile_worker.jobs WHERE task_identifier = 'protopie.recomputeChurnScore';
    ```
 
-2. **Flip the feature flag:**
+2. **Disable MCP if the emergency is MCP-specific:**
    ```bash
-   # in lightdash-infra/infra/{prod,dev}/.env:
-   PROTOPIE_ENABLED=false
-   # then redeploy via terraform apply (see 15-deployment.md). The TSOA controllers
-   # stop responding (404), the frontend nav entry disappears, the scheduler task
-   # is unregistered.
+   # in infra/{prod,dev}/.env:
+   MCP_ENABLED=false
+   # then redeploy via Terraform.
+   # This disables the MCP server surface for that environment.
    ```
 
 3. **Disable MCP write tools for the org:**
@@ -206,9 +233,11 @@ ForbiddenError message says…
    WHERE organization_uuid = '<uuid>';
    ```
 
-4. **Communicate.** Post in `#protopie-data-ops` + `#sales`: "Protopie module paused for [reason]. Existing data preserved. ETA on resumption: …"
+4. **For non-MCP emergencies, pause at the narrowest layer.** Stop scheduler jobs, block affected UI routes via role/permission changes, or temporarily remove the affected nav entry. A single global `PROTOPIE_ENABLED` kill switch is not implemented yet.
 
-5. **Do NOT drop tables.** Pausing ≠ kill-switch. Tables stay in place for forensic analysis. The full kill-switch (drop tables + revert touch points) is a separate, deliberate decision documented in [02-isolation-strategy.md](./02-isolation-strategy.md#self-test-can-we-delete-the-fork-in-10-minutes).
+5. **Communicate.** Post in `#protopie-data-ops` + `#sales`: "Protopie module paused for [reason]. Existing data preserved. ETA on resumption: …"
+
+6. **Do NOT drop tables.** Pausing ≠ kill-switch. Tables stay in place for forensic analysis. The full kill-switch (drop tables + revert touch points) is a separate, deliberate decision documented in [02-isolation-strategy.md](./02-isolation-strategy.md#self-test-can-we-delete-the-fork-in-10-minutes).
 
 ---
 
@@ -257,11 +286,11 @@ A cron task `protopie.retentionSweep` runs weekly (Sundays 03:00 UTC) and soft-d
 
 ```sql
 -- Identify the submissions tied to a user
-SELECT submission_uuid FROM protopie_form_submissions WHERE submitted_by_user_uuid = '<user_uuid>';
+SELECT form_submission_uuid FROM protopie_form_submissions WHERE created_by_user_uuid = '<user_uuid>';
 
 -- After legal sign-off, hard-delete in a transaction
 BEGIN;
-DELETE FROM protopie_form_submissions WHERE submitted_by_user_uuid = '<user_uuid>';
+DELETE FROM protopie_form_submissions WHERE created_by_user_uuid = '<user_uuid>';
 -- Also wipe from the Redshift mirror — coordinate with data-eng to skip CDC for this user
 COMMIT;
 ```

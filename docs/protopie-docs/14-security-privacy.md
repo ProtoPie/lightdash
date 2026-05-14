@@ -14,6 +14,8 @@
 | MCP audit log | Audit | tool name, slug, outcome — **no payloads** | Postgres `protopie_mcp_audit_log` (NEW) |
 | Form schemas | Configuration | Zod schemas; non-sensitive | Postgres `protopie_form_definitions` (NEW) |
 | Scoring config / weights | Configuration | weights, goals, event groups | Postgres `protopie_churn_score_configs` + `_factors` (NEW) |
+| dbt source files | Internal source code / analytics logic | models, marts, macros, seeds in `ProtoPie/data-modeling` | Read by MCP from local path or GitHub |
+| dbt GitHub PAT | Secret | `PROTOPIE_DBT_GITHUB_TOKEN` | Ignored `.env` locally; ECS environment in dev/prod |
 
 **PII-adjacent** means: not directly identifying ("John Doe lives at X"), but could be linked to a person — e.g., notes naming a customer's individual contact, attendees, or sentiment about a real person. Treat with care; apply retention policy.
 
@@ -22,11 +24,11 @@
 | Subject | What they can see |
 |---------|--------------------|
 | Authenticated org member | All non-form Protopie data (configs, scores). Form submissions: own + org-wide read; cannot edit others'. |
-| Sales contributor (`protopie_sales_team.role='contributor'`) | Same + submit forms + supersede own submissions. |
-| Sales manager (`protopie_sales_team.role='manager'`) | Same + edit/delete others' submissions + change weights + trigger recompute + manage overrides. |
+| Sales contributor / Sales manager | Product roles for the final workflow. Not implemented as separate Lightdash roles in the current POC. |
 | Org admin | All of the above + MCP write-tools toggle + MCP audit log + bootstrap dashboards + hard-delete via SQL. |
 | Lightdash service account | Whatever is granted via its role + `mcp:read`/`mcp:write` scopes (per [07-mcp-server-extension.md](./07-mcp-server-extension.md)). |
-| **MCP write tools (external agent)** | Subject to **three** gates: (1) `mcp:write` OAuth scope, (2) org opt-in, (3) per-call CASL — see [07-mcp-server-extension.md § Permission model](./07-mcp-server-extension.md#permission-model-three-layers). |
+| **MCP write tools (external agent)** | Subject to **three** gates: (1) `mcp:write` OAuth scope, (2) org opt-in, (3) per-call CASL — see [07-mcp-server-extension.md § Permission model](./07-mcp-server-extension.md#permission-model). |
+| **MCP dbt read tools (external agent)** | Read-only access to allowlisted paths from `ProtoPie/data-modeling`; token value is never returned. |
 | Cross-org users | **Nothing.** All read queries filter by `organization_uuid`. |
 
 See [05-forms-system.md § Permissions matrix](./05-forms-system.md#permissions-matrix-v1--locked) for the full role-by-action grid.
@@ -35,7 +37,7 @@ See [05-forms-system.md § Permissions matrix](./05-forms-system.md#permissions-
 
 Three audit streams:
 
-1. **`protopie_form_submissions`** — every row is its own audit record. Soft-delete preserves history. `supersedes_submission_uuid` chains preserve correction history.
+1. **`protopie_form_submissions`** — every row is its own audit record. Soft-delete preserves history. Explicit supersession chains are planned only if sales needs correction history beyond soft-delete/re-submit.
 2. **`protopie_churn_score_runs`** — every recompute (scheduler, manual, MCP-triggered) writes a row with `triggered_by`, `triggered_by_user_uuid`, `started_at`, `finished_at`, `status`, `error_message`.
 3. **`protopie_mcp_audit_log`** — every MCP write tool call writes a row with `auth_method`, `user_uuid`, `tool_name`, `input_summary` (slugs only, no full payloads), `outcome`, `error_message`. See [07-mcp-server-extension.md § Audit logging](./07-mcp-server-extension.md#audit-logging).
 
@@ -80,6 +82,9 @@ The Lightdash backend never logs:
 - OAuth client secrets.
 - PAT values (only PAT name + scopes).
 - MCP `authInfo.token` values.
+- `PROTOPIE_DBT_GITHUB_TOKEN`.
+
+The dbt source MCP tools return file contents only from allowlisted paths. They strip the GitHub token from source metadata before responding. Use a fine-grained GitHub PAT scoped only to `ProtoPie/data-modeling` with Contents read-only and Metadata read-only. Rotate it when people leave the project or when the token is exposed in a terminal, screenshot, issue, Slack thread, or commit.
 
 If Protopie introduces any new auth-bearing field, it **must** be added to `sensitiveCredentialsFieldNames` in `packages/common/src/types/projects.ts` (per Lightdash core's warehouse credentials protection rule — see project `CLAUDE.md`). Validate by `GET /api/v1/projects/{uuid}` and checking the field is omitted from the response.
 
@@ -106,6 +111,7 @@ Dev, staging, and prod:
 |--------|-----------|--------|------------|
 | Disgruntled sales rep exfiltrates touchpoint notes | Medium | Medium (PII-adjacent) | Org-scoped reads. Dashboard exports require auth. CSV export is logged in Lightdash. |
 | Leaked PAT used to mass-create dashboards via MCP | Low | High (resource pollution) | Org opt-in defaults OFF. Audit log surfaces unusual volume. Rate-limit at MCP middleware. |
+| Leaked `PROTOPIE_DBT_GITHUB_TOKEN` | Medium | Medium (read access to dbt source) | Fine-grained PAT limited to `ProtoPie/data-modeling`, Contents read-only, Metadata read-only. Keep in ignored `.env`/ECS env only. Rotate immediately if exposed. |
 | Bug in `FormService.submit()` lets one org write to another | Low | High | Every insert sets `organization_uuid = user.organizationUuid`. Integration test for cross-org isolation in CI. |
 | Score config edited maliciously (sabotage by sales) | Low | Medium (wrong dashboards for a day) | Config versioning audits who/when. Sales lead reviews via the diff in the admin UI. Recompute is reversible by activating prior config. |
 | Stale credential in Airflow leaks Postgres data to S3 | Low | Medium | Quarterly rotation; read-only Postgres role. Bucket has restricted IAM access. |

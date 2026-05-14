@@ -1,277 +1,209 @@
 # 15 — Deployment & Infrastructure
 
-> Lightdash is deployed via Terraform-managed AWS ECS Fargate. This doc covers the existing setup, how to extend it for the Protopie fork (custom Docker image, new env vars), and the network/secret plumbing the dbt pipeline needs.
+> Current state: infrastructure now lives inside this Lightdash repo under `infra/`. Dev is deployed from the forked image in ECR, with MCP enabled and dbt GitHub source access available to the MCP tools.
 
-## What's actually deployed
+## Current layout
 
-> **Note.** You called it "EKS" but the Terraform in `lightdash-infra/` uses **AWS ECS Fargate**. Documenting what's in the repo. If a separate EKS-based deployment exists somewhere else, point me at it and I'll update this section.
-
-| Component | Spec | Source |
-|-----------|------|--------|
-| Compute | **ECS Fargate**, single task, 512 CPU / 1024 MiB by default | `lightdash-infra/infra/{dev,prod}/ecs.tf` |
-| Image | `lightdash/lightdash:latest` from Docker Hub — **upstream, not the fork (today)** | `ecs.tf` var `lightdash_oci_tag` |
-| App DB | **Postgres 15 RDS** (`db.t3.micro`, 20→100 GiB autoscale) via `terraform-aws-modules/rds/aws` | `rds.tf` |
-| Object store | S3 bucket (private, versioning ON) | `s3.tf` |
-| Load balancer | ALB → target group → ECS service (port 8080) | `alb.tf`, `target-group.tf`, `target-group-rule.tf` |
-| DNS | Route53 records | `route53.tf` |
-| Logs | CloudWatch `/ecs/lightdash-log-groups` | `ecs.tf` |
-| AWS region | `us-west-2` | `main.tf` |
-| AWS profile | `xid-prod` (and `xid-dev` analogue in `dev/main.tf`) | `main.tf` |
-| Terraform state | S3 backend `xid-prod-terraform/lightdash-prod`, lockfile-based | `main.tf` |
-| Environments | `dev/` and `prod/` — separate dirs, separate state files, parallel structure | `lightdash-infra/infra/` |
-
-The fork repo URL is already declared in `main.tf` common tags: `https://github.com/ProtoPie/lightdash`. So the fork exists, but the deployed image still pulls from upstream Docker Hub — that's the gap we close in this doc.
-
-## Two terraform environments
-
-```
-lightdash-infra/
+```text
+infra/
 ├── README.md
-└── infra/
-    ├── dev/                      ← terraform workspace, AWS profile xid-dev (assumed)
-    │   ├── main.tf, ecs.tf, rds.tf, alb.tf, s3.tf, …
-    │   ├── .env                  ← deploy-time env vars (read by Terraform local.envs)
-    │   └── terraform.tfstate     ← committed to repo (sync via git per README)
-    └── prod/                     ← terraform workspace, AWS profile xid-prod
-        └── … same shape
+├── ecr/        ← shared ECR repository for the custom Lightdash image
+├── dev/        ← dev ECS/RDS/S3/ALB stack
+└── prod/       ← prod ECS/RDS/S3/ALB stack
 ```
 
-Deployment workflow per README:
+Sensitive runtime files are intentionally ignored by git:
 
-```
-terraform fmt
-terraform plan
-terraform apply
-# then commit terraform.tfstate
-```
+- `.env`
+- `.terraform/`
+- `terraform.tfstate`
+- `terraform.tfstate.*`
+- `.terraform.lock.hcl` should stay committed when Terraform providers are intentionally upgraded, unless the team decides to pin providers outside git.
 
-> ⚠ **Security flag.** Both `.env` and `terraform.tfstate` are committed to git per the README's instructions. State files contain secrets in plaintext (RDS password, Slack tokens, etc.). This is an existing operational concern, not introduced by Protopie. Highly recommend moving to either:
-> - AWS Secrets Manager / SSM Parameter Store + Terraform `data` blocks, or
-> - Terraform Cloud / S3 backend with encryption + remote state locking (you already have S3 backend; just remove state files from git).
->
-> Out of scope for the Protopie fork to fix in v1, but should be in the operational runbook backlog.
+Do not commit runtime secrets, Terraform state, or GitHub PAT values.
 
-## What this means for the Protopie fork
+## What is deployed
 
-We need to do three things to get our forked Lightdash running in prod:
+| Component | Current setup |
+|-----------|---------------|
+| Compute | AWS ECS Fargate, one Lightdash container per environment. |
+| Image | Custom fork image from ECR: `750128304405.dkr.ecr.us-west-2.amazonaws.com/protopie/lightdash:<tag>`. |
+| ECR | Shared repository `protopie/lightdash`, managed by `infra/ecr`. Lifecycle keeps only the latest two image versions per policy. |
+| App DB | RDS Postgres managed by Terraform. If AWS upgraded the DB engine version outside Terraform, keep the newer version in Terraform config instead of downgrading it. |
+| Object store | S3 bucket per environment. |
+| Load balancer | ALB to ECS service on port `8080`. |
+| MCP | Enabled through `MCP_ENABLED=true`. Endpoint: `/api/v1/mcp`. |
+| dbt source context | MCP reads `ProtoPie/data-modeling` through `PROTOPIE_DBT_GITHUB_*` env vars in dev/prod. |
 
-1. **Build a custom Docker image** from the fork and host it where Terraform can pull from.
-2. **Add Protopie env vars** to the ECS task definition.
-3. **Open network access** between the Airflow DAG (data-modeling repo's ingestion) and the Lightdash RDS instance.
+## Make targets
 
-## Step 1 — Custom Docker image
-
-### Build
-
-Lightdash has a `Dockerfile` at the repo root. Add a GitHub Actions workflow in this fork (`.github/workflows/build-image.yml`) that builds and pushes on every push to `main`:
-
-```yaml
-name: Build Protopie Lightdash image
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::<account-id>:role/github-actions-ecr-push
-          aws-region: us-west-2
-      - uses: aws-actions/amazon-ecr-login@v2
-        id: ecr
-      - name: Build & push
-        run: |
-          IMAGE_REPO=${{ steps.ecr.outputs.registry }}/protopie/lightdash
-          docker buildx build \
-            -t $IMAGE_REPO:${{ github.sha }} \
-            -t $IMAGE_REPO:latest \
-            --push .
-```
-
-### Host
-
-Push to **AWS ECR** under repo `protopie/lightdash` in the same account (`xid-prod` / `xid-dev`). Two ECR repos — one per env — so a dev push doesn't accidentally hit prod.
-
-### Wire into Terraform
-
-In `lightdash-infra/infra/{dev,prod}/ecs.tf`, change the image source:
-
-```hcl
-# was:
-image = "lightdash/lightdash:${var.lightdash_oci_tag}"
-
-# becomes:
-image = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/protopie/lightdash:${var.lightdash_oci_tag}"
-```
-
-And grant the ECS task execution role permission to pull from ECR (most likely already covered by `AmazonECSTaskExecutionRolePolicy` — verify in the IAM console).
-
-`lightdash_oci_tag` defaults to `"latest"`; for pinned deploys, override to a commit SHA: `terraform apply -var "lightdash_oci_tag=abc1234"`.
-
-## Step 2 — Protopie env vars
-
-Edit `lightdash-infra/infra/{dev,prod}/ecs.tf` `container_definitions.environment[]` to add:
-
-```hcl
-{ "name" : "PROTOPIE_ENABLED",                  "value" : local.envs["PROTOPIE_ENABLED"] },
-{ "name" : "PROTOPIE_PROJECT_UUID",             "value" : local.envs["PROTOPIE_PROJECT_UUID"] },
-{ "name" : "PROTOPIE_WAREHOUSE_MART_TABLE",     "value" : local.envs["PROTOPIE_WAREHOUSE_MART_TABLE"] },
-                                                                                # e.g. "warehouse.mart_account_usage_90d"
-{ "name" : "PROTOPIE_RECOMPUTE_CRON",           "value" : local.envs["PROTOPIE_RECOMPUTE_CRON"] },
-                                                                                # default "0 2 * * *"
-```
-
-And in `infra/{dev,prod}/.env`, add the values:
+From the repo root:
 
 ```bash
-PROTOPIE_ENABLED=true
-PROTOPIE_PROJECT_UUID=<the lightdash project UUID that owns the protopie content>
-PROTOPIE_WAREHOUSE_MART_TABLE=warehouse.mart_account_usage_90d
-PROTOPIE_RECOMPUTE_CRON=0 2 * * *
+make build-dev
+make deploy-dev
+make build-prod
+make deploy-prod
 ```
 
-For dev, set `PROTOPIE_ENABLED=true` only when actively testing; `false` otherwise keeps the dev box fast.
+What each target does:
 
-## Step 3 — Network access for the Airflow DAG
+| Target | Behavior |
+|--------|----------|
+| `make build-dev` | Typechecks backend, ensures ECR exists, logs in to ECR, builds the fork image, and pushes `dev-<git-sha>` plus `dev-latest`. |
+| `make deploy-dev` | Runs `build-dev`, then applies Terraform in `infra/dev` with `lightdash_oci_image` and `lightdash_oci_tag=dev-<git-sha>`. |
+| `make build-prod` | Same as dev, but tags `prod-<git-sha>` plus `prod-latest`. |
+| `make deploy-prod` | Runs `build-prod`, then applies Terraform in `infra/prod`. Do not run this until dev is validated. |
 
-The Airflow DAG (in the data-modeling repo's deployment) reads `protopie_*` tables from the Lightdash app DB and writes to Redshift. It needs:
+Default image tags come from the local git SHA:
+
+```text
+DEV_IMAGE_TAG=dev-$(git rev-parse --short HEAD)
+PROD_IMAGE_TAG=prod-$(git rev-parse --short HEAD)
+```
+
+You can override tags:
+
+```bash
+make deploy-dev DEV_IMAGE_TAG=dev-my-test
+```
+
+## Dev deployment
+
+For dev, the normal command is:
+
+```bash
+make deploy-dev
+```
+
+This does three important things:
+
+1. Builds the current forked Lightdash image.
+2. Pushes it to ECR.
+3. Runs Terraform in `infra/dev`, updating the ECS task definition to use the image tag that was just built.
+
+Terraform applies only the dev stack from `infra/dev`. It does not apply prod.
+
+## Prod deployment
+
+Prod files can be edited and reviewed in this repo, but prod should not be applied casually.
+
+Recommended prod flow:
+
+1. Merge and deploy to dev.
+2. Smoke test dev, including MCP OAuth, dbt file read tools, dashboard reads, and one write tool in a test space.
+3. Build a prod tag from the same commit:
+
+   ```bash
+   make build-prod
+   ```
+
+4. Review `terraform plan` in `infra/prod`.
+5. Apply prod only after approval:
+
+   ```bash
+   make deploy-prod
+   ```
+
+## Required runtime env
+
+Use the templates as the source of truth:
+
+- `.env.example`
+- `infra/dev/.env.example`
+- `infra/prod/.env.example`
+
+MCP-specific env:
+
+```bash
+MCP_ENABLED=true
+```
+
+dbt source env for dev/prod:
+
+```bash
+PROTOPIE_DBT_GITHUB_OWNER=ProtoPie
+PROTOPIE_DBT_GITHUB_REPO=data-modeling
+PROTOPIE_DBT_GITHUB_REF=main
+PROTOPIE_DBT_GITHUB_TOKEN=<fine-grained-read-only-pat>
+PROTOPIE_DBT_ALLOWED_PATHS=models,marts,macros,seeds,snapshots,analyses,analysis,tests,dbt_project.yml,packages.yml,selectors.yml,exposures.yml,README.md
+```
+
+Local-only dbt env:
+
+```bash
+PROTOPIE_DBT_LOCAL_PATH=/Users/mamur/Documents/projects/data-modeling
+```
+
+Do not set `PROTOPIE_DBT_LOCAL_PATH` in ECS unless the container image actually includes that checkout. Dev/prod should use the GitHub path.
+
+## MCP endpoint after deploy
+
+Dev:
+
+```text
+https://lightdash-dev.protopie.io/api/v1/mcp
+```
+
+Codex:
+
+```bash
+codex mcp add lightdash-mcp --url https://lightdash-dev.protopie.io/api/v1/mcp
+codex mcp login lightdash-mcp --scopes read,write,mcp:read,mcp:write
+```
+
+If tools discover but writes fail with "MCP write tools are disabled for this organization", an org admin must enable writes in:
+
+```text
+/generalSettings/integrations
+Settings → Organization settings → Integrations → Protopie MCP
+```
+
+## Network access for the Airflow DAG
+
+The dbt/Airflow work is separate from the Lightdash fork, but the future pipeline needs to read Protopie app tables from the Lightdash Postgres RDS instance and load them into Redshift.
+
+Required pieces:
 
 | Concern | Setting |
 |---------|---------|
-| Source: Lightdash RDS endpoint | `module.lightdash_db.db_instance_endpoint` from Terraform output |
-| Source credentials | A **read-only** Postgres user — NOT the Lightdash app's read-write user |
-| Network path | RDS security group (`aws_security_group.database_sg`) must allow ingress from Airflow's source — likely a worker VPC SG |
-| TLS | RDS has `rds.force_ssl = "0"` today (off). Either enable SSL on RDS and tell Airflow to use SSL, or accept un-encrypted traffic *only* if the VPC is private. Recommend enabling SSL. |
+| Source endpoint | Terraform output from `infra/{dev,prod}` for the Lightdash RDS endpoint. |
+| Source credentials | Read-only Postgres user, not the Lightdash app write user. |
+| Network path | RDS security group allows ingress from the Airflow worker security group or approved private network path. |
+| Destination | Redshift schemas used by `data-modeling`: `warehouse_staging` for dev, `warehouse` for prod. |
 
-### Create the read-only role
-
-Run once via `psql` against the RDS instance:
-
-```sql
-CREATE ROLE protopie_readonly LOGIN PASSWORD '<rotated-quarterly>';
-GRANT CONNECT ON DATABASE lightdash TO protopie_readonly;
-GRANT USAGE ON SCHEMA public TO protopie_readonly;
-GRANT SELECT ON
-    protopie_form_submissions,
-    protopie_form_definitions,
-    protopie_churn_score_configs,
-    protopie_churn_score_factors,
-    protopie_churn_score,
-    protopie_churn_score_runs,
-    protopie_account_overrides,
-    protopie_organization_settings,
-    protopie_mcp_audit_log,
-    protopie_dashboard_bootstrap_runs
-TO protopie_readonly;
--- Auto-grant on future Protopie tables:
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO protopie_readonly;
-```
-
-Store the password in AWS Secrets Manager and reference from Airflow connections — never in `.env` or `tfstate`.
-
-### Security group rule
-
-In `lightdash-infra/infra/{prod,dev}/services-security-group.tf`, add an ingress rule allowing the Airflow worker SG (or specific IP range) to hit the RDS port:
-
-```hcl
-resource "aws_security_group_rule" "rds_from_airflow" {
-  type                     = "ingress"
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.database_sg.id
-  source_security_group_id = var.airflow_worker_sg_id    # add as a tf variable
-}
-```
-
-## Multiple containers? No, single task
-
-The current task definition runs **one container** (`lightdash`) with `SCHEDULER_ENABLED=true`, meaning the same process handles HTTP + Graphile Worker. Pros: simple. Cons: a heavy scheduler job blocks API responses; also no headless browser container is deployed (so dashboard PDF export will silently fail).
-
-For Protopie v1 this is fine — the nightly recompute task is small (< 30s) and we don't ship dashboard PDF export as a feature. If load grows, split into:
-
-1. Two ECS services in the cluster:
-   - `lightdash-api`: `SCHEDULER_ENABLED=false`, runs HTTP only
-   - `lightdash-worker`: `SCHEDULER_ENABLED=true`, runs scheduler only
-
-   ALB routes only to `lightdash-api`. Both pull the same image and read the same `.env`.
-
-2. Add a third container if PDFs are needed: `lightdash/headless-browser`.
-
-Defer this split until we have evidence we need it.
-
-## Deploy flow for a Protopie release
-
-```
-1. Eng merges PR to main on github.com/ProtoPie/lightdash
-2. GitHub Actions builds image, pushes to ECR with tag = commit SHA + "latest"
-3. Eng SSH-equivalent: cd lightdash-infra/infra/dev
-4. Edit .env if env vars changed
-5. terraform plan          # review the task-definition diff
-6. terraform apply         # ECS service rolls task definition; one new task spun up before old killed
-7. Smoke test dev
-8. Repeat steps 3-7 in infra/prod with the same image tag (pinned)
-9. Commit lightdash-infra changes including the updated tfstate
-```
+The dbt implementation is owned separately, but this Lightdash repo owns the app DB tables and RDS network exposure.
 
 ## Rollback
 
-ECS service supports rolling back the task definition revision:
+Fastest rollback is to point ECS back to a prior task definition or image tag.
+
+List recent task definitions:
 
 ```bash
-# list the last 5 task definition revisions
-aws ecs list-task-definitions --family-prefix lightdash --status ACTIVE --sort DESC --max-items 5
+aws ecs list-task-definitions --family-prefix lightdash-dev --status ACTIVE --sort DESC --max-items 5
+```
 
-# revert the service to a prior revision
+Update service manually:
+
+```bash
 aws ecs update-service \
-  --cluster lightdash-cluster \
-  --service lightdash-service \
-  --task-definition lightdash:<prior-revision>
+  --cluster lightdash-cluster-dev \
+  --service lightdash-service-dev \
+  --task-definition lightdash-dev:<prior-revision>
 ```
 
-Or via Terraform: change `var.lightdash_oci_tag` back to the previous SHA, `terraform apply`. Reverting the image is the simplest rollback; reverting tfstate to a prior commit also works but is riskier (resets _everything_ in the stack).
+Or set `DEV_IMAGE_TAG` to a previous known-good tag and rerun Terraform in `infra/dev`.
 
-## Health checks & observability
+## Smoke test
 
-| Surface | Where |
-|---------|-------|
-| ECS task health | ALB target health (200 on `/`) |
-| Application logs | CloudWatch `/ecs/lightdash-log-groups` — `awslogs-stream-prefix = lightdash-ecs` |
-| Slow query / scheduler errors | CloudWatch + Sentry (if `SENTRY_DSN` env var is set — currently missing in `.env.local`; add for Protopie) |
-| RDS metrics | CloudWatch RDS namespace |
-| S3 errors | CloudWatch S3 namespace |
-| Custom Protopie metrics | Lightdash's existing analytics (`LightdashAnalytics.track`); export to your downstream analytics pipeline |
+After dev deploy:
 
-We propose adding `SENTRY_DSN` to the ECS env vars so backend errors land in Sentry. The Protopie module already uses Sentry (`@sentry/node` is imported in `BaseService` and propagates to controllers). Just need to set the DSN.
-
-## Open infra questions
-
-- The user said "EKS"; the code says "ECS Fargate". If there's a separate EKS deployment that's the actual prod target, the relevant Helm chart / Kubernetes manifests are not in `lightdash-infra/` and this doc needs an update. Flag this; confirm and I'll rewrite.
-- `terraform.tfstate` is committed to git per the README. Migrate to S3-only state (drop from git) — the S3 backend is already configured.
-- `.env` lives in `infra/{dev,prod}/` and likely contains secrets. Confirm `.gitignore` excludes `.env` (and not just `.env.local`), and migrate sensitive values to Secrets Manager.
-- `rds.force_ssl = "0"`. Enable SSL and update Lightdash's `PGCONNECTIONURI` to require it.
-- No `lightdash_db.db_instance_endpoint` output is exported by the existing Terraform — we add `output "lightdash_db_endpoint"` so the Airflow DAG can reference it without hard-coding.
-- No separate headless browser container — dashboard PDF export will fail silently. Acceptable for v1; revisit if PDF export becomes a requirement.
-
-## Quick reference
-
-```
-Fork repo:              https://github.com/ProtoPie/lightdash
-Infra repo:             /Users/mamur/Documents/projects/lightdash-infra
-ECS cluster:            lightdash-cluster (dev + prod)
-ECS service:            lightdash-service
-ALB listener:           configured via target-group-rule.tf
-RDS instance:           lightdash-db (postgres 15, db.t3.micro)
-S3 bucket:              from .env S3_BUCKET
-ECR repo (proposed):    <account>.dkr.ecr.us-west-2.amazonaws.com/protopie/lightdash
-AWS region:             us-west-2
-Terraform state:        s3://xid-prod-terraform/lightdash-prod (lockfile-based)
-```
+1. Open `https://lightdash-dev.protopie.io`.
+2. Confirm login works.
+3. Confirm `/api/v1/mcp` returns an auth challenge, not 404.
+4. Connect Codex/Claude to the MCP URL and complete OAuth.
+5. Call `protopie_get_overview`.
+6. Call `protopie_dbt_list_files` and confirm it lists `ProtoPie/data-modeling` files.
+7. If write testing is intended, enable Protopie MCP writes in `/generalSettings/integrations`.
+8. Create a test space with `protopie_create_space`.

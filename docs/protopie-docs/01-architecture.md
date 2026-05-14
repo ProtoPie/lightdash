@@ -38,7 +38,7 @@
    │                                                                  │  • protopie_*   │
    │   ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐    │     tables      │
    │   │ Existing     │  │ NEW protopie │  │ EXTENDED McpService│    │  (forms,        │
-   │   │ dashboards,  │  │ forms +       │  │ + write tools      │    │   submissions,  │
+   │   │ dashboards,  │  │ forms +       │  │ + dbt/API/tools    │    │   submissions,  │
    │   │ spaces,      │  │ churn UI      │  │                    │    │   weights,      │
    │   │ charts,      │  │              │  │                    │    │   scores)       │
    │   │ MCP read     │  │              │  │                    │    │                 │
@@ -91,22 +91,20 @@ See [04-churn-score-engine.md](./04-churn-score-engine.md).
 
 See [05-forms-system.md](./05-forms-system.md).
 
-### C. MCP write tools
+### C. MCP extension
 
-**Purpose.** Let external AI agents create / update charts, dashboards, spaces via MCP.
+**Purpose.** Let external AI agents understand dbt marts, inspect Lightdash APIs, and create/update charts, dashboards, and spaces via MCP.
 
 **Where the code lives.**
 
 | Layer | Path | New / Existing |
 |-------|------|----------------|
-| MCP write tools | `packages/backend/src/protopie/mcp/writeTools/*.ts` | New |
-| Tool registry | `packages/backend/src/protopie/mcp/registerWriteTools.ts` | New |
-| `requireMcpWrite` helper | `packages/backend/src/protopie/mcp/shared/requireMcpWrite.ts` | New — enforces `mcp:write` OAuth scope per call (gap in current MCP service) |
-| Wire-up | 🔌 Modify `McpService.ts` to call `registerWriteTools(server, deps)` AND inject `coderService` in `packages/backend/src/ee/index.ts` | **Smallest possible upstream edit** |
+| MCP tools | `packages/backend/src/protopie/mcp/registerProtopieMcpTools.ts` | New |
+| Shared helpers | `packages/backend/src/protopie/mcp/shared/*.ts` | New — auth, audit, dbt repository access, examples, responses |
+| Org settings API | `packages/backend/src/protopie/controllers/SettingsController.ts` | New — admin write-toggle endpoint |
+| Wire-up | 🔌 Modify `McpService.ts` to call `registerProtopieMcpTools(...)` with the existing Lightdash services it needs | **Smallest possible upstream edit** |
 
-The tools wrap Lightdash's **existing `CoderService`** (`packages/backend/src/services/CoderService/CoderService.ts`) — `upsertChart`, `upsertSqlChart`, `upsertDashboard`, `getOrCreateSpace`. CoderService is already slug-based, idempotent, and permission-gated (`manage:ContentAsCode`), making it the right substrate for agent-driven authoring. We do **not** wrap raw `DashboardService.create()` — that's not idempotent for an agent that may retry.
-
-See [07-mcp-server-extension.md](./07-mcp-server-extension.md).
+The content write tools wrap Lightdash's **existing `CoderService`** (`packages/backend/src/services/CoderService/CoderService.ts`) — `upsertChart`, `upsertSqlChart`, `upsertDashboard`, `getOrCreateSpace`. CoderService is already slug-based, idempotent, and permission-gated (`manage:ContentAsCode`), making it the right substrate for agent-driven authoring. The same extension also provides read-only dbt source tools and a guarded Lightdash REST API bridge.
 
 See [07-mcp-server-extension.md](./07-mcp-server-extension.md).
 
@@ -141,10 +139,11 @@ Graphile Worker cron → SchedulerWorker enqueues recomputeChurnScore
 ### External agent creates a dashboard via MCP
 
 ```
-Claude Code → MCP HTTP /mcp endpoint (existing mcpRouter.ts)
-            → McpServer.handle(toolCall: "upsert_dashboard_as_code", args)
-            → requireMcpWrite(authInfo)              ← rejects mcp:read-only callers
-            → Protopie write-tool handler
+Claude Code → MCP HTTP /api/v1/mcp endpoint
+            → McpServer.handle(toolCall: "protopie_upsert_dashboard_as_code", args)
+            → requireMcpWriteScope(authInfo)         ← rejects mcp:read-only callers
+            → requireOrganizationMcpWriteEnabled()   ← org admin opt-in
+            → Protopie MCP tool handler
             → CoderService.upsertDashboard(...)      ← reused as-is
               ├─ getOrCreateSpace()                  ← reused
               ├─ resolves chart slugs → UUIDs        ← reused
@@ -160,7 +159,7 @@ The agent authenticates via the **already-built** OAuth2, PAT, or service-accoun
 ### Authentication / authorization
 
 - All Protopie endpoints reuse Lightdash's auth middlewares (`isAuthenticated`, `allowApiKeyAuthentication`).
-- MCP write tools enforce per-tool CASL ability checks (e.g., `subject('Dashboard', { projectUuid })` + `'create'`).
+- MCP write tools enforce the `mcp:write` scope, the org-level Protopie MCP write toggle, and Lightdash service-layer CASL checks.
 - A new scope **may** be added if we want to gate the form system to a sales role — see [05-forms-system.md](./05-forms-system.md) for the decision.
 
 ### Logging / observability
@@ -168,9 +167,11 @@ The agent authenticates via the **already-built** OAuth2, PAT, or service-accoun
 - Sentry is already integrated; Protopie services should extend `BaseService` so trace context is preserved.
 - Add a Sentry tag `module: 'protopie'` so dashboards can be filtered.
 
-### Configuration / feature flag
+### Configuration / feature flags
 
-A single environment variable `PROTOPIE_ENABLED=true|false` is checked at startup. If false, the entire Protopie subsystem (controllers, scheduler tasks, MCP write tools, frontend route tree) is skipped. This is the single source of truth for fork-on/fork-off — see [02-isolation-strategy.md](./02-isolation-strategy.md).
+The current MCP surface is controlled by Lightdash's existing `MCP_ENABLED=true|false` environment variable. MCP write behavior has a second, per-organization admin toggle stored in Protopie settings and exposed at `/generalSettings/integrations`.
+
+There is no single implemented `PROTOPIE_ENABLED` kill switch yet for every Protopie controller, frontend route, and scheduler task. If that global switch becomes necessary, implement it as a separate config slice rather than overloading `MCP_ENABLED`, which should remain MCP-specific.
 
 ## dbt project location
 
@@ -192,7 +193,7 @@ Key facts about that repo (see [11-dbt-integration.md](./11-dbt-integration.md) 
 
 ## Deployment
 
-Lightdash runs on **AWS ECS Fargate** (one container per task — same process serves HTTP + runs Graphile Worker via `SCHEDULER_ENABLED=true`), backed by a Postgres 15 RDS instance for the app DB and an S3 bucket for object storage. Two environments (`dev` / `prod`), each Terraform-managed in `/Users/mamur/Documents/projects/lightdash-infra/infra/{dev,prod}/`. The fork repo is `github.com/ProtoPie/lightdash`; we build a custom Docker image, push to ECR, and reference it from the Terraform task definition.
+Lightdash runs on **AWS ECS Fargate** (one container per task — same process serves HTTP + runs Graphile Worker via `SCHEDULER_ENABLED=true`), backed by an RDS Postgres app DB and an S3 bucket for object storage. Two environments (`dev` / `prod`) are Terraform-managed in this repo under `infra/{dev,prod}`. The fork repo is `github.com/ProtoPie/lightdash`; we build a custom Docker image, push to ECR, and reference it from the Terraform task definition.
 
 The dbt project deployment (Airflow DAGs that build marts on Redshift, plus the new App-DB-→-Redshift sync) lives in a separate infrastructure stack owned by data-engineering. Coupling is via (a) the Redshift warehouse Lightdash queries through `WarehouseClient`, and (b) the Airflow read-only Postgres role on Lightdash's RDS.
 

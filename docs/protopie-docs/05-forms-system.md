@@ -40,42 +40,36 @@
 ```ts
 // packages/common/src/protopie/forms/schemas/churnScoreInput.ts
 import { z } from 'zod';
-import { defineForm } from '../defineForm';
+import { defineProtopieForm } from '../defineForm';
+import {
+    accountIdentityFields,
+    optionalTrimmedString,
+    withAccountIdentity,
+} from './accountIdentity';
 
-export const churnScoreInputForm = defineForm({
+export const churnScoreInputForm = defineProtopieForm({
     key: 'churn_score_input',
     version: 1,
     title: 'Churn score input',
     description: 'Temporary dummy form for sales-owned churn score inputs.',
-    accountKeyField: 'cloud_url',         // the field whose value becomes submission.account_key
-    secondaryKeyFields: {
-        cloud_url: 'cloud_url',
-        salesforce_account_id: 'salesforce_account_id',
-    },
-    requiredScope: 'protopie:forms:submit',
-    fields: {
-        cloud_url: z.string().url()
-            .describe('Account tenant URL (e.g. https://acme.protopie.cloud/)'),
-        salesforce_account_id: z.string().min(1).optional()
-            .describe('Salesforce Account ID, if known'),
-        signal_date: z.coerce.date().describe('When the signal applies'),
-        signal_name: z.string().min(1).describe('Temporary signal key'),
-        signal_value: z.number().min(0).describe('Temporary signal value'),
-        notes: z.string().min(1).optional(),
-    },
-    uiHints: {
-        fieldOrder: [
-            'cloud_url', 'salesforce_account_id', 'signal_date',
-            'signal_name', 'signal_value', 'notes',
-        ],
-        widgets: {
-            notes: 'textarea',
-        },
-    },
+    accountIdFields: ['account_key', 'cloud_url', 'salesforce_account_id'],
+    schema: withAccountIdentity({
+        signal_date: z.string().trim().min(1),
+        signal_name: z.string().trim().min(1),
+        signal_value: z.number().min(0),
+        notes: optionalTrimmedString,
+    }),
+    fields: [
+        ...accountIdentityFields,
+        { key: 'signal_date', label: 'Signal date', type: 'date', required: true },
+        { key: 'signal_name', label: 'Signal name', type: 'text', required: true },
+        { key: 'signal_value', label: 'Signal value', type: 'number', required: true },
+        { key: 'notes', label: 'Notes', type: 'textarea' },
+    ],
 });
 ```
 
-**`accountKeyField`** explicitly points to the field whose value will populate the row's `account_key` column at insert time. `secondaryKeyFields` does the same for `salesforce_account_id` / `cloud_url` extracted columns. This way every form makes its account binding explicit in its schema rather than via a global "requiresAccount" boolean.
+**`accountIdFields`** names which account identity fields the form exposes. The current backend extracts `account_key`, `cloud_url`, and `salesforce_account_id` from the payload; `account_key` falls back to `cloud_url` or `salesforce_account_id` if the explicit field is empty.
 
 The `defineForm` helper enforces structure and returns both:
 
@@ -151,8 +145,6 @@ export class FormService extends BaseService {
         projectUuid: string;
         formKey: string;
         payload: unknown;
-        supersedesSubmissionUuid?: string;       // for corrections
-        notes?: string;
     }) {
         const form = getForm(args.formKey);
         if (!form) throw new ParameterError(`Unknown form: ${args.formKey}`);
@@ -161,30 +153,18 @@ export class FormService extends BaseService {
         }
         const validated = form.schema.parse(args.payload);   // throws on invalid input
 
-        // Extract join keys from payload using the form's declared mappings
-        const accountKey = form.accountKeyField
-            ? (validated as Record<string, unknown>)[form.accountKeyField as string] as string | null
-            : null;
-        const salesforceAccountId = form.secondaryKeyFields?.salesforce_account_id
-            ? (validated as Record<string, unknown>)[form.secondaryKeyFields.salesforce_account_id as string] as string | null
-            : null;
-        const cloudUrl = form.secondaryKeyFields?.cloud_url
-            ? (validated as Record<string, unknown>)[form.secondaryKeyFields.cloud_url as string] as string | null
-            : null;
+        // Extract account identity from account_key, cloud_url, salesforce_account_id
+        const accountIdentity = FormService.extractAccountIdentity(validated);
 
         const submission = await this.deps.formSubmissionModel.insert({
-            project_uuid: args.projectUuid,
-            form_uuid: form.formUuid,                          // resolved from the synced protopie_form_definitions row
-            form_key: form.key,
-            schema_version: form.version,
-            submitted_by_user_uuid: args.user.userUuid,
-            organization_uuid: args.user.organizationUuid!,
-            account_key: accountKey,
-            salesforce_account_id: salesforceAccountId,
-            cloud_url: cloudUrl,
+            projectUuid: args.projectUuid,
+            formDefinitionUuid: definition.formDefinitionUuid, // resolved from the synced protopie_form_definitions row
+            formKey: form.key,
+            schemaVersion: form.version,
+            createdByUserUuid: args.user.userUuid,
+            organizationUuid: args.user.organizationUuid!,
+            ...accountIdentity,
             payload: validated,
-            supersedes_submission_uuid: args.supersedesSubmissionUuid ?? null,
-            notes: args.notes ?? null,
         });
         return submission;
     }
@@ -297,14 +277,16 @@ export class FormSubmissionModel {
     constructor(private readonly deps: { database: Knex }) {}
 
     async insert(row: {
-        form_key: string;
-        form_version: number;
-        submitted_by: string;
-        organization_uuid: string;
-        project_uuid: string | null;
-        account_key: string | null;
+        formKey: string;
+        schemaVersion: number;
+        createdByUserUuid: string;
+        organizationUuid: string;
+        projectUuid: string;
+        formDefinitionUuid: string;
+        accountKey: string | null;
+        cloudUrl: string | null;
+        salesforceAccountId: string | null;
         payload: unknown;
-        notes: string | null;
     }) {
         const [submission] = await this.deps.database(TABLE)
             .insert(row)
@@ -313,24 +295,24 @@ export class FormSubmissionModel {
     }
 
     async list(filter: {
-        form_key: string;
-        organization_uuid: string;
-        account_key?: string;
+        formKey: string;
+        organizationUuid: string;
+        accountKey?: string;
         limit: number;
         offset: number;
     }) {
         const q = this.deps.database(TABLE)
-            .where('form_key', filter.form_key)
-            .andWhere('organization_uuid', filter.organization_uuid)
+            .where('form_key', filter.formKey)
+            .andWhere('organization_uuid', filter.organizationUuid)
             .andWhere(function () { this.whereNull('deleted_at'); });
-        if (filter.account_key) q.andWhere('account_key', filter.account_key);
-        return q.orderBy('submitted_at', 'desc')
+        if (filter.accountKey) q.andWhere('account_key', filter.accountKey);
+        return q.orderBy('created_at', 'desc')
             .limit(filter.limit).offset(filter.offset);
     }
 
     async softDelete(submissionUuid: string) {
         return this.deps.database(TABLE)
-            .where('submission_uuid', submissionUuid)
+            .where('form_submission_uuid', submissionUuid)
             .update({ deleted_at: this.deps.database.fn.now() });
     }
 }
@@ -405,9 +387,9 @@ dbt declares the Postgres app DB as a source pointing at `protopie_form_submissi
 ```sql
 -- dbt/models/marts/protopie/mart_churn_score_form_inputs.sql
 select
-    submission_uuid,
-    submitted_at,
-    submitted_by,
+    form_submission_uuid,
+    created_at,
+    created_by_user_uuid,
     account_key,
     (payload->>'signal_date')::date       as signal_date,
     payload->>'signal_name'               as signal_name,
@@ -444,12 +426,14 @@ For v2: revisit DB-stored form schemas after we've shipped 5+ forms and the engi
 
 ### Who can do what
 
+This is the target permission model for the final sales workflow. The current POC is simpler: organization-scoped authenticated users can use the dummy form, and org admins manage MCP settings.
+
 | Action | Authenticated org member | Sales contributor | Sales manager | Org admin |
 |--------|---------------------------|--------------------|----------------|-----------|
 | **Submit any form** | ✓ | ✓ | ✓ | ✓ |
 | **Soft-delete own submission** | ✓ (within 24h) | ✓ (within 24h) | ✓ (any time) | ✓ |
 | **Soft-delete any submission** | ✗ | ✗ | ✓ | ✓ |
-| **Supersede a submission** (insert with `supersedes_submission_uuid`) | ✓ (only own) | ✓ (only own) | ✓ | ✓ |
+| **Supersede a submission** | Planned, not in current foundation migration | Planned | Planned | Planned |
 | **Hard-delete** (GDPR-style purge) | ✗ | ✗ | ✗ | ✓ (via SQL only — no UI) |
 | **View own submissions** | ✓ | ✓ | ✓ | ✓ |
 | **View org-wide submission history** | ✓ (read-only) | ✓ | ✓ | ✓ |
@@ -461,57 +445,38 @@ For v2: revisit DB-stored form schemas after we've shipped 5+ forms and the engi
 | **Toggle org-level MCP write tools** | ✗ | ✗ | ✗ | ✓ |
 | **View MCP audit log** | ✗ | ✗ | ✗ | ✓ |
 
-**Role mapping for v1** (no new CASL scopes — see warning below):
+**Current POC role mapping:**
 
-- "Sales contributor" / "Sales manager" are not Lightdash roles. v1 enforces these checks **inline in services**, looking up the user's membership in a `protopie_sales_team` Postgres table (a thin allow-list maintained manually by an admin). This avoids editing CASL ability files.
-- "Org admin" maps to Lightdash's existing `OrganizationMemberRole.ADMIN`.
+- The backend requires an authenticated, organization-scoped Lightdash user.
+- There is no `protopie_sales_team` table in the current foundation migration.
+- "Sales contributor" and "Sales manager" are product roles for the future final form workflow, not implemented Lightdash roles yet.
+- "Org admin" maps to the existing Lightdash ability to `manage` the `Organization`, used today for the MCP settings toggle.
 
-```sql
-CREATE TABLE protopie_sales_team (
-    user_uuid          UUID PRIMARY KEY REFERENCES users(user_uuid) ON DELETE CASCADE,
-    organization_uuid  UUID NOT NULL REFERENCES organizations(organization_uuid) ON DELETE CASCADE,
-    role               VARCHAR(40) NOT NULL,    -- 'contributor' | 'manager'
-    added_by_user_uuid UUID NOT NULL REFERENCES users(user_uuid),
-    added_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_uuid, organization_uuid)
-);
-```
-
-Adding/removing a user from the sales team is an admin-only API call. No frontend UI in v1 — admin uses `psql` or a future settings page.
-
-> ⚠ **Why not CASL scopes?** Adding a `protopie:forms:submit` scope means editing `projectMemberAbility.ts`, `roleToScopeMapping.ts`, `serviceAccountAbility.ts`, and `organizationMemberAbility.ts` — all of which violate the [isolation rule](./02-isolation-strategy.md). The `protopie_sales_team` table approach is a pragmatic v1 workaround. Lift to proper CASL scopes only if (a) we have a stable list of Protopie-specific roles, (b) we're ready to PR a generic "custom role" extension upstream, or (c) the inline checks become unmaintainable.
+If we need sales-specific submit/manage permissions later, add a Protopie-owned role table or upstream-friendly custom-role design in a separate migration.
 
 ### MCP and forms
 
 The MCP write-tool path **never** writes form submissions or Protopie config. The MCP write tools cover charts, dashboards, spaces (generic content) — never Protopie operational data. If a future requirement asks for "let an agent submit a touchpoint", we'd add a separate, narrower MCP tool gated by a new scope.
 
-## Editing a submission — append, don't update
+## Editing a submission
 
-If sales needs to correct a touchpoint after the fact, the API does **not** UPDATE the existing row. Instead, it inserts a **new** row with `supersedes_submission_uuid` pointing to the original:
+Current POC behavior: submit a new row and soft-delete the old row if a correction is needed. The foundation migration does not include `supersedes_submission_uuid`.
 
-```http
-POST /api/v1/projects/:projectUuid/protopie/forms/:formKey/submissions
-{
-    "payload": { ... updated values ... },
-    "supersedesSubmissionUuid": "<original-submission-uuid>"
-}
-```
-
-dbt's `mart_sales_touchpoints` resolves supersession chains so dashboards show only the latest in each chain:
+Planned behavior, if sales needs explicit correction chains: add `supersedes_submission_uuid` in a future migration and let dbt resolve the latest row in each chain:
 
 ```sql
 with chain as (
-    select submission_uuid, supersedes_submission_uuid
+    select form_submission_uuid, supersedes_submission_uuid
     from {{ source('protopie_postgres', 'protopie_form_submissions') }}
     where deleted_at is null
 ),
 latest as (
-    select submission_uuid
+    select form_submission_uuid
     from chain
-    where submission_uuid not in (select supersedes_submission_uuid from chain where supersedes_submission_uuid is not null)
+    where form_submission_uuid not in (select supersedes_submission_uuid from chain where supersedes_submission_uuid is not null)
 )
 select s.* from {{ source('protopie_postgres', 'protopie_form_submissions') }} s
-where s.submission_uuid in (select submission_uuid from latest)
+where s.form_submission_uuid in (select form_submission_uuid from latest)
 ```
 
 This preserves history (you can always reconstruct what was active on any past date) and avoids "did sales rewrite this last week?" questions when explaining a churn score.

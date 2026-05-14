@@ -104,11 +104,11 @@ The fully-qualified mart name is `warehouse_staging.mart_account_usage_90d` in d
 
 ### E7. Are MCP write tools enabled by default or behind a flag?
 
-**Question:** Should `create_dashboard` etc. be exposed to every authenticated MCP user, or gated by an org-level setting?
+**Question:** Should MCP write tools such as `protopie_upsert_dashboard_as_code` be exposed to every authenticated MCP user, or gated by an org-level setting?
 
-**Recommendation:** Gate behind an org-level setting (default OFF). Reason: write tools are powerful; an org admin should explicitly opt-in. Once enabled, per-user permission still uses the existing CASL ability checks.
+**Decision:** Gate behind an org-level setting (default OFF). Reason: write tools are powerful; an org admin should explicitly opt-in. Once enabled, per-user permission still uses the existing CASL ability checks.
 
-The setting lives on the `organizations` table as a single boolean column `protopie_mcp_write_tools_enabled` — **but** adding a column to a Lightdash core table violates the isolation rule. Instead, use a row in `protopie_organization_settings` (a new Protopie-owned table) keyed by `organization_uuid`. Added to the data model in [03-data-model.md](./03-data-model.md) if we go this route — TODO.
+The setting lives in `protopie_organization_settings`, keyed by `organization_uuid`, and is exposed to org admins at `/generalSettings/integrations` via `GET/PATCH /api/v1/protopie/mcp-settings`.
 
 ### E8. Slack notifications for `recomputeChurnScore` runs?
 

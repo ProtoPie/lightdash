@@ -12,10 +12,10 @@
 
 | # | Requirement | R | Implementation | Verification | Status |
 |---|------------|---|----------------|--------------|--------|
-| F1 | Sales rep can submit an "Account Touchpoint" via the app | R | [05-forms-system.md](./05-forms-system.md), `packages/backend/src/protopie/controllers/FormController.ts`, `packages/frontend/src/protopie/pages/FormSubmitPage.tsx` | Open `/projects/:projectUuid/protopie/forms/account_touchpoint`, submit, see 201 + row in `protopie_form_submissions`. | □ |
+| F1 | Sales rep can submit the current `churn_score_input` POC form via the app | R | [05-forms-system.md](./05-forms-system.md), `packages/backend/src/protopie/controllers/FormController.ts`, `packages/frontend/src/protopie/ProtopieFormsPage.tsx` | Open `/projects/:projectUuid/protopie/forms`, submit `churn_score_input`, see 201 + row in `protopie_form_submissions`. | □ |
 | F2 | Submission payload validated server-side (Zod) | R | `FormService.submit()` runs `form.schema.parse()` before insert | Try `curl -X POST … -d '{"payload":{"invalid":true}}'`, expect 400. | □ |
 | F3 | Submission has extracted `account_key`, `cloud_url`, `salesforce_account_id` columns | R | `FormService.submit()` extracts via `form.accountKeyField` / `secondaryKeyFields` | `psql -c "SELECT account_key, cloud_url FROM protopie_form_submissions LIMIT 5"` returns non-null `account_key`. | □ |
-| F4 | Sales rep can supersede their own touchpoint | R | `POST … --supersedesSubmissionUuid <uuid>` | New row with `supersedes_submission_uuid` set; old row remains intact. | □ |
+| F4 | Sales rep correction behavior is defined | R | Current POC: soft-delete/re-submit. Future migration may add `supersedes_submission_uuid`. | Submit a corrected row and confirm dashboards/dbt use the intended latest active row behavior. | □ |
 | F5 | dbt marts created for usage data + form data | R | [11-dbt-integration.md](./11-dbt-integration.md). New folders in `data-modeling` repo. | `cd /Users/mamur/Documents/projects/data-modeling && dbt run --select tag:protopie && dbt test --select tag:protopie` exits 0. | □ |
 | F6 | Churn score computed per Account, nightly | R | [04-churn-score-engine.md](./04-churn-score-engine.md). `ChurnScoreService.recomputeAll()` + Graphile Worker cron `0 2 * * *`. | After cron firing: `psql -c "SELECT COUNT(*), MAX(computed_at) FROM protopie_churn_score WHERE scored_for_date = current_date"` returns ≥ ~500, max(computed_at) within last 3h. | □ |
 | F7 | Sales manager can change scoring weights | R | `ScoringWeightsPage.tsx`, `PUT /api/v1/protopie/churn/configs/:configUuid/factors/:factorKey` | Edit weight in UI, see new `version` row in `protopie_churn_score_configs`. | □ |
@@ -23,13 +23,14 @@
 | F9 | Churn Score Portfolio dashboard exists | R | YAML in `data-modeling/lightdash/dashboards/protopie-churn-score-portfolio.yml` | Browse Lightdash UI; account list sorted by score ascending. | □ |
 | F10 | Dashboard filters: Account, plan tier, CSM owner, score band, lookback window | R | Lightdash dashboard config (in YAML) | Apply each filter in turn; all combinations return data. | □ |
 | F11 | Pro vs Pro Plus / Pro Plus Plus split visible | R | Filter chip backed by `dim_plan_tier_labels` seed (see [00-context.md](./00-context.md)) | Filter shows both values; counts differ. | □ |
-| F12 | MCP can create a space | R if MCP is shipped | [07-mcp-server-extension.md](./07-mcp-server-extension.md). `create_space` tool. | E2E test: agent calls `create_space` → row in `spaces` table. | □ |
-| F13 | MCP can create / update a dashboard via content-as-code | R if MCP is shipped | `upsert_dashboard_as_code` tool wrapping `CoderService.upsertDashboard` | Agent creates dashboard with 2 chart tiles; `PromotionChanges` shows `{action:'create'}` for new entities, `{action:'no_changes'}` on re-run. | □ |
-| F14 | MCP can create / update a saved chart | R if MCP is shipped | `upsert_chart_as_code` | Agent creates chart; visible in Lightdash UI. | □ |
-| F15 | MCP can create / update a SQL chart | | `upsert_sql_chart_as_code` | Agent creates SQL chart; row in `saved_sql`. | □ |
-| F16 | MCP `mcp:write` scope enforced | R if MCP is shipped | `requireMcpWrite()` helper | OAuth client without `mcp:write` scope receives `ForbiddenError`. | □ |
+| F12 | MCP can create a space | R if MCP is shipped | [07-mcp-server-extension.md](./07-mcp-server-extension.md). `protopie_create_space` tool. | E2E test: agent calls `protopie_create_space` → row in `spaces` table. | □ |
+| F13 | MCP can create / update a dashboard via content-as-code | R if MCP is shipped | `protopie_upsert_dashboard_as_code` tool wrapping `CoderService.upsertDashboard` | Agent creates dashboard with 2 chart tiles; `PromotionChanges` shows `{action:'create'}` for new entities, `{action:'no_changes'}` on re-run. | □ |
+| F14 | MCP can create / update a saved chart | R if MCP is shipped | `protopie_upsert_chart_as_code` | Agent creates chart; visible in Lightdash UI. | □ |
+| F15 | MCP can create / update a SQL chart | | `protopie_upsert_sql_chart_as_code` | Agent creates SQL chart; row in `saved_sql`. | □ |
+| F16 | MCP `mcp:write` scope enforced | R if MCP is shipped | `requireMcpWriteScope()` helper in Protopie MCP auth | OAuth client without `mcp:write` scope receives `ForbiddenError`. | □ |
 | F17 | MCP write tools OFF by default per org | R if MCP is shipped | `protopie_organization_settings.mcp_write_tools_enabled` | Brand-new org: any write tool call returns `ForbiddenError`. After admin toggle ON: succeeds. | □ |
 | F18 | MCP write tool calls audited | R if MCP is shipped | `protopie_mcp_audit_log` | `SELECT * FROM protopie_mcp_audit_log ORDER BY created_at DESC LIMIT 5` returns the last 5 invocations. | □ |
+| F19 | MCP can read dbt source context without separate client GitHub access | R if MCP is shipped | `protopie_dbt_list_files`, `protopie_dbt_get_file`, `protopie_dbt_search_files`; `PROTOPIE_DBT_GITHUB_*` env vars | Agent lists and reads an allowlisted `ProtoPie/data-modeling` model file. Token value is not returned. | □ |
 
 ## Cutover requirements
 
@@ -57,7 +58,7 @@
 
 | # | Requirement | R | Verification | Status |
 |---|------------|---|--------------|--------|
-| S1 | Form submissions visible to org members only | R | Cross-org test: create user in org B, hit `GET /api/v1/protopie/forms/account_touchpoint/submissions` — get 0 results. | □ |
+| S1 | Form submissions visible to org members only | R | Cross-org test: create user in org B, hit `GET /api/v1/projects/:projectUuid/protopie/forms/churn_score_input/submissions` — get 0 results. | □ |
 | S2 | Soft-delete preserves audit trail | R | After soft-delete, row still in DB with `deleted_at` set. `mart_sales_touchpoints` filters it out. | □ |
 | S3 | PII not exported in MCP audit log payloads | | Read 10 random audit rows; confirm `input_summary` contains only slug, projectUuid, spaceSlug — never full payload. | □ |
 | S4 | Retention policy documented & enforced | R | [13-operational-runbook.md](./13-operational-runbook.md) § Retention. Cron job purges submissions older than the configured TTL. | □ |

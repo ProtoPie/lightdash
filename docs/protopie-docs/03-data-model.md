@@ -4,16 +4,29 @@
 
 ## Tables overview
 
+### Implemented in the current Lightdash fork
+
+These tables are created by `packages/backend/src/protopie/database/migrations/20260512000000_create_protopie_foundation.ts`.
+
 | # | Table | Purpose | Owner |
 |---|-------|---------|-------|
 | 1 | `protopie_form_definitions` | Form metadata + JSON schema definition. Versioned. | Backend |
 | 2 | `protopie_form_submissions` | Every row a sales rep submits via a form. JSONB payload + extracted join columns. | Backend |
-| 3 | `protopie_churn_score_configs` | A score configuration (name, lookback, function, effective dates). | Backend |
-| 4 | `protopie_churn_score_factors` | The N factors that make up a score config. One row per factor. | Backend |
-| 5 | `protopie_churn_score` | Daily score per Account. Total score row. | Backend |
-| 6 | `protopie_churn_score_factor_results` | Per-factor breakdown per Account per scored date. *(Optional — can be derived from JSONB in `protopie_churn_score`. Materialize if dashboards need to filter/aggregate by factor.)* | Backend |
-| 7 | `protopie_churn_score_runs` | Audit log: when scores were computed, how long, what config version. | Backend |
-| 8 | `protopie_account_overrides` | Manual overrides (e.g. force red/green for an Account). | Backend |
+| 3 | `protopie_organization_settings` | Org-level Protopie settings, including the MCP write-tools toggle. | Backend |
+| 4 | `protopie_mcp_audit_log` | Durable audit log for MCP write tool calls. | Backend |
+
+### Planned for the churn-score work
+
+The dbt/modeling implementation is being handled separately. These tables remain part of the churn-score design, but are not in the current foundation migration yet.
+
+| # | Table | Purpose | Owner |
+|---|-------|---------|-------|
+| 5 | `protopie_churn_score_configs` | A score configuration (name, lookback, function, effective dates). | Backend |
+| 6 | `protopie_churn_score_factors` | The N factors that make up a score config. One row per factor. | Backend |
+| 7 | `protopie_churn_score` | Daily score per Account. Total score row. | Backend |
+| 8 | `protopie_churn_score_factor_results` | Per-factor breakdown per Account per scored date. *(Optional — can be derived from JSONB in `protopie_churn_score`. Materialize if dashboards need to filter/aggregate by factor.)* | Backend |
+| 9 | `protopie_churn_score_runs` | Audit log: when scores were computed, how long, what config version. | Backend |
+| 10 | `protopie_account_overrides` | Manual overrides (e.g. force red/green for an Account). | Backend |
 
 ### The Account key
 
@@ -39,25 +52,22 @@ This lets dbt joins target whichever identifier is available without descending 
 
 ```sql
 CREATE TABLE protopie_form_definitions (
-    form_uuid               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    form_definition_uuid    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     project_uuid            UUID NOT NULL REFERENCES projects(project_uuid) ON DELETE CASCADE,
-    space_uuid              UUID REFERENCES spaces(space_uuid) ON DELETE SET NULL,
-    form_key                VARCHAR(120) NOT NULL,           -- e.g. 'account_touchpoint'
-    title                   VARCHAR(255) NOT NULL,
+    form_key                TEXT NOT NULL,                   -- e.g. 'churn_score_input'
+    schema_version          INTEGER NOT NULL,
+    title                   TEXT NOT NULL,
     description             TEXT,
-    schema_version          INTEGER NOT NULL DEFAULT 1,
     schema                  JSONB NOT NULL,                  -- full form schema (fields, account_key_field, validators)
-    status                  VARCHAR(20) NOT NULL DEFAULT 'active',  -- 'draft' | 'active' | 'archived'
+    status                  TEXT NOT NULL DEFAULT 'active',
     created_by_user_uuid    UUID NOT NULL REFERENCES users(user_uuid) ON DELETE RESTRICT,
     updated_by_user_uuid    UUID NOT NULL REFERENCES users(user_uuid) ON DELETE RESTRICT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at              TIMESTAMPTZ,
+    archived_at             TIMESTAMPTZ,
 
     UNIQUE (project_uuid, form_key, schema_version)
 );
-CREATE INDEX protopie_form_definitions_active_idx
-    ON protopie_form_definitions (project_uuid, form_key) WHERE deleted_at IS NULL AND status = 'active';
 ```
 
 The `schema` JSONB encodes the same shape Zod produces for code-defined forms (see [05-forms-system.md](./05-forms-system.md)), including a required top-level `account_key_field` pointer that names the field whose value becomes the row's `account_key`.
@@ -68,35 +78,68 @@ The `schema` JSONB encodes the same shape Zod produces for code-defined forms (s
 
 ```sql
 CREATE TABLE protopie_form_submissions (
-    submission_uuid         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    form_submission_uuid    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_uuid       UUID NOT NULL REFERENCES organizations(organization_uuid) ON DELETE CASCADE,
     project_uuid            UUID NOT NULL REFERENCES projects(project_uuid) ON DELETE CASCADE,
-    form_uuid               UUID NOT NULL REFERENCES protopie_form_definitions(form_uuid) ON DELETE RESTRICT,
+    form_definition_uuid    UUID NOT NULL REFERENCES protopie_form_definitions(form_definition_uuid) ON DELETE RESTRICT,
     form_key                VARCHAR(120) NOT NULL,           -- denormalized for cheap dbt reads
     schema_version          INTEGER NOT NULL,                -- which schema version validated this row
-    submitted_by_user_uuid  UUID NOT NULL REFERENCES users(user_uuid) ON DELETE RESTRICT,
-    organization_uuid       UUID NOT NULL REFERENCES organizations(organization_uuid) ON DELETE CASCADE,
     account_key             VARCHAR(255),                    -- extracted from payload via schema.account_key_field
-    salesforce_account_id   VARCHAR(255),                    -- extracted secondary identifier
     cloud_url               VARCHAR(255),                    -- extracted secondary identifier
+    salesforce_account_id   VARCHAR(255),                    -- extracted secondary identifier
     payload                 JSONB NOT NULL,                  -- full validated payload
-    supersedes_submission_uuid UUID REFERENCES protopie_form_submissions(submission_uuid) ON DELETE SET NULL,
-    submitted_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at              TIMESTAMPTZ,                     -- soft delete
-    notes                   TEXT
+    created_by_user_uuid    UUID NOT NULL REFERENCES users(user_uuid) ON DELETE RESTRICT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at              TIMESTAMPTZ                      -- soft delete
 );
-CREATE INDEX protopie_form_submissions_form_idx
-    ON protopie_form_submissions (form_key, submitted_at DESC);
+CREATE INDEX protopie_form_submissions_project_form_created_idx
+    ON protopie_form_submissions (project_uuid, form_key, created_at DESC)
+    WHERE deleted_at IS NULL;
 CREATE INDEX protopie_form_submissions_account_idx
-    ON protopie_form_submissions (account_key) WHERE deleted_at IS NULL;
-CREATE INDEX protopie_form_submissions_project_idx
-    ON protopie_form_submissions (project_uuid, submitted_at DESC);
-CREATE INDEX protopie_form_submissions_supersedes_idx
-    ON protopie_form_submissions (supersedes_submission_uuid) WHERE supersedes_submission_uuid IS NOT NULL;
+    ON protopie_form_submissions (organization_uuid, account_key)
+    WHERE deleted_at IS NULL AND account_key IS NOT NULL;
 ```
 
 **Why JSONB + extracted columns.** The full payload lives in JSONB for auditability; the join keys (`account_key`, `salesforce_account_id`, `cloud_url`) are extracted into typed columns so dbt joins don't require JSON path expressions on every model. Backend's `FormService.submit()` is responsible for extracting them from `payload` using the form's `account_key_field` config.
 
-**Why `supersedes_submission_uuid`.** Sales sometimes corrects a touchpoint after the fact. Rather than UPDATE the row (which loses history), `FormService.submit()` inserts a **new** row pointing to the original via `supersedes_submission_uuid`. dbt marts then SELECT only the latest in each supersession chain. This preserves the historical record of what was active on any past scored date — important for explaining old churn scores.
+**Correction history.** The original design included `supersedes_submission_uuid` for append-only corrections. The current foundation migration does not include that column yet. Add it in a future migration if sales needs explicit correction chains instead of soft-delete/re-submit behavior.
+
+### `protopie_organization_settings`
+
+```sql
+CREATE TABLE protopie_organization_settings (
+    organization_uuid       UUID PRIMARY KEY REFERENCES organizations(organization_uuid) ON DELETE CASCADE,
+    mcp_write_enabled       BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by_user_uuid    UUID REFERENCES users(user_uuid) ON DELETE SET NULL,
+    updated_by_user_uuid    UUID REFERENCES users(user_uuid) ON DELETE SET NULL,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+This is the org-level Protopie settings table. The current implemented setting is `mcp_write_enabled`, which defaults to `false` and is managed by org admins through `GET/PATCH /api/v1/protopie/mcp-settings`.
+
+### `protopie_mcp_audit_log`
+
+```sql
+CREATE TABLE protopie_mcp_audit_log (
+    audit_log_uuid          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    organization_uuid       UUID NOT NULL REFERENCES organizations(organization_uuid) ON DELETE CASCADE,
+    project_uuid            UUID REFERENCES projects(project_uuid) ON DELETE SET NULL,
+    user_uuid               UUID REFERENCES users(user_uuid) ON DELETE SET NULL,
+    authentication_type     TEXT,
+    tool_name               TEXT NOT NULL,
+    input_summary           JSONB NOT NULL DEFAULT '{}',
+    outcome                 TEXT NOT NULL,
+    error_message           TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX protopie_mcp_audit_log_org_created_idx
+    ON protopie_mcp_audit_log (organization_uuid, created_at DESC);
+```
+
+Write-capable MCP tools use this table for durable audit records. `input_summary` should contain identifiers such as slug, project UUID, or space UUID, not full dashboard payloads or secrets.
 
 ### `protopie_churn_score_configs` (the score config — one row per version)
 
@@ -248,38 +291,30 @@ CREATE INDEX protopie_account_overrides_account_active_idx
 
 ## Migration file pattern
 
-We follow the Lightdash convention. Example skeleton:
+We follow the Lightdash convention. The current foundation migration is:
+
+```text
+packages/backend/src/protopie/database/migrations/20260512000000_create_protopie_foundation.ts
+```
+
+Use `ProtopieTableName` constants from `packages/backend/src/protopie/models/tableNames.ts` instead of repeating string literals:
 
 ```ts
-// packages/backend/src/protopie/database/migrations/20260601000000_create_protopie_tables.ts
-import { Knex } from 'knex';
+import { type Knex } from 'knex';
+import { ProtopieTableName } from '../../models/tableNames';
 
 export async function up(knex: Knex): Promise<void> {
-    await knex.schema.createTable('protopie_form_submissions', (t) => {
-        t.uuid('submission_uuid').primary().defaultTo(knex.raw('uuid_generate_v4()'));
-        t.string('form_key', 120).notNullable();
-        t.integer('form_version').notNullable();
-        t.uuid('submitted_by').notNullable()
-            .references('user_uuid').inTable('users').onDelete('RESTRICT');
-        t.uuid('organization_uuid').notNullable()
-            .references('organization_uuid').inTable('organizations').onDelete('CASCADE');
-        t.uuid('project_uuid')
-            .references('project_uuid').inTable('projects').onDelete('SET NULL');
-        t.string('account_key', 255);
-        t.jsonb('payload').notNullable();
-        t.timestamp('submitted_at', { useTz: true }).notNullable().defaultTo(knex.fn.now());
-        t.timestamp('deleted_at', { useTz: true });
-        t.text('notes');
-
-        t.index(['form_key', 'submitted_at'], 'protopie_form_submissions_form_idx');
-        t.index(['account_key'], 'protopie_form_submissions_account_idx');
+    await knex.schema.createTable(ProtopieTableName.OrganizationSettings, (table) => {
+        table.uuid('organization_uuid').primary()
+            .references('organization_uuid').inTable('organizations')
+            .onDelete('CASCADE');
+        table.boolean('mcp_write_enabled').notNullable().defaultTo(false);
+        table.timestamps(true, true);
     });
-    // ... other tables in the same migration, or split into multiple files per table.
 }
 
 export async function down(knex: Knex): Promise<void> {
-    await knex.schema.dropTableIfExists('protopie_form_submissions');
-    // ... reverse order
+    await knex.schema.dropTableIfExists(ProtopieTableName.OrganizationSettings);
 }
 ```
 
@@ -314,6 +349,9 @@ sources:
     schema: public
     tables:
       - name: protopie_form_submissions
+      - name: protopie_form_definitions
+      - name: protopie_organization_settings
+      - name: protopie_mcp_audit_log
       - name: protopie_churn_score
       - name: protopie_churn_score_configs
       - name: protopie_churn_score_factors
@@ -326,15 +364,15 @@ Then a mart like:
 -- dbt/models/marts/protopie/mart_sales_touchpoints.sql
 with submissions as (
     select
-        submission_uuid,
-        submitted_at,
+        form_submission_uuid,
+        created_at,
         account_key,
         payload->>'meeting_date'::date            as meeting_date,
         payload->>'rep_name'                       as rep_name,
         payload->>'notes_summary'                  as notes_summary,
         (payload->>'sentiment')::text             as sentiment   -- 'positive'|'neutral'|'negative'
     from {{ source('protopie_postgres', 'protopie_form_submissions') }}
-    where form_key = 'account_touchpoint'
+    where form_key = 'churn_score_input'
       and deleted_at is null
 )
 select * from submissions
@@ -346,11 +384,11 @@ See [06-dashboards.md](./06-dashboards.md) for the Lightdash side.
 
 ## Why we don't store anything in the warehouse from the backend
 
-Lightdash already has a clean separation: **app DB (Postgres)** holds operational data; **warehouse (BigQuery)** holds analytical data. Forms are operational (CRUD, recent activity), so they live in Postgres. dbt is the right tool to move that into the warehouse for analytical use. We never have the backend write directly to BigQuery — that violates Lightdash's architecture and creates a service-account-permission rabbit hole.
+Lightdash already has a clean separation: **app DB (Postgres)** holds operational data; **warehouse (Redshift)** holds analytical data. Forms are operational (CRUD, recent activity), so they live in Postgres. dbt is the right tool to model that into the warehouse for analytical use. We never have the backend write directly to Redshift — that violates the separation and creates a service-account-permission rabbit hole.
 
 ## Seed data on first migration
 
-The default config + 9 factors from the Notion brief are seeded by the migration. This guarantees a working churn score from day 1; sales can tune weights later via the API (which creates a new `version` of the config rather than mutating in place).
+Planned for the churn-score implementation: seed the default config + 9 factors from the Notion brief when those tables are added. The current foundation migration does not seed churn-score config yet.
 
 ```ts
 // inside the up() migration:

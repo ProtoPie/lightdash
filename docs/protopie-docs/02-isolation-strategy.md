@@ -19,21 +19,19 @@ No Protopie file lives outside one of those three trees. **No exceptions.** If y
 
 ```
 packages/backend/src/protopie/
-├── index.ts                       ← exports register({ services, models, ... }) called by App.ts
-├── config.ts                      ← PROTOPIE_ENABLED flag, schema, defaults
 ├── controllers/
 │   ├── ChurnScoreController.ts    ← TSOA, auto-picked-up by `src/**/*Controller.ts` glob
 │   ├── FormController.ts
-│   └── ProtopieMcpController.ts   ← optional: REST mirror of MCP write tools for debugging
+│   └── SettingsController.ts      ← Protopie MCP settings toggle
 ├── services/
 │   ├── ChurnScoreService.ts       ← extends BaseService
 │   ├── FormService.ts
-│   ├── ProtopieMcpWriteToolService.ts
+│   ├── SettingsService.ts
 │   └── index.ts                   ← exports a single { create(...) } factory
 ├── models/
 │   ├── ChurnScoreModel.ts         ← Knex wrapper around protopie_churn_score
 │   ├── FormSubmissionModel.ts
-│   ├── ScoringRuleModel.ts
+│   ├── OrganizationSettingsModel.ts
 │   └── tableNames.ts              ← const PROTOPIE_CHURN_SCORE_TABLE = 'protopie_churn_score'; etc.
 ├── database/
 │   └── migrations/
@@ -42,17 +40,14 @@ packages/backend/src/protopie/
 │   ├── tasks.ts                   ← task name enum + payload types
 │   └── recomputeChurnScore.ts     ← Graphile Worker handler
 ├── mcp/
-│   ├── registerWriteTools.ts      ← single entrypoint called from McpService
-│   └── writeTools/
-│       ├── createSpace.ts
-│       ├── createDashboard.ts
-│       ├── updateDashboard.ts
-│       ├── createSavedChart.ts
-│       ├── updateSavedChart.ts
-│       ├── deleteContent.ts
-│       └── shared/
-│           ├── permissions.ts     ← CASL ability check helpers
-│           └── schemas.ts         ← Zod input schemas for each tool
+│   ├── registerProtopieMcpTools.ts ← single entrypoint called from McpService
+│   └── shared/
+│       ├── auth.ts                 ← mcp:write + org opt-in checks
+│       ├── audit.ts                ← MCP write audit wrapper
+│       ├── dbtRepository.ts        ← local/GitHub dbt source read access
+│       ├── examples.ts             ← content-as-code examples
+│       ├── overview.ts             ← MCP operating guide text
+│       └── types.ts                ← tool deps and args
 └── README.md                      ← points back to docs/claude-docs/
 ```
 
@@ -136,7 +131,7 @@ These are the **only** Lightdash core files we modify. Each edit is minimal — 
 | 3a | `packages/common/src/types/schedulerTaskList.ts` | Add `PROTOPIE_RECOMPUTE_CHURN_SCORE` to `SCHEDULER_TASKS` + payload type to `TaskPayloadMap`. | Lightdash scheduler types are registry-driven — type-system enforces task registration. |
 | 3b | `packages/backend/src/scheduler/SchedulerWorker.ts` | One import + one entry in the task handler map. | Register the OSS handler. |
 | 3c | `packages/backend/src/ee/scheduler/SchedulerWorker.ts` | Same entry, only if your deployment uses the commercial worker. | EE worker maintains its own task map. |
-| 4a | `packages/backend/src/ee/services/McpService/McpService.ts` | Add `coderService: CoderService` to `McpServiceArguments`; one import + one call `registerProtopieWriteTools(mcpServer, deps)` at the bottom of `createServer()`. | Add write tools to MCP. |
+| 4a | `packages/backend/src/ee/services/McpService/McpService.ts` | Add the Protopie MCP dependency wiring; one import + one call to `registerProtopieMcpTools(...)` at the bottom of `createServer()`. | Add dbt context, content-as-code tools, and API bridge tools to MCP. |
 | 4b | `packages/backend/src/ee/index.ts` | One line: inject `coderService: repository.getCoderService()` into the `mcpService` provider. | `McpService` doesn't currently receive `CoderService`. |
 | 5 | `packages/common/src/index.ts` | `export * as Protopie from './protopie';` | Make shared types importable. |
 | 6 | `packages/frontend/src/Routes.tsx` | `...protopieRoutes` spread inside `PRIVATE_ROUTES` array. | Mount our route tree. |
@@ -214,7 +209,7 @@ No exceptions. Search-and-destroy is trivial.
 
 After we stabilize the fork, candidates to PR back to Lightdash:
 
-1. The **MCP write tools** for spaces/dashboards/charts — they are generally useful and not Protopie-specific.
+1. The **MCP content authoring tools** for spaces/dashboards/charts and the guarded API bridge — they are generally useful and not Protopie-specific.
 2. A general-purpose **forms framework** — if other Lightdash users want it.
 
 Both are designed in this fork to be re-extractable: they live in `protopie/` only because that's where we wrote them, not because their logic is Protopie-specific. If we keep the abstractions clean (no churn-specific logic in `protopie/mcp/`), extraction is a `git mv` plus a rename.

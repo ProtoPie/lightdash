@@ -24,7 +24,7 @@ P5 — Hardening, UAT, ChurnZero parallel run, cutover
 ### Backend
 
 1. Create `packages/{common,backend,frontend}/src/protopie/` folder skeletons (with `index.ts` placeholders and a README pointing to `docs/claude-docs/`).
-2. Add `PROTOPIE_ENABLED` env var to backend config.
+2. Add runtime config intentionally. Current MCP enablement uses existing `MCP_ENABLED`; a global `PROTOPIE_ENABLED` kill switch is not implemented yet.
 3. Set up the `protopie_*` migrations directory and `knexfile` entry (🔌 WIRE-UP #2).
 4. Write migration `20260512000000_create_protopie_tables.ts` for the **8 tables** listed in [03-data-model.md](./03-data-model.md): `protopie_form_definitions`, `protopie_form_submissions`, `protopie_churn_score_configs`, `protopie_churn_score_factors`, `protopie_churn_score`, `protopie_churn_score_factor_results` (optional), `protopie_churn_score_runs`, `protopie_account_overrides`. Seed 1 default config + 9 factors.
 5. Implement model classes (`FormSubmissionModel`, `ScoringRuleModel`, `ChurnScoreModel`, etc.) — Knex-only, no service logic.
@@ -75,7 +75,7 @@ P5 — Hardening, UAT, ChurnZero parallel run, cutover
 12. Integration test: run `recomputeAll()` against a fixture warehouse, assert scores match a golden file.
 
 ### Exit criteria
-- `curl -X POST /api/v1/protopie/forms/account_touchpoint/submissions ...` returns 201.
+- `curl -X POST /api/v1/projects/:projectUuid/protopie/forms/churn_score_input/submissions ...` returns 201 for the current POC form.
 - `curl -X POST /api/v1/protopie/churn/recompute` enqueues a job; worker runs it; scores appear in `protopie_churn_score`.
 - Schedule cron is registered; nightly run completes on staging.
 
@@ -115,11 +115,15 @@ P5 — Hardening, UAT, ChurnZero parallel run, cutover
 
 **Goal.** External AI agents can create/update charts, dashboards, spaces via MCP. Runs in parallel with Phases 1-3.
 
-1. Define Zod input schemas for all 9 write tools ([07](./07-mcp-server-extension.md)).
-2. Implement each tool's `register()` function.
-3. Wire `registerProtopieWriteTools` into `McpService.ts` (🔌 WIRE-UP #4).
-4. Add CASL permission checks per tool.
-5. Add analytics tracking per tool call.
+1. Define Zod input schemas for Protopie MCP tools ([07](./07-mcp-server-extension.md)).
+2. Implement `registerProtopieMcpTools` with:
+   - dbt source read tools: `protopie_dbt_list_files`, `protopie_dbt_get_file`, `protopie_dbt_search_files`
+   - content-as-code read/write tools: `protopie_get_*_as_code`, `protopie_upsert_*_as_code`
+   - space tools: `protopie_create_space`, `protopie_update_space`
+   - guarded API bridge: `lightdash_list_api_endpoints`, `lightdash_api_get`, `lightdash_api_mutate`
+3. Wire `registerProtopieMcpTools` into `McpService.ts` (🔌 WIRE-UP #4).
+4. Add `mcp:write`, org opt-in, and service-layer permission checks for write tools.
+5. Add audit tracking per write tool call.
 6. Tests:
    - Unit: each tool's schema parsing.
    - Integration: in-process MCP server harness, call each tool, assert Postgres state.
@@ -138,10 +142,10 @@ P5 — Hardening, UAT, ChurnZero parallel run, cutover
 
 1. Set up an ECR repo `protopie/lightdash` in the `xid-dev` AWS account; same in `xid-prod`.
 2. Add `.github/workflows/build-image.yml` to this Lightdash fork: build on push to `main`, push to ECR with `<commit-sha>` and `latest` tags.
-3. In `lightdash-infra/infra/dev/ecs.tf`, change the `image = "lightdash/lightdash:..."` line to point at our ECR repo.
-4. In `lightdash-infra/infra/dev/.env`, add the new Protopie env vars (`PROTOPIE_ENABLED`, `PROTOPIE_PROJECT_UUID`, `PROTOPIE_WAREHOUSE_MART_TABLE`, `PROTOPIE_RECOMPUTE_CRON`).
-5. In `lightdash-infra/infra/dev/ecs.tf`, add the corresponding `environment[]` entries.
-6. `terraform plan` → review → `terraform apply` in `infra/dev/`.
+3. In `infra/dev/ecs.tf`, point the ECS task at the ECR image repo.
+4. In `infra/dev/.env`, set `MCP_ENABLED=true` and the `PROTOPIE_DBT_GITHUB_*` env vars for data-modeling source context.
+5. In `infra/dev/ecs.tf`, add the corresponding `environment[]` entries.
+6. `terraform plan` -> review -> `terraform apply` in `infra/dev/`.
 7. Smoke test against dev URL.
 8. Repeat steps 3-7 in `infra/prod/` only after dev has been stable for ≥48h with Protopie features enabled.
 
@@ -203,7 +207,7 @@ If any step fails, we've leaked Protopie code into core. Stop the phase and refa
 | `mart_account_usage_90d` is wrong because Amplitude event names changed | Medium | High | dbt test on event presence + freshness check on `amplitude_events` source. |
 | TSOA `generate-api` breaks on new controllers | Low | Medium | Run `pnpm generate-api` in CI on every PR touching `protopie/`. |
 | Permissions edge case lets non-sales view internal touchpoints | Low | High | Org-scoped reads in `FormSubmissionModel.list()`; integration test for cross-org isolation. |
-| MCP write tool exposed via OAuth without proper scope check | Medium | High | Every tool starts with a CASL `cannot()` check; tested in integration harness. |
+| MCP write tool exposed via OAuth without proper scope check | Medium | High | Every write tool checks `mcp:write`, org opt-in, and the underlying Lightdash service permission; tested in integration harness. |
 | Upstream Lightdash merge conflict on the 7 touch points | Medium | Low | Touch points are tiny and idempotent; conflicts resolve in minutes. |
 | ChurnZero CSV data not in warehouse (e.g., a metric only existed in CZ) | Medium | Medium | Phase 1 inventory: list every ChurnZero metric in use, confirm each has a warehouse equivalent. |
 
@@ -214,7 +218,7 @@ If any step fails, we've leaked Protopie code into core. Stop the phase and refa
 | dbt marts | Data eng | Esther |
 | Backend (forms, scoring) | Backend eng | Eng lead |
 | Frontend (`protopie/`) | Frontend eng | Eng lead |
-| MCP write tools | Backend eng | Lightdash team contact (for eventual upstream PR) |
+| MCP extension | Backend eng | Lightdash team contact (for eventual upstream PR) |
 | Dashboards (Lightdash UI) | Sales ops + data eng | Esther |
 | QA & parallel run | Sales lead | Esther |
 
@@ -224,7 +228,7 @@ If any step fails, we've leaked Protopie code into core. Stop the phase and refa
 - Forms: touchpoint, renewal status, override.
 - Score: nightly recompute, the 9 default rules, weight admin page.
 - Dashboards: Account 360, Churn Score portfolio.
-- MCP: read tools (existing) + the 9 write tools.
+- MCP: existing Lightdash read tools plus Protopie dbt source tools, content-as-code create/update tools, and the guarded API bridge.
 
 **Deferred to v1.1 (post-cutover):**
 - Salesforce $$ data integration into dashboards (the "good to have" from the Notion brief).
@@ -236,6 +240,6 @@ If any step fails, we've leaked Protopie code into core. Stop the phase and refa
 
 - All Phase 5 exit criteria met.
 - ChurnZero subscription canceled.
-- Three working dashboards (or more — sales builds extras via the MCP write tools).
+- Three working dashboards (or more — sales builds extras via the MCP content-as-code tools).
 - Documentation updated to reflect actual implementation (these docs are a *starting point*, not a contract).
 - One retrospective documenting what we'd do differently, ideally before any upstream PR back to Lightdash.

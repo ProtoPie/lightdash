@@ -18,6 +18,36 @@
 | Env var controlling behavior | `DBT_ENVIRONMENT=dev|prod` |
 | CI/CD | Auto-manifest generation; Airflow orchestration based on the manifest |
 
+## MCP visibility into dbt source
+
+The Lightdash MCP extension can read the `ProtoPie/data-modeling` source tree so agents can understand marts, dimensions, macros, seeds, and Lightdash content-as-code before creating or updating dashboards.
+
+This is read-only context for agents. It does **not** replace dbt CI/CD and it does **not** run dbt.
+
+Local development:
+
+```bash
+PROTOPIE_DBT_LOCAL_PATH=/Users/mamur/Documents/projects/data-modeling
+```
+
+Dev/prod:
+
+```bash
+PROTOPIE_DBT_GITHUB_OWNER=ProtoPie
+PROTOPIE_DBT_GITHUB_REPO=data-modeling
+PROTOPIE_DBT_GITHUB_REF=main
+PROTOPIE_DBT_GITHUB_TOKEN=<fine-grained-read-only-pat>
+PROTOPIE_DBT_ALLOWED_PATHS=models,marts,macros,seeds,snapshots,analyses,analysis,tests,dbt_project.yml,packages.yml,selectors.yml,exposures.yml,README.md
+```
+
+Exposed MCP tools:
+
+- `protopie_dbt_list_files`
+- `protopie_dbt_get_file`
+- `protopie_dbt_search_files`
+
+Use a fine-grained GitHub PAT scoped only to `ProtoPie/data-modeling` with Metadata read-only and Contents read-only. Store it in ignored `.env` files locally and in the ECS environment for dev/prod; never commit it.
+
 ## What's already there (read before adding)
 
 ```
@@ -139,18 +169,20 @@ sources:
       - name: protopie_form_submissions
         description: "Sales-rep form submissions"
         columns:
-          - name: submission_uuid
+          - name: form_submission_uuid
             tests: [unique, not_null]
           - name: form_key
-          - name: team_id
+          - name: account_key
             description: "Extracted from payload; canonical account_key"
-          - name: namespace
           - name: cloud_url
           - name: salesforce_account_id
           - name: payload
             description: "Raw JSONB payload"
+          - name: created_at
           - name: deleted_at
       - name: protopie_form_definitions
+      - name: protopie_organization_settings
+      - name: protopie_mcp_audit_log
       - name: protopie_churn_score_configs
       - name: protopie_churn_score_factors
       - name: protopie_churn_score
@@ -172,7 +204,7 @@ The Lightdash app Postgres tables (`protopie_form_submissions`, `protopie_churn_
 
 ### Recommended v1: Option B (Airflow hourly dump/load)
 
-**Source of truth for connection details.** The Lightdash Postgres RDS endpoint is provisioned in `lightdash-infra/infra/{dev,prod}/rds.tf` (module `lightdash_db`). Expose it via a Terraform output (`output "lightdash_db_endpoint" { value = module.lightdash_db.db_instance_endpoint }`) and reference from the Airflow connection — don't hard-code. The read-only Postgres role used by Airflow is documented in [15-deployment.md § Step 3](./15-deployment.md#step-3--network-access-for-the-airflow-dag), along with the required security-group ingress rule on `aws_security_group.database_sg`.
+**Source of truth for connection details.** The Lightdash Postgres RDS endpoint is provisioned in `infra/{dev,prod}/rds.tf` in this Lightdash repo (module `lightdash_db`). Expose it via a Terraform output (`output "lightdash_db_endpoint" { value = module.lightdash_db.db_instance_endpoint }`) and reference from the Airflow connection — don't hard-code. The read-only Postgres role used by Airflow is documented in [15-deployment.md § Network access for the Airflow DAG](./15-deployment.md#network-access-for-the-airflow-dag), along with the required security-group ingress rule on `aws_security_group.database_sg`.
 
 **Ownership.** Data-engineering team owns the Airflow DAG. The Protopie backend team owns the schema of `protopie_*` tables; any schema change requires coordinating a matching DAG update.
 
@@ -193,7 +225,7 @@ The Lightdash app Postgres tables (`protopie_form_submissions`, `protopie_churn_
 **Failure handling.**
 - DAG retries 3× with exponential backoff (60s → 5m → 30m).
 - After 3 failures, PagerDuty alert routed to `#data-platform` Slack channel.
-- The Protopie backend writes a metric `protopie_app_redshift_staleness_seconds = NOW() - max(submitted_at_seen_in_redshift)` to Lightdash analytics. A simple Lightdash dashboard alarms if staleness > 4× expected cadence.
+- The Protopie backend writes a metric `protopie_app_redshift_staleness_seconds = NOW() - max(created_at_seen_in_redshift)` to Lightdash analytics. A simple Lightdash dashboard alarms if staleness > 4× expected cadence.
 - The nightly churn recompute reads its own data from Postgres directly (not Redshift) so a stale Redshift does NOT block scoring — it only affects dashboards.
 
 **DDL changes.** Any schema migration in this fork that touches a `protopie_*` table requires a coordinated update to the Airflow DAG. Process documented in [13-operational-runbook.md](./13-operational-runbook.md). Until the DAG ships the update, the new column is missing from Redshift but no data is lost — the next run picks it up.

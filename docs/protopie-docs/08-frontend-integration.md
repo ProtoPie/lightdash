@@ -1,6 +1,6 @@
 # 08 — Frontend Integration
 
-> All Protopie-specific React code lives in `packages/frontend/src/protopie/`. Only **two** files in Lightdash core are touched: the root `Routes.tsx` (to mount the route subtree) and the main `NavBar` component (to add a single nav entry).
+> All Protopie-specific React code lives in `packages/frontend/src/protopie/` where possible. Core touch points should stay small: route/nav mounting for Protopie pages, plus the existing Lightdash Settings integrations page for the org-admin MCP toggle.
 
 ## Folder layout
 
@@ -50,7 +50,6 @@ const FormSubmitPage           = lazy(() => import('./pages/FormSubmitPage'));
 const FormHistoryPage          = lazy(() => import('./pages/FormHistoryPage'));
 const ScoringWeightsPage       = lazy(() => import('./pages/ScoringWeightsPage'));
 const AccountOverridesPage     = lazy(() => import('./pages/AccountOverridesPage'));
-const McpSettingsPage          = lazy(() => import('./pages/McpSettingsPage'));  // org-admin only
 
 // These mount under /projects/:projectUuid/protopie/* — projectUuid is in useParams()
 export const protopieProjectRoutes: RouteObject[] = [
@@ -62,16 +61,14 @@ export const protopieProjectRoutes: RouteObject[] = [
     { path: 'protopie/churn/overrides',              element: <AccountOverridesPage /> },
 ];
 
-// Org-admin routes (not project-scoped — these affect the whole org)
-export const protopieOrgRoutes: RouteObject[] = [
-    { path: '/protopie/settings/mcp',                element: <McpSettingsPage /> },
-];
+// MCP settings are not mounted here. They live in the existing Settings
+// integrations page at /generalSettings/integrations.
 ```
 
 ```tsx
 // packages/frontend/src/Routes.tsx
 // 🔌 WIRE-UP — add imports:
-import { protopieProjectRoutes, protopieOrgRoutes } from './protopie/routes';
+import { protopieProjectRoutes } from './protopie/routes';
 
 // inside the project route's children array (look for /projects/:projectUuid):
 // children: [
@@ -79,8 +76,6 @@ import { protopieProjectRoutes, protopieOrgRoutes } from './protopie/routes';
 //     ...protopieProjectRoutes,                  // ← add
 // ]
 //
-// and in the top-level PRIVATE_ROUTES array, add:
-...protopieOrgRoutes,                              // ← admin pages only
 ```
 
 **Resulting URLs:**
@@ -93,13 +88,15 @@ import { protopieProjectRoutes, protopieOrgRoutes } from './protopie/routes';
 | `/projects/:projectUuid/protopie/forms/:formKey/history` | Submitter's history |
 | `/projects/:projectUuid/protopie/churn/rules` | Scoring weights admin |
 | `/projects/:projectUuid/protopie/churn/overrides` | Account overrides admin |
-| `/protopie/settings/mcp` | Org-admin MCP write-tools toggle |
+| `/generalSettings/integrations` | Org-admin MCP write-tools toggle, under "Protopie MCP" |
 
 **Active-project behavior.** All project-scoped pages read `projectUuid` from `useParams()`. The existing `useActiveProjectUuid()` hook works as expected within the project layout. If a user navigates to `/protopie` (no project), redirect to `/projects/<last-active-uuid>/protopie` — implement in the nav entry component.
 
 **Redirects.** Backwards-compatibility shim during rollout: if someone lands on `/protopie/...` (the older shape from earlier drafts), redirect to `/projects/<active-uuid>/protopie/...`. Remove the shim once everyone's bookmarks are updated.
 
 **Auth.** Every project-scoped page is wrapped by the existing `ProjectLayout` → `PrivateRoute` chain — no per-page `<PrivateRoute>` wrapper needed.
+
+**MCP settings.** The MCP write-toggle is intentionally placed inside Lightdash's existing Settings → Organization settings → Integrations page. The component uses `GET/PATCH /api/v1/protopie/mcp-settings` and is visible only when `user?.ability.can('manage', 'Organization')`.
 
 Lazy-loading every page keeps Protopie code out of the main bundle when Protopie is disabled (the lazy import errors at runtime if the page file is missing, so a sentinel feature flag in `ProtopieHomePage.tsx` can short-circuit to a 404 if needed).
 

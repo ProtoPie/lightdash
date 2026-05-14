@@ -35,7 +35,7 @@ The only Protopie-built UI is the **forms** UI ([05](./05-forms-system.md)) and 
   7. **Active days last 90d** — big-number from `mart_account_usage_90d.active_days`.
   8. **Score factors breakdown** — table from `protopie_churn_score.factor_scores` JSONB (exposed as a Lightdash explore over Postgres).
   9. **Recent touchpoints** — table from `mart_sales_touchpoints` (NEW) filtered to this Account.
-  10. **Action item** — a single Markdown tile with a link to "Log new touchpoint" form (`/protopie/forms/account_touchpoint?account=<namespace>`).
+  10. **Action item** — a single Markdown tile with a link to the Protopie forms tab (`/projects/:projectUuid/protopie/forms`). The current POC form is `churn_score_input`; final sales form keys will be defined later.
 
 ### 2. Churn Score Dashboard (portfolio view)
 
@@ -176,17 +176,17 @@ The bootstrap endpoint in Lightdash reads them from a mounted directory or by HT
 
 > Use long descriptive slugs (`protopie-account-360-q2-2026` not `account-360`) and **prefix every slug with `protopie-`** to avoid collisions with existing charts in the same Lightdash project. Lightdash slugs are **not** uniquely enforced at the DB level — see the Slugs warning in the root `CLAUDE.md`.
 
-## Alternative seeding path: MCP write tools
+## Alternative seeding path: MCP content-as-code tools
 
 Once [07-mcp-server-extension.md](./07-mcp-server-extension.md) ships, the same `CoderService` is reachable via MCP — meaning an external agent can author dashboards programmatically:
 
 ```text
-agent: → tool: create_space(name: "Protopie — Sales Ops")
-       → tool: upsert_chart_as_code(slug: "protopie-churn-score-gauge", ...)
-       → tool: upsert_dashboard_as_code(slug: "protopie-account-360", spaceSlug: "protopie-sales-ops", ...)
+agent: → tool: protopie_create_space(spaceSlug: "protopie/sales-ops", name: "Protopie — Sales Ops")
+       → tool: protopie_upsert_chart_as_code(slug: "protopie-churn-score-gauge", ...)
+       → tool: protopie_upsert_dashboard_as_code(slug: "protopie-account-360", spaceSlug: "protopie/sales-ops", ...)
 ```
 
-This is dogfooding: the very feature we ship (MCP write tools) builds our own dashboards. Strongly recommended for the **second** dashboard onward. The first one is built either by hand in the UI (to validate the data) or via the bootstrap endpoint (to validate the bootstrap path itself).
+This is dogfooding: the MCP content-as-code tools build our own dashboards. Strongly recommended for the **second** dashboard onward. The first one is built either by hand in the UI (to validate the data) or via the bootstrap endpoint (to validate the bootstrap path itself).
 
 ## Permissions
 

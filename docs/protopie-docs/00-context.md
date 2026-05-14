@@ -72,15 +72,15 @@ These become **schema-defined forms** in our protopie module; submissions land i
 
 See [05-forms-system.md](./05-forms-system.md).
 
-## What external AI agents need (the MCP write tools)
+## What external AI agents need (the MCP extension)
 
-Currently, Lightdash's MCP server (`packages/backend/src/ee/services/McpService/McpService.ts`) exposes **read-only** tools: `list_explores`, `find_content`, `find_fields`, `run_metric_query`, `run_sql`, etc. An external agent (Claude Code, Codex) can *read* the warehouse and *search* existing content, but **cannot create or update** charts, dashboards, or spaces via MCP.
+Lightdash's existing MCP server (`packages/backend/src/ee/services/McpService/McpService.ts`) exposes warehouse/content read tools such as `list_explores`, `find_content`, `find_fields`, `run_metric_query`, and `run_sql`. The Protopie extension adds dbt source context, a guarded API bridge, and create/update tools for charts, dashboards, and spaces.
 
 The Protopie use case wants agents to do things like:
 
 > "Claude, create a space called 'Churn Dashboards', then build a dashboard titled 'Account 360 — {{account}}' with the standard tiles, and save it there."
 
-That requires new MCP tools. They are **not Protopie-specific** — they work for any Lightdash user — but we own building them as part of this initiative because nothing else in Lightdash core needs them yet.
+That requires new MCP tools. They are **not only churn-specific** — they work for any Lightdash content — but we own building them as part of this initiative because the fork needs them first.
 
 See [07-mcp-server-extension.md](./07-mcp-server-extension.md).
 
@@ -91,7 +91,7 @@ Two reasons:
 1. **Velocity.** Lightdash upstream review cycles are slow; we have a fixed cutover before 2026-07-30. We need to ship now and PR clean pieces back later.
 2. **Custom business logic.** The churn rubric, the sales-rep forms, and the Pro Plan Plus mapping are Protopie-specific. They don't belong in upstream Lightdash.
 
-The MCP write tools *probably* belong upstream eventually, but we'll build them in our fork first, prove them out, then PR back.
+The generic MCP authoring tools may belong upstream eventually, but we'll build them in our fork first, prove them out, then PR back.
 
 ## Success criteria
 
@@ -101,7 +101,7 @@ The MCP write tools *probably* belong upstream eventually, but we'll build them 
 | 2 | Sales can view per-Account Churn Score with 90-day filter | Sales | Dashboard URL exists, score values within ±5% of CZ for same period |
 | 3 | Sales can log Account touchpoints via in-app form | Sales | Form submissions visible in Postgres + dbt |
 | 4 | Churn Score recomputes nightly without manual intervention | Eng | Scheduler task green for 7 consecutive days |
-| 5 | External agent can create a dashboard via MCP write tool | Eng | E2E test passes |
+| 5 | External agent can read dbt context and create a dashboard via MCP | Eng | E2E test passes |
 | 6 | Pro Plan vs Pro Plan Plus distinction visible in dashboards | Sales | Filter chip shows both values |
 
 ## Out of scope (explicit non-goals)
@@ -116,4 +116,4 @@ The MCP write tools *probably* belong upstream eventually, but we'll build them 
 
 - Notion brief: [New Usage Data & Churn Score Dashboard](https://www.notion.so/protopie/New-Usage-Data-Churn-Score-Dashboard-35945184b5da80b2aa39c168562d23aa)
 - Current Amplitude dashboard draft: [app.amplitude.com/.../8o7beznh](https://app.amplitude.com/analytics/protopie/dashboard/8o7beznh)
-- Lightdash MCP read-only server (existing): `packages/backend/src/ee/services/McpService/McpService.ts`
+- Lightdash MCP server: `packages/backend/src/ee/services/McpService/McpService.ts`

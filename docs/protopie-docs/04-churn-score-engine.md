@@ -50,7 +50,7 @@ This is **deliberately asymmetric**. Computing the score in dbt requires weights
 │   (per Account: total_users, per-factor raw values)                 │
 └──────────────┬──────────────────────────────────────────────────────┘
                │                                  ↑
-               │   (BigQuery SELECT from backend) │
+               │   (Redshift SELECT via warehouse client) │
                ▼                                  │
 ┌─────────────────────────────────────────────────────────────────────┐
 │ BACKEND (Lightdash, Protopie module)                                │
@@ -512,7 +512,7 @@ Both call `SchedulerClient.addJob(ProtopieTaskName.RECOMPUTE_CHURN_SCORE, payloa
 
 ## Reading warehouse data from the backend
 
-Use Lightdash's existing warehouse client abstraction (`WarehouseClient`, resolved via `ProjectService.getWarehouseClient(projectUuid)`) — never connect to BigQuery directly with a side-channel credential.
+Use Lightdash's existing warehouse client abstraction (`WarehouseClient`, resolved via `ProjectService.getWarehouseClient(projectUuid)`) — never connect to Redshift directly with a side-channel credential.
 
 ```ts
 // inside ChurnScoreService.recomputeAll():
