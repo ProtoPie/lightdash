@@ -88,6 +88,26 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
         "value" : "true"
       },
       {
+        "name" : "PROTOPIE_DBT_GITHUB_OWNER",
+        "value" : lookup(local.envs, "PROTOPIE_DBT_GITHUB_OWNER", "ProtoPie")
+      },
+      {
+        "name" : "PROTOPIE_DBT_GITHUB_REPO",
+        "value" : lookup(local.envs, "PROTOPIE_DBT_GITHUB_REPO", "data-modeling")
+      },
+      {
+        "name" : "PROTOPIE_DBT_GITHUB_REF",
+        "value" : lookup(local.envs, "PROTOPIE_DBT_GITHUB_REF", "main")
+      },
+      {
+        "name" : "PROTOPIE_DBT_GITHUB_TOKEN",
+        "value" : lookup(local.envs, "PROTOPIE_DBT_GITHUB_TOKEN", "")
+      },
+      {
+        "name" : "PROTOPIE_DBT_ALLOWED_PATHS",
+        "value" : lookup(local.envs, "PROTOPIE_DBT_ALLOWED_PATHS", "models,marts,macros,seeds,snapshots,analyses,analysis,tests,dbt_project.yml,packages.yml,selectors.yml,exposures.yml,README.md")
+      },
+      {
         "name" : "SECURE_COOKIES",
         "value" : local.envs["SECURE_COOKIES"]
       },

@@ -108,6 +108,8 @@ data/
 
 # environment
 .env*
+!.env.example
+!**/.env.example
 
 .local/*
 

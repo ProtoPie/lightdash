@@ -196,7 +196,13 @@ print-runtime-env-dev: ## Print runtime env expected by the dev ECS task/contain
 		"  APPS_S3_BUCKET=<dev-apps-s3-bucket>" \
 		"  HEADLESS_BROWSER_HOST=<external-browser-host-if-exports-needed>" \
 		"  HEADLESS_BROWSER_PORT=3000" \
-		"  INTERNAL_LIGHTDASH_HOST=https://<dev-lightdash-domain>"
+		"  INTERNAL_LIGHTDASH_HOST=https://<dev-lightdash-domain>" \
+		"  PROTOPIE_DBT_LOCAL_PATH=/Users/mamur/Documents/projects/data-modeling" \
+		"  PROTOPIE_DBT_GITHUB_OWNER=ProtoPie" \
+		"  PROTOPIE_DBT_GITHUB_REPO=data-modeling" \
+		"  PROTOPIE_DBT_GITHUB_REF=main" \
+		"  PROTOPIE_DBT_GITHUB_TOKEN=<fine-grained-read-only-pat>" \
+		"  PROTOPIE_DBT_ALLOWED_PATHS=models,marts,macros,seeds,snapshots,analyses,analysis,tests,dbt_project.yml,packages.yml,selectors.yml,exposures.yml,README.md"
 
 .PHONY: print-runtime-env-prod
 print-runtime-env-prod: ## Print runtime env expected by the prod ECS task/container.

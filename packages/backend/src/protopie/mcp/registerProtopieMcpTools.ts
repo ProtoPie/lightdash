@@ -23,6 +23,15 @@ import {
     requireOrganizationMcpWriteEnabled,
 } from './shared/auth';
 import {
+    getDbtRepositoryFile,
+    listDbtRepositoryFiles,
+    searchDbtRepositoryFiles,
+} from './shared/dbtRepository';
+import {
+    PROTOPIE_CHART_EXAMPLES,
+    PROTOPIE_CHART_EXAMPLES_GUIDE,
+} from './shared/examples';
+import {
     PROTOPIE_MCP_OVERVIEW_MARKDOWN,
     PROTOPIE_MCP_OVERVIEW_URI,
 } from './shared/overview';
@@ -71,6 +80,22 @@ const apiMutateSchema = z.object({
     path: z.string().min(1),
     query: z.record(apiQueryValueSchema).optional(),
     body: z.object({}).passthrough().optional(),
+});
+
+const dbtListFilesSchema = z.object({
+    path: z.string().optional(),
+    maxFiles: z.number().int().min(1).max(1_000).optional(),
+});
+
+const dbtGetFileSchema = z.object({
+    path: z.string().min(1),
+});
+
+const dbtSearchFilesSchema = z.object({
+    query: z.string().min(1),
+    path: z.string().optional(),
+    includeContent: z.boolean().optional(),
+    maxFiles: z.number().int().min(1).max(100).optional(),
 });
 
 const writeOptionsShape = {
@@ -452,7 +477,7 @@ export const registerProtopieMcpTools = (deps: ProtopieMcpToolDeps): void => {
     deps.mcpServer.registerTool(
         'protopie_get_content_as_code_schema',
         {
-            description: `Return the JSON schemas agents should use when creating or updating Lightdash content-as-code payloads. ${OVERVIEW_HINT}`,
+            description: `Return the JSON schemas agents should use when creating or updating Lightdash content-as-code payloads. Pair this with \`protopie_get_chart_examples\` for ready-to-copy worked templates. ${OVERVIEW_HINT}`,
             inputSchema: {},
             annotations: {
                 readOnlyHint: true,
@@ -466,8 +491,82 @@ export const registerProtopieMcpTools = (deps: ProtopieMcpToolDeps): void => {
                 dashboardAsCodeSchema,
                 sqlChartHint:
                     'Use the Lightdash SqlChartAsCode shape exported by @lightdash/common. The tool validates permissions through CoderService.',
+                examplesToolHint:
+                    'Call `protopie_get_chart_examples` to get minimal but valid copy-and-patch templates for bar, table, big-number, SQL chart, and dashboard payloads.',
                 overviewUri: PROTOPIE_MCP_OVERVIEW_URI,
             }),
+    );
+
+    deps.mcpServer.registerTool(
+        'protopie_get_chart_examples',
+        {
+            description: `Return worked, minimal-but-valid ChartAsCode / SqlChartAsCode / DashboardAsCode payloads (bar, table, big number, SQL, dashboard) that agents can patch and upsert. Use these as templates rather than building from the JSON schema alone. Field identifiers follow Lightdash's \`<table>_<column>\` convention — discover the real identifiers via \`find_explores\` and \`find_fields\` first, then substitute. ${OVERVIEW_HINT}`,
+            inputSchema: {},
+            annotations: {
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        async () =>
+            jsonToolResponse({
+                guide: PROTOPIE_CHART_EXAMPLES_GUIDE,
+                examples: PROTOPIE_CHART_EXAMPLES,
+            }),
+    );
+
+    deps.mcpServer.registerTool(
+        'protopie_dbt_list_files',
+        {
+            description:
+                'List allowlisted files from the Protopie data-modeling dbt repository. In local dev this can read PROTOPIE_DBT_LOCAL_PATH; in dev/prod it reads GitHub using PROTOPIE_DBT_GITHUB_TOKEN. Read-only.',
+            inputSchema: deps.getMcpCompatibleSchema(dbtListFilesSchema),
+            annotations: {
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        async (rawArgs) => {
+            const args = dbtListFilesSchema.parse(rawArgs);
+            return jsonToolResponse(await listDbtRepositoryFiles(args));
+        },
+    );
+
+    deps.mcpServer.registerTool(
+        'protopie_dbt_get_file',
+        {
+            description:
+                'Read one allowlisted text file from the Protopie data-modeling dbt repository, such as models, marts, macros, tests, seeds, dbt_project.yml, or README.md. Read-only.',
+            inputSchema: deps.getMcpCompatibleSchema(dbtGetFileSchema),
+            annotations: {
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        async (rawArgs) => {
+            const args = dbtGetFileSchema.parse(rawArgs);
+            return jsonToolResponse(await getDbtRepositoryFile(args.path));
+        },
+    );
+
+    deps.mcpServer.registerTool(
+        'protopie_dbt_search_files',
+        {
+            description:
+                'Search allowlisted paths in the Protopie data-modeling dbt repository. By default searches file paths; set includeContent=true to scan allowed text files. Read-only.',
+            inputSchema: deps.getMcpCompatibleSchema(dbtSearchFilesSchema),
+            annotations: {
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        async (rawArgs) => {
+            const args = dbtSearchFilesSchema.parse(rawArgs);
+            return jsonToolResponse(await searchDbtRepositoryFiles(args));
+        },
     );
 
     deps.mcpServer.registerTool(

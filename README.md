@@ -127,11 +127,41 @@ Main files:
 
 - `packages/backend/src/protopie/mcp/registerProtopieMcpTools.ts`
 - `packages/backend/src/protopie/mcp/shared/auth.ts`
+- `packages/backend/src/protopie/mcp/shared/dbtRepository.ts`
+- `packages/backend/src/protopie/mcp/shared/examples.ts`
+- `packages/backend/src/protopie/mcp/shared/overview.ts`
 - `packages/backend/src/protopie/controllers/SettingsController.ts`
 - `packages/backend/src/protopie/services/SettingsService.ts`
 - `packages/backend/src/protopie/models/OrganizationSettingsModel.ts`
 - `packages/frontend/src/protopie/ProtopieMcpSettingsPanel.tsx`
 - `packages/frontend/src/protopie/api.ts`
+
+Read-only dbt source tools:
+
+```text
+protopie_dbt_list_files
+protopie_dbt_get_file
+protopie_dbt_search_files
+```
+
+Local development can read the checkout directly:
+
+```bash
+export PROTOPIE_DBT_LOCAL_PATH=/Users/mamur/Documents/projects/data-modeling
+```
+
+Dev/prod should read GitHub through the Lightdash service only:
+
+```text
+PROTOPIE_DBT_GITHUB_OWNER=ProtoPie
+PROTOPIE_DBT_GITHUB_REPO=data-modeling
+PROTOPIE_DBT_GITHUB_REF=main
+PROTOPIE_DBT_GITHUB_TOKEN=<fine-grained-read-only-pat>
+```
+
+The token should be limited to `ProtoPie/data-modeling` with read-only contents
+and metadata access. The MCP tools are path-allowlisted and never expose the
+token to clients.
 
 ## MCP Client Connections
 
@@ -384,6 +414,19 @@ Use it only when an interactive prod apply is intended.
 
 ## Runtime Environment
 
+Runtime secrets live in ignored `.env` files. Use the checked-in examples as
+templates:
+
+```bash
+cp .env.example .env
+cp infra/dev/.env.example infra/dev/.env
+cp infra/prod/.env.example infra/prod/.env
+```
+
+The root `.env` is for local Lightdash runs. `infra/dev/.env` and
+`infra/prod/.env` are read by Terraform when rendering the ECS task
+environment.
+
 Use the Makefile helpers to see the expected runtime environment:
 
 ```bash
@@ -401,6 +444,17 @@ SITE_URL=<environment-url>
 PGCONNECTIONURI=<postgres connection string with sslmode for RDS>
 SCHEDULER_ENABLED=true
 GROUPS_ENABLED=true
+```
+
+Optional dbt source access for MCP:
+
+```text
+PROTOPIE_DBT_LOCAL_PATH=/Users/mamur/Documents/projects/data-modeling
+PROTOPIE_DBT_GITHUB_OWNER=ProtoPie
+PROTOPIE_DBT_GITHUB_REPO=data-modeling
+PROTOPIE_DBT_GITHUB_REF=main
+PROTOPIE_DBT_GITHUB_TOKEN=<fine-grained-read-only-pat>
+PROTOPIE_DBT_ALLOWED_PATHS=models,marts,macros,seeds,snapshots,analyses,analysis,tests,dbt_project.yml,packages.yml,selectors.yml,exposures.yml,README.md
 ```
 
 Okta is expected in dev/prod for normal login and MCP OAuth:
