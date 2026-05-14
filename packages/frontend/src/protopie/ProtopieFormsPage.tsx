@@ -28,6 +28,7 @@ import {
     useSubmitProtopieForm,
 } from './api';
 import classes from './ProtopieFormsPage.module.css';
+import ProtopieSectionTabs from './ProtopieSectionTabs';
 
 const normalizePayload = (
     form: Protopie.ProtopieClientFormDefinition,
@@ -211,6 +212,8 @@ const ProtopieFormsPage = () => {
                         Refresh
                     </Button>
                 </Group>
+
+                <ProtopieSectionTabs />
 
                 <Tabs value={activeForm?.key} onChange={setActiveFormKey}>
                     <Tabs.List>

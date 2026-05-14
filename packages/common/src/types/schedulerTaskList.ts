@@ -47,6 +47,12 @@ export type AppGeneratePipelineJobPayload = TraceTaskBase & {
     chartReferences?: ChartReference[];
 };
 
+export type ProtopieRecomputeChurnScorePayload = TraceTaskBase & {
+    runUuid: string;
+    triggeredBy: 'manual' | 'scheduler' | 'mcp';
+    triggeredByUserUuid?: string;
+};
+
 export const EE_SCHEDULER_TASKS = {
     SLACK_AI_PROMPT: 'slackAiPrompt',
     AI_AGENT_EVAL_RESULT: 'aiAgentEvalResult',
@@ -86,6 +92,7 @@ export const SCHEDULER_TASKS = {
     DOWNLOAD_ASYNC_QUERY_RESULTS: 'downloadAsyncQueryResults',
     SYNC_SLACK_CHANNELS: 'syncSlackChannels',
     GENERATE_SLACK_CHANNEL_SYNC_JOBS: 'generateSlackChannelSyncJobs',
+    PROTOPIE_RECOMPUTE_CHURN_SCORE: 'protopie.recomputeChurnScore',
     CHECK_FOR_STUCK_JOBS: 'checkForStuckJobs',
     CLEAN_DEPLOY_SESSIONS: 'cleanDeploySessions',
     MANAGED_AGENT_HEARTBEAT: 'managedAgentHeartbeat',
@@ -127,6 +134,7 @@ export interface TaskPayloadMap {
     [SCHEDULER_TASKS.DOWNLOAD_ASYNC_QUERY_RESULTS]: DownloadAsyncQueryResultsPayload;
     [SCHEDULER_TASKS.SYNC_SLACK_CHANNELS]: SyncSlackChannelsPayload;
     [SCHEDULER_TASKS.GENERATE_SLACK_CHANNEL_SYNC_JOBS]: TraceTaskBase;
+    [SCHEDULER_TASKS.PROTOPIE_RECOMPUTE_CHURN_SCORE]: ProtopieRecomputeChurnScorePayload;
     [SCHEDULER_TASKS.CHECK_FOR_STUCK_JOBS]: TraceTaskBase;
     [SCHEDULER_TASKS.CLEAN_DEPLOY_SESSIONS]: TraceTaskBase;
     [SCHEDULER_TASKS.MANAGED_AGENT_HEARTBEAT]: ManagedAgentHeartbeatPayload;

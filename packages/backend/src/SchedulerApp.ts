@@ -14,6 +14,7 @@ import { LightdashConfig } from './config/parseConfig';
 import Logger from './logging/logger';
 import { ModelProviderMap, ModelRepository } from './models/ModelRepository';
 import PrometheusMetrics from './prometheus/PrometheusMetrics';
+import { getProtopieServices } from './protopie/services';
 import { SchedulerWorker } from './scheduler/SchedulerWorker';
 import { IGNORE_ERRORS } from './sentry';
 import {
@@ -76,6 +77,9 @@ const schedulerWorkerFactory = (context: {
         preAggregateModel: context.models.getPreAggregateModel(),
         preAggregateMaterializationService:
             context.serviceRepository.getPreAggregateMaterializationService(),
+        protopieChurnScoreService: getProtopieServices(
+            context.serviceRepository,
+        ).churnScoreService,
     });
 
 export default class SchedulerApp {

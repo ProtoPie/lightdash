@@ -50,6 +50,7 @@ import {
     ValidateProjectPayload,
     type DownloadAsyncQueryResultsPayload,
     type PreAggregateSchedulerDetails,
+    type ProtopieRecomputeChurnScorePayload,
     type SchedulerCreateProjectWithCompilePayload,
     type SchedulerIndexCatalogJobPayload,
 } from '@lightdash/common';
@@ -1300,6 +1301,38 @@ export class SchedulerClient {
                 projectUuid: payload.projectUuid,
                 preAggregateDefinitionUuid: payload.preAggregateDefinitionUuid,
                 trigger: payload.trigger,
+            },
+        });
+
+        return { jobId };
+    }
+
+    async protopieRecomputeChurnScore(
+        payload: ProtopieRecomputeChurnScorePayload,
+    ) {
+        const graphileClient = await this.graphileUtils;
+        const now = new Date();
+        const jobId = await SchedulerClient.addJob(
+            graphileClient,
+            SCHEDULER_TASKS.PROTOPIE_RECOMPUTE_CHURN_SCORE,
+            payload,
+            now,
+            JobPriority.MEDIUM,
+            3,
+            `protopie:churn-score:${payload.runUuid}`,
+        );
+
+        await this.schedulerModel.logSchedulerJob({
+            task: SCHEDULER_TASKS.PROTOPIE_RECOMPUTE_CHURN_SCORE,
+            jobId,
+            scheduledTime: now,
+            status: SchedulerJobStatus.SCHEDULED,
+            details: {
+                createdByUserUuid: payload.triggeredByUserUuid,
+                organizationUuid: payload.organizationUuid,
+                projectUuid: payload.projectUuid,
+                trigger: payload.triggeredBy,
+                runUuid: payload.runUuid,
             },
         });
 

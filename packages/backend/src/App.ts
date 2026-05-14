@@ -67,6 +67,7 @@ import { jwtAuthMiddleware } from './middlewares/jwtAuthMiddleware';
 import { ModelProviderMap, ModelRepository } from './models/ModelRepository';
 import { postHogClient } from './postHog';
 import PrometheusMetrics from './prometheus/PrometheusMetrics';
+import { getProtopieServices } from './protopie/services';
 import { apiV1Router } from './routers/apiV1Router';
 import { createAppPreviewRouter } from './routers/appPreviewRouter';
 import {
@@ -144,6 +145,9 @@ const schedulerWorkerFactory = (context: {
         preAggregateModel: context.models.getPreAggregateModel(),
         preAggregateMaterializationService:
             context.serviceRepository.getPreAggregateMaterializationService(),
+        protopieChurnScoreService: getProtopieServices(
+            context.serviceRepository,
+        ).churnScoreService,
     });
 
 export type AppArguments = {

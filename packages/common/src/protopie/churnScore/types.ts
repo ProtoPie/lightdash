@@ -1,0 +1,126 @@
+export type ChurnScoreGoalUnit = 'fraction' | 'count_per_user' | 'days';
+
+export type ChurnScoreAggregation =
+    | 'pct_users_with_event'
+    | 'event_count_per_user'
+    | 'active_days';
+
+export type ChurnScoreFunction = 'linear';
+
+export type ChurnScoreConfigStatus = 'draft' | 'active' | 'archived';
+
+export type ChurnScoreRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export type ChurnScoreRunTrigger = 'scheduler' | 'manual' | 'mcp';
+
+export type ChurnScoreRiskBand = 'low' | 'medium' | 'high';
+
+export type ChurnScoreEventGroup = {
+    operator: 'or';
+    events: string[];
+};
+
+export type ChurnScoreRiskBandThresholds = {
+    low: number;
+    medium: number;
+};
+
+export type ChurnScoreFactor = {
+    factorUuid?: string;
+    configUuid?: string;
+    factorKey: string;
+    label: string;
+    maxPoints: number;
+    goalValue: number;
+    goalUnit: ChurnScoreGoalUnit;
+    aggregation: ChurnScoreAggregation;
+    eventGroup: ChurnScoreEventGroup;
+    stepThresholds?: Record<string, unknown> | null;
+    sortOrder: number;
+};
+
+export type ChurnScoreConfig = {
+    configUuid: string;
+    projectUuid: string;
+    name: string;
+    version: number;
+    lookbackDays: number;
+    scoreFunction: ChurnScoreFunction;
+    riskBandThresholds: ChurnScoreRiskBandThresholds;
+    effectiveFrom: Date;
+    effectiveTo: Date | null;
+    status: ChurnScoreConfigStatus;
+    createdByUserUuid: string | null;
+    updatedByUserUuid: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+};
+
+export type ChurnScoreConfigWithFactors = {
+    config: ChurnScoreConfig;
+    factors: ChurnScoreFactor[];
+};
+
+export type ChurnScoreFactorInput = Omit<
+    ChurnScoreFactor,
+    'factorUuid' | 'configUuid'
+>;
+
+export type ChurnScoreConfigInput = {
+    name?: string;
+    lookbackDays: number;
+    scoreFunction: ChurnScoreFunction;
+    riskBandThresholds: ChurnScoreRiskBandThresholds;
+    factors: ChurnScoreFactorInput[];
+};
+
+export type ChurnScoreFactorScore = {
+    raw: number;
+    goal: number;
+    points: number;
+};
+
+export type ChurnScoreFactorScores = Record<string, ChurnScoreFactorScore>;
+
+export type ChurnScore = {
+    scoreUuid: string;
+    projectUuid: string;
+    accountKey: string;
+    namespace: string | null;
+    cloudUrl: string | null;
+    scoredForDate: string;
+    lookbackDays: number;
+    configUuid: string;
+    configVersion: number;
+    totalPoints: number;
+    maxPoints: number;
+    scorePercent: number;
+    normalizedScore: number;
+    riskBand: ChurnScoreRiskBand;
+    factorScores: ChurnScoreFactorScores;
+    computedAt: Date;
+    runUuid: string;
+};
+
+export type ChurnScoreRun = {
+    runUuid: string;
+    projectUuid: string;
+    configUuid: string;
+    triggeredBy: ChurnScoreRunTrigger;
+    triggeredByUserUuid: string | null;
+    status: ChurnScoreRunStatus;
+    startedAt: Date | null;
+    finishedAt: Date | null;
+    accountsScored: number;
+    errorMessage: string | null;
+    createdAt: Date;
+};
+
+export type ChurnScoreLatestFilters = {
+    riskBand?: ChurnScoreRiskBand;
+    minScore?: number;
+    maxScore?: number;
+    namespace?: string;
+    limit?: number;
+    offset?: number;
+};

@@ -351,6 +351,595 @@
             "ApiProtopieFormSubmissionsResponse": {
                 "$ref": "#/components/schemas/ApiSuccess_ProtopieFormSubmissionRecord-Array_"
             },
+            "ChurnScoreFunction": {
+                "type": "string",
+                "enum": ["linear"],
+                "nullable": false
+            },
+            "ChurnScoreRiskBandThresholds": {
+                "properties": {
+                    "medium": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "low": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": ["medium", "low"],
+                "type": "object"
+            },
+            "ChurnScoreConfigStatus": {
+                "type": "string",
+                "enum": ["draft", "active", "archived"]
+            },
+            "ChurnScoreConfig": {
+                "properties": {
+                    "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "updatedByUserUuid": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "createdByUserUuid": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/ChurnScoreConfigStatus"
+                    },
+                    "effectiveTo": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
+                    "effectiveFrom": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "riskBandThresholds": {
+                        "$ref": "#/components/schemas/ChurnScoreRiskBandThresholds"
+                    },
+                    "scoreFunction": {
+                        "$ref": "#/components/schemas/ChurnScoreFunction"
+                    },
+                    "lookbackDays": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "version": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "projectUuid": {
+                        "type": "string"
+                    },
+                    "configUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "updatedAt",
+                    "createdAt",
+                    "updatedByUserUuid",
+                    "createdByUserUuid",
+                    "status",
+                    "effectiveTo",
+                    "effectiveFrom",
+                    "riskBandThresholds",
+                    "scoreFunction",
+                    "lookbackDays",
+                    "version",
+                    "name",
+                    "projectUuid",
+                    "configUuid"
+                ],
+                "type": "object"
+            },
+            "ChurnScoreGoalUnit": {
+                "type": "string",
+                "enum": ["fraction", "count_per_user", "days"]
+            },
+            "ChurnScoreAggregation": {
+                "type": "string",
+                "enum": [
+                    "pct_users_with_event",
+                    "event_count_per_user",
+                    "active_days"
+                ]
+            },
+            "ChurnScoreEventGroup": {
+                "properties": {
+                    "events": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
+                    "operator": {
+                        "type": "string",
+                        "enum": ["or"],
+                        "nullable": false
+                    }
+                },
+                "required": ["events", "operator"],
+                "type": "object"
+            },
+            "ChurnScoreFactor": {
+                "properties": {
+                    "sortOrder": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "stepThresholds": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Record_string.unknown_"
+                            }
+                        ],
+                        "nullable": true
+                    },
+                    "eventGroup": {
+                        "$ref": "#/components/schemas/ChurnScoreEventGroup"
+                    },
+                    "aggregation": {
+                        "$ref": "#/components/schemas/ChurnScoreAggregation"
+                    },
+                    "goalUnit": {
+                        "$ref": "#/components/schemas/ChurnScoreGoalUnit"
+                    },
+                    "goalValue": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "maxPoints": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "factorKey": {
+                        "type": "string"
+                    },
+                    "configUuid": {
+                        "type": "string"
+                    },
+                    "factorUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "sortOrder",
+                    "eventGroup",
+                    "aggregation",
+                    "goalUnit",
+                    "goalValue",
+                    "maxPoints",
+                    "label",
+                    "factorKey"
+                ],
+                "type": "object"
+            },
+            "ChurnScoreConfigWithFactors": {
+                "properties": {
+                    "factors": {
+                        "items": {
+                            "$ref": "#/components/schemas/ChurnScoreFactor"
+                        },
+                        "type": "array"
+                    },
+                    "config": {
+                        "$ref": "#/components/schemas/ChurnScoreConfig"
+                    }
+                },
+                "required": ["factors", "config"],
+                "type": "object"
+            },
+            "ApiSuccess_ChurnScoreConfigWithFactors_": {
+                "properties": {
+                    "results": {
+                        "$ref": "#/components/schemas/ChurnScoreConfigWithFactors"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiChurnScoreConfigResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ChurnScoreConfigWithFactors_"
+            },
+            "ApiSuccess_ChurnScoreConfig-Array_": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/ChurnScoreConfig"
+                        },
+                        "type": "array"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiChurnScoreConfigVersionsResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ChurnScoreConfig-Array_"
+            },
+            "Pick_ChurnScoreFactor.Exclude_keyofChurnScoreFactor.factorUuid-or-configUuid__": {
+                "properties": {
+                    "factorKey": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "maxPoints": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "goalValue": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "goalUnit": {
+                        "$ref": "#/components/schemas/ChurnScoreGoalUnit"
+                    },
+                    "aggregation": {
+                        "$ref": "#/components/schemas/ChurnScoreAggregation"
+                    },
+                    "eventGroup": {
+                        "$ref": "#/components/schemas/ChurnScoreEventGroup"
+                    },
+                    "stepThresholds": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Record_string.unknown_"
+                            }
+                        ],
+                        "nullable": true
+                    },
+                    "sortOrder": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": [
+                    "factorKey",
+                    "label",
+                    "maxPoints",
+                    "goalValue",
+                    "goalUnit",
+                    "aggregation",
+                    "eventGroup",
+                    "sortOrder"
+                ],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Omit_ChurnScoreFactor.factorUuid-or-configUuid_": {
+                "$ref": "#/components/schemas/Pick_ChurnScoreFactor.Exclude_keyofChurnScoreFactor.factorUuid-or-configUuid__",
+                "description": "Construct a type with the properties of T except for those in type K."
+            },
+            "ChurnScoreFactorInput": {
+                "$ref": "#/components/schemas/Omit_ChurnScoreFactor.factorUuid-or-configUuid_"
+            },
+            "ChurnScoreConfigInput": {
+                "properties": {
+                    "factors": {
+                        "items": {
+                            "$ref": "#/components/schemas/ChurnScoreFactorInput"
+                        },
+                        "type": "array"
+                    },
+                    "riskBandThresholds": {
+                        "$ref": "#/components/schemas/ChurnScoreRiskBandThresholds"
+                    },
+                    "scoreFunction": {
+                        "$ref": "#/components/schemas/ChurnScoreFunction"
+                    },
+                    "lookbackDays": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "factors",
+                    "riskBandThresholds",
+                    "scoreFunction",
+                    "lookbackDays"
+                ],
+                "type": "object"
+            },
+            "ApiSuccess__runUuid-string--status-queued__": {
+                "properties": {
+                    "results": {
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "enum": ["queued"],
+                                "nullable": false
+                            },
+                            "runUuid": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["status", "runUuid"],
+                        "type": "object"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiChurnScoreRunQueuedResponse": {
+                "$ref": "#/components/schemas/ApiSuccess__runUuid-string--status-queued__"
+            },
+            "ChurnScoreRunTrigger": {
+                "type": "string",
+                "enum": ["scheduler", "manual", "mcp"]
+            },
+            "ChurnScoreRunStatus": {
+                "type": "string",
+                "enum": ["queued", "running", "completed", "failed"]
+            },
+            "ChurnScoreRun": {
+                "properties": {
+                    "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "errorMessage": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "accountsScored": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "finishedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
+                    "startedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/ChurnScoreRunStatus"
+                    },
+                    "triggeredByUserUuid": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "triggeredBy": {
+                        "$ref": "#/components/schemas/ChurnScoreRunTrigger"
+                    },
+                    "configUuid": {
+                        "type": "string"
+                    },
+                    "projectUuid": {
+                        "type": "string"
+                    },
+                    "runUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "createdAt",
+                    "errorMessage",
+                    "accountsScored",
+                    "finishedAt",
+                    "startedAt",
+                    "status",
+                    "triggeredByUserUuid",
+                    "triggeredBy",
+                    "configUuid",
+                    "projectUuid",
+                    "runUuid"
+                ],
+                "type": "object"
+            },
+            "ApiSuccess_ChurnScoreRun-Array_": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/ChurnScoreRun"
+                        },
+                        "type": "array"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiChurnScoreRunsResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ChurnScoreRun-Array_"
+            },
+            "ApiSuccess_ChurnScoreRun_": {
+                "properties": {
+                    "results": {
+                        "$ref": "#/components/schemas/ChurnScoreRun"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiChurnScoreRunResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ChurnScoreRun_"
+            },
+            "ChurnScoreRiskBand": {
+                "type": "string",
+                "enum": ["low", "medium", "high"]
+            },
+            "ChurnScoreFactorScore": {
+                "properties": {
+                    "points": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "goal": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "raw": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": ["points", "goal", "raw"],
+                "type": "object"
+            },
+            "Record_string.ChurnScoreFactorScore_": {
+                "properties": {},
+                "additionalProperties": {
+                    "$ref": "#/components/schemas/ChurnScoreFactorScore"
+                },
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
+            "ChurnScoreFactorScores": {
+                "$ref": "#/components/schemas/Record_string.ChurnScoreFactorScore_"
+            },
+            "ChurnScore": {
+                "properties": {
+                    "runUuid": {
+                        "type": "string"
+                    },
+                    "computedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "factorScores": {
+                        "$ref": "#/components/schemas/ChurnScoreFactorScores"
+                    },
+                    "riskBand": {
+                        "$ref": "#/components/schemas/ChurnScoreRiskBand"
+                    },
+                    "normalizedScore": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "scorePercent": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "maxPoints": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "totalPoints": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "configVersion": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "configUuid": {
+                        "type": "string"
+                    },
+                    "lookbackDays": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "scoredForDate": {
+                        "type": "string"
+                    },
+                    "cloudUrl": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "namespace": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "accountKey": {
+                        "type": "string"
+                    },
+                    "projectUuid": {
+                        "type": "string"
+                    },
+                    "scoreUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "runUuid",
+                    "computedAt",
+                    "factorScores",
+                    "riskBand",
+                    "normalizedScore",
+                    "scorePercent",
+                    "maxPoints",
+                    "totalPoints",
+                    "configVersion",
+                    "configUuid",
+                    "lookbackDays",
+                    "scoredForDate",
+                    "cloudUrl",
+                    "namespace",
+                    "accountKey",
+                    "projectUuid",
+                    "scoreUuid"
+                ],
+                "type": "object"
+            },
+            "ApiSuccess_ChurnScore-Array_": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/ChurnScore"
+                        },
+                        "type": "array"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiChurnScoresResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ChurnScore-Array_"
+            },
             "ApiSuccessEmpty": {
                 "properties": {
                     "results": {},
@@ -702,6 +1291,9 @@
             },
             "Pick_ScimUser.Exclude_keyofScimUser.id__": {
                 "properties": {
+                    "active": {
+                        "type": "boolean"
+                    },
                     "urn:lightdash:params:scim:schemas:extension:2.0:User": {
                         "$ref": "#/components/schemas/LightdashScimExtension"
                     },
@@ -724,9 +1316,6 @@
                             }
                         },
                         "type": "object"
-                    },
-                    "active": {
-                        "type": "boolean"
                     },
                     "emails": {
                         "items": {
@@ -4949,17 +5538,17 @@
             },
             "Pick_CompiledDimension.label-or-name-or-table_": {
                 "properties": {
-                    "name": {
+                    "label": {
                         "type": "string"
                     },
-                    "label": {
+                    "name": {
                         "type": "string"
                     },
                     "table": {
                         "type": "string"
                     }
                 },
-                "required": ["name", "label", "table"],
+                "required": ["label", "name", "table"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -9724,17 +10313,17 @@
                     "description": {
                         "type": "string"
                     },
+                    "label": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
                     "type": {
                         "type": "string"
-                    },
-                    "label": {
-                        "type": "string"
                     }
                 },
-                "required": ["name", "type", "label"],
+                "required": ["label", "name", "type"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -9817,20 +10406,20 @@
                     "description": {
                         "type": "string"
                     },
+                    "label": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
                     "type": {
                         "type": "string"
                     },
-                    "label": {
-                        "type": "string"
-                    },
                     "table": {
                         "type": "string"
                     }
                 },
-                "required": ["name", "type", "label", "table"],
+                "required": ["label", "name", "type", "table"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -11249,6 +11838,19 @@
                                                         "type": "string",
                                                         "enum": ["error"],
                                                         "nullable": false
+                                                    }
+                                                },
+                                                "required": ["status"],
+                                                "type": "object"
+                                            },
+                                            {
+                                                "properties": {
+                                                    "status": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                            "success",
+                                                            "error"
+                                                        ]
                                                     }
                                                 },
                                                 "required": ["status"],
@@ -20704,6 +21306,7 @@
                     "downloadAsyncQueryResults",
                     "syncSlackChannels",
                     "generateSlackChannelSyncJobs",
+                    "protopie.recomputeChurnScore",
                     "checkForStuckJobs",
                     "cleanDeploySessions",
                     "managedAgentHeartbeat"
@@ -23185,11 +23788,6 @@
                 "$ref": "#/components/schemas/Pick_Pick_SavedChart.name-or-description-or-tableName-or-metricQuery-or-chartConfig-or-pivotConfig-or-slug-or-parameters_.Exclude_keyofPick_SavedChart.name-or-description-or-tableName-or-metricQuery-or-chartConfig-or-pivotConfig-or-slug-or-parameters_.metricQuery__",
                 "description": "Construct a type with the properties of T except for those in type K."
             },
-            "Pick_CompiledDimension.name-or-label-or-table_": {
-                "properties": {},
-                "type": "object",
-                "description": "From T, pick a set of properties whose keys are in the union K"
-            },
             "Pick_MetricQuery.Exclude_keyofMetricQuery.filters__": {
                 "properties": {
                     "limit": {
@@ -23265,7 +23863,7 @@
                     "metadata": {
                         "properties": {
                             "hasADateDimension": {
-                                "$ref": "#/components/schemas/Pick_CompiledDimension.name-or-label-or-table_"
+                                "$ref": "#/components/schemas/Pick_CompiledDimension.label-or-name-or-table_"
                             }
                         },
                         "required": ["hasADateDimension"],
@@ -23492,22 +24090,22 @@
                     }
                 ]
             },
-            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
+            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined--xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
                 "properties": {},
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
-            "PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
+            "PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined--xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
                 "properties": {
                     "chart": {
-                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
+                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined--xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
                     }
                 },
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
             "PartialDeep_ChartAsCodeLanguageMap._recurseIntoArrays-true__": {
-                "$ref": "#/components/schemas/PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
+                "$ref": "#/components/schemas/PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined--xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
                 "description": "Create a type from another type with all keys and nested keys set to optional.\n\nUse-cases:\n- Merging a default settings/config object with another object, the second object would be a deep partial of the default object.\n- Mocking and testing complex entities, where populating an entire object with its keys would be redundant in terms of the mock or test."
             },
             "ContentAsCodeType.SPACE": {
@@ -23862,22 +24460,22 @@
                     }
                 ]
             },
-            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
+            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
                 "properties": {},
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
-            "PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
+            "PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
                 "properties": {
                     "dashboard": {
-                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
+                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
                     }
                 },
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
             "PartialDeep_DashboardAsCodeLanguageMap._recurseIntoArrays-true__": {
-                "$ref": "#/components/schemas/PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
+                "$ref": "#/components/schemas/PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
                 "description": "Create a type from another type with all keys and nested keys set to optional.\n\nUse-cases:\n- Merging a default settings/config object with another object, the second object would be a deep partial of the default object.\n- Mocking and testing complex entities, where populating an entire object with its keys would be redundant in terms of the mock or test."
             },
             "ApiDashboardAsCodeListResponse": {
@@ -24621,10 +25219,10 @@
             },
             "Pick_Explore.name-or-label-or-groupLabel-or-groups_": {
                 "properties": {
-                    "name": {
+                    "label": {
                         "type": "string"
                     },
-                    "label": {
+                    "name": {
                         "type": "string"
                     },
                     "groupLabel": {
@@ -24639,7 +25237,7 @@
                         "description": "Nested groups for the sidebar (max 3 levels). Group keys resolve to\nlabels/descriptions via the project-level `table_groups` config\n(fetched separately); missing keys fall back to using the key as\nthe label."
                     }
                 },
-                "required": ["name", "label"],
+                "required": ["label", "name"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -27461,14 +28059,14 @@
                         },
                         "type": "array"
                     },
+                    "label": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
                     "type": {
                         "$ref": "#/components/schemas/ExploreType"
-                    },
-                    "label": {
-                        "type": "string"
                     },
                     "groupLabel": {
                         "type": "string",
@@ -27505,7 +28103,7 @@
                         "description": "Non-fatal warnings from partial compilation.\nPresent when some joins or fields failed to compile but the explore is still usable.\nOnly populated when PARTIAL_COMPILATION_ENABLED=true."
                     }
                 },
-                "required": ["tags", "name", "label"],
+                "required": ["tags", "label", "name"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -27532,14 +28130,14 @@
                         },
                         "type": "array"
                     },
+                    "label": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
                     "type": {
                         "$ref": "#/components/schemas/ExploreType"
-                    },
-                    "label": {
-                        "type": "string"
                     },
                     "groupLabel": {
                         "type": "string",
@@ -27572,7 +28170,7 @@
                         "type": "array"
                     }
                 },
-                "required": ["name", "label", "errors"],
+                "required": ["label", "name", "errors"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -27629,6 +28227,9 @@
                         },
                         "type": "array"
                     },
+                    "label": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -27653,9 +28254,6 @@
                         },
                         "required": ["visibility"],
                         "type": "object"
-                    },
-                    "label": {
-                        "type": "string"
                     },
                     "parameters": {
                         "$ref": "#/components/schemas/Record_string.LightdashProjectParameter_"
@@ -27740,8 +28338,8 @@
                 },
                 "required": [
                     "tags",
-                    "name",
                     "label",
+                    "name",
                     "baseTable",
                     "joinedTables",
                     "tables",
@@ -28183,10 +28781,10 @@
                     "description": {
                         "type": "string"
                     },
-                    "name": {
+                    "label": {
                         "type": "string"
                     },
-                    "label": {
+                    "name": {
                         "type": "string"
                     },
                     "fieldType": {
@@ -28196,7 +28794,7 @@
                         "type": "string"
                     }
                 },
-                "required": ["name", "label", "fieldType", "tableLabel"],
+                "required": ["label", "name", "fieldType", "tableLabel"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -28400,10 +28998,10 @@
                     "description": {
                         "type": "string"
                     },
-                    "name": {
+                    "label": {
                         "type": "string"
                     },
-                    "label": {
+                    "name": {
                         "type": "string"
                     },
                     "groupLabel": {
@@ -28416,7 +29014,7 @@
                         "$ref": "#/components/schemas/Record_string.string-or-string-Array_"
                     }
                 },
-                "required": ["name", "label"],
+                "required": ["label", "name"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -30089,7 +30687,7 @@
                     "metadata": {
                         "properties": {
                             "hasADateDimension": {
-                                "$ref": "#/components/schemas/Pick_CompiledDimension.name-or-label-or-table_"
+                                "$ref": "#/components/schemas/Pick_CompiledDimension.label-or-name-or-table_"
                             }
                         },
                         "required": ["hasADateDimension"],
@@ -32000,16 +32598,16 @@
                     },
                     {
                         "properties": {
-                            "schedulerCount": {
+                            "chartCount": {
                                 "type": "number",
                                 "format": "double"
                             },
-                            "chartCount": {
+                            "schedulerCount": {
                                 "type": "number",
                                 "format": "double"
                             }
                         },
-                        "required": ["schedulerCount", "chartCount"],
+                        "required": ["chartCount", "schedulerCount"],
                         "type": "object"
                     }
                 ]
@@ -32091,10 +32689,6 @@
                                 "type": "number",
                                 "format": "double"
                             },
-                            "schedulerCount": {
-                                "type": "number",
-                                "format": "double"
-                            },
                             "chartCount": {
                                 "type": "number",
                                 "format": "double"
@@ -32102,14 +32696,18 @@
                             "dashboardCount": {
                                 "type": "number",
                                 "format": "double"
+                            },
+                            "schedulerCount": {
+                                "type": "number",
+                                "format": "double"
                             }
                         },
                         "required": [
                             "appCount",
                             "nestedSpaceCount",
-                            "schedulerCount",
                             "chartCount",
-                            "dashboardCount"
+                            "dashboardCount",
+                            "schedulerCount"
                         ],
                         "type": "object"
                     }
@@ -32637,6 +33235,428 @@
                     {
                         "in": "query",
                         "name": "offset",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/config": {
+            "get": {
+                "operationId": "GetProtopieChurnScoreConfig",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreConfigResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Get the active churn score rubric and factors.",
+                "summary": "Get Protopie churn score rubric",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            },
+            "put": {
+                "operationId": "UpdateProtopieChurnScoreConfig",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreConfigResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Save edited churn score factors as a new active rubric version.",
+                "summary": "Update Protopie churn score rubric",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ChurnScoreConfigInput"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/config/versions": {
+            "get": {
+                "operationId": "ListProtopieChurnScoreConfigVersions",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreConfigVersionsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "List churn score rubric versions.",
+                "summary": "List Protopie churn score rubric versions",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/recompute": {
+            "post": {
+                "operationId": "RecomputeProtopieChurnScores",
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreRunQueuedResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Enqueue a manual churn score recompute.",
+                "summary": "Recompute Protopie churn scores",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/runs": {
+            "get": {
+                "operationId": "ListProtopieChurnScoreRuns",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreRunsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "List churn score recompute runs.",
+                "summary": "List Protopie churn score runs",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "limit",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/runs/{runUuid}": {
+            "get": {
+                "operationId": "GetProtopieChurnScoreRun",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreRunResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Get one churn score recompute run.",
+                "summary": "Get Protopie churn score run",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "runUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/scores/latest": {
+            "get": {
+                "operationId": "ListLatestProtopieChurnScores",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoresResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "List latest churn scores for the active rubric.",
+                "summary": "List latest Protopie churn scores",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "riskBand",
+                        "required": false,
+                        "schema": {
+                            "$ref": "#/components/schemas/ChurnScoreRiskBand"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "minScore",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "maxScore",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "namespace",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "limit",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "offset",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/scores/{accountKey}": {
+            "get": {
+                "operationId": "GetProtopieChurnScoreAccountHistory",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoresResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Get churn score history for one account key.",
+                "summary": "Get Protopie churn score account history",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "accountKey",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "limit",
                         "required": false,
                         "schema": {
                             "format": "double",

@@ -1131,6 +1131,42 @@ export class SchedulerWorker extends SchedulerTask {
                     `Completed generating Slack channel sync jobs: ${successful} successful, ${failed} failed out of ${organizationUuids.length} total`,
                 );
             },
+            [SCHEDULER_TASKS.PROTOPIE_RECOMPUTE_CHURN_SCORE]: async (
+                payload,
+                helpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        SCHEDULER_TASKS.PROTOPIE_RECOMPUTE_CHURN_SCORE,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.protopieChurnScoreService.executeRecompute(
+                                payload.runUuid,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: SCHEDULER_TASKS.PROTOPIE_RECOMPUTE_CHURN_SCORE,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                createdByUserUuid: payload.triggeredByUserUuid,
+                                error: getErrorMessage(e),
+                                projectUuid: payload.projectUuid,
+                                organizationUuid: payload.organizationUuid,
+                                trigger: payload.triggeredBy,
+                                runUuid: payload.runUuid,
+                            },
+                        });
+                    },
+                );
+            },
             [SCHEDULER_TASKS.CHECK_FOR_STUCK_JOBS]: async () => {
                 await this.schedulerService.checkForStuckJobs();
             },

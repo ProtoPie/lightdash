@@ -136,6 +136,7 @@ import { LightdashConfig } from '../config/parseConfig';
 import type { PreAggregateModel } from '../ee/models/PreAggregateModel';
 import type { PreAggregateMaterializationService } from '../ee/services/PreAggregateMaterializationService/PreAggregateMaterializationService';
 import Logger from '../logging/logger';
+import { type ChurnScoreService } from '../protopie/services/ChurnScoreService';
 import { AsyncQueryService } from '../services/AsyncQueryService/AsyncQueryService';
 import { SCHEDULER_POLLING_OPTIONS } from '../services/AsyncQueryService/types';
 import type { CatalogService } from '../services/CatalogService/CatalogService';
@@ -188,6 +189,7 @@ export type SchedulerTaskArguments = {
     persistentDownloadFileService: PersistentDownloadFileService;
     preAggregateModel: PreAggregateModel;
     preAggregateMaterializationService: PreAggregateMaterializationService;
+    protopieChurnScoreService: ChurnScoreService;
 };
 
 export default class SchedulerTask {
@@ -241,6 +243,8 @@ export default class SchedulerTask {
 
     protected readonly preAggregateModel: PreAggregateModel;
 
+    protected readonly protopieChurnScoreService: ChurnScoreService;
+
     constructor(args: SchedulerTaskArguments) {
         this.lightdashConfig = args.lightdashConfig;
         this.analytics = args.analytics;
@@ -268,6 +272,7 @@ export default class SchedulerTask {
         this.preAggregateModel = args.preAggregateModel;
         this.preAggregateMaterializationService =
             args.preAggregateMaterializationService;
+        this.protopieChurnScoreService = args.protopieChurnScoreService;
     }
 
     private static getCsvOptions(

@@ -180,6 +180,11 @@ const getTagsForTask: {
         'organization.uuid': payload.organizationUuid,
     }),
     [SCHEDULER_TASKS.GENERATE_SLACK_CHANNEL_SYNC_JOBS]: () => ({}),
+    [SCHEDULER_TASKS.PROTOPIE_RECOMPUTE_CHURN_SCORE]: (payload) => ({
+        'organization.uuid': payload.organizationUuid,
+        'user.uuid': payload.userUuid,
+        'project.uuid': payload.projectUuid,
+    }),
     [SCHEDULER_TASKS.CHECK_FOR_STUCK_JOBS]: () => ({}),
     [SCHEDULER_TASKS.CLEAN_DEPLOY_SESSIONS]: () => ({}),
     [SCHEDULER_TASKS.MANAGED_AGENT_HEARTBEAT]: (payload) => ({

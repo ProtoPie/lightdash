@@ -5,7 +5,7 @@ import { lightdashConfig } from '../config/lightdashConfig';
 import Logger from '../logging/logger';
 import { McpContextModel } from '../models/McpContextModel';
 import { registerPreAggregateStream } from '../nats/natsConfig';
-import { getProtopieModels } from '../protopie/services';
+import { getProtopieModels, getProtopieServices } from '../protopie/services';
 import { AsyncQueryService } from '../services/AsyncQueryService/AsyncQueryService';
 import { DeployService } from '../services/DeployService';
 import { InstanceConfigurationService } from '../services/InstanceConfigurationService/InstanceConfigurationService';
@@ -584,6 +584,9 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                 preAggregateModel: context.models.getPreAggregateModel(),
                 preAggregateMaterializationService:
                     context.serviceRepository.getPreAggregateMaterializationService(),
+                protopieChurnScoreService: getProtopieServices(
+                    context.serviceRepository,
+                ).churnScoreService,
                 managedAgentService:
                     context.serviceRepository.getManagedAgentService<ManagedAgentService>(),
                 appGenerateService:
