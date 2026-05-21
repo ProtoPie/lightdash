@@ -32582,6 +32582,26 @@ export function RegisterRoutes(app: Router) {
         minScore: { in: 'query', name: 'minScore', dataType: 'double' },
         maxScore: { in: 'query', name: 'maxScore', dataType: 'double' },
         namespace: { in: 'query', name: 'namespace', dataType: 'string' },
+        sortBy: {
+            in: 'query',
+            name: 'sortBy',
+            dataType: 'union',
+            subSchemas: [
+                { dataType: 'enum', enums: ['score'] },
+                { dataType: 'enum', enums: ['risk'] },
+                { dataType: 'enum', enums: ['namespace'] },
+                { dataType: 'enum', enums: ['computed_at'] },
+            ],
+        },
+        sortDirection: {
+            in: 'query',
+            name: 'sortDirection',
+            dataType: 'union',
+            subSchemas: [
+                { dataType: 'enum', enums: ['asc'] },
+                { dataType: 'enum', enums: ['desc'] },
+            ],
+        },
         limit: { in: 'query', name: 'limit', dataType: 'double' },
         offset: { in: 'query', name: 'offset', dataType: 'double' },
     };

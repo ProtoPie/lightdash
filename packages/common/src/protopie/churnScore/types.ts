@@ -20,6 +20,10 @@ export type ChurnScoreRunTrigger = 'scheduler' | 'manual' | 'mcp';
 
 export type ChurnScoreRiskBand = 'low' | 'medium' | 'high';
 
+export type ChurnScoreSortBy = 'score' | 'risk' | 'namespace' | 'computed_at';
+
+export type ChurnScoreSortDirection = 'asc' | 'desc';
+
 export type ChurnScoreEventGroup = {
     operator: 'or';
     events: string[];
@@ -127,6 +131,8 @@ export type ChurnScoreLatestFilters = {
     minScore?: number;
     maxScore?: number;
     namespace?: string;
+    sortBy?: ChurnScoreSortBy;
+    sortDirection?: ChurnScoreSortDirection;
     limit?: number;
     offset?: number;
 };

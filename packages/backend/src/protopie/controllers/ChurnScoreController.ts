@@ -338,6 +338,8 @@ export class ProtopieChurnScoreController extends BaseController {
         @Query() minScore?: number,
         @Query() maxScore?: number,
         @Query() namespace?: string,
+        @Query() sortBy?: Protopie.ChurnScoreSortBy,
+        @Query() sortDirection?: Protopie.ChurnScoreSortDirection,
         @Query() limit?: number,
         @Query() offset?: number,
     ): Promise<ApiChurnScoresResponse> {
@@ -356,6 +358,8 @@ export class ProtopieChurnScoreController extends BaseController {
                     minScore,
                     maxScore,
                     namespace,
+                    sortBy,
+                    sortDirection,
                     limit,
                     offset,
                 },

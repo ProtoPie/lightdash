@@ -29,6 +29,30 @@ const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
 
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = ['25', '50', '100', '200'];
+const DEFAULT_SORT_VALUE = 'score_asc';
+const SORT_OPTIONS = [
+    { value: 'score_asc', label: 'Score: low to high' },
+    { value: 'score_desc', label: 'Score: high to low' },
+    { value: 'risk_desc', label: 'Risk: high to low' },
+    { value: 'risk_asc', label: 'Risk: low to high' },
+    { value: 'namespace_asc', label: 'Namespace: A to Z' },
+    { value: 'namespace_desc', label: 'Namespace: Z to A' },
+    { value: 'computed_at_desc', label: 'Computed: newest first' },
+    { value: 'computed_at_asc', label: 'Computed: oldest first' },
+];
+const SORT_FILTERS: Record<
+    string,
+    Pick<Protopie.ChurnScoreLatestFilters, 'sortBy' | 'sortDirection'>
+> = {
+    score_asc: { sortBy: 'score', sortDirection: 'asc' },
+    score_desc: { sortBy: 'score', sortDirection: 'desc' },
+    risk_desc: { sortBy: 'risk', sortDirection: 'desc' },
+    risk_asc: { sortBy: 'risk', sortDirection: 'asc' },
+    namespace_asc: { sortBy: 'namespace', sortDirection: 'asc' },
+    namespace_desc: { sortBy: 'namespace', sortDirection: 'desc' },
+    computed_at_desc: { sortBy: 'computed_at', sortDirection: 'desc' },
+    computed_at_asc: { sortBy: 'computed_at', sortDirection: 'asc' },
+};
 
 const ProtopieChurnScoresPage = () => {
     const projectUuid = useProjectUuid();
@@ -38,10 +62,12 @@ const ProtopieChurnScoresPage = () => {
     const [debouncedNamespace] = useDebouncedValue(namespace, 300);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(String(DEFAULT_PAGE_SIZE));
+    const [sortValue, setSortValue] = useState(DEFAULT_SORT_VALUE);
     const [selectedConfigUuid, setSelectedConfigUuid] = useState<
         string | undefined
     >();
     const numericPageSize = Number(pageSize);
+    const sortFilter = SORT_FILTERS[sortValue] ?? SORT_FILTERS.score_asc;
     const configs = useProtopieChurnConfigs(projectUuid);
 
     useEffect(() => {
@@ -52,13 +78,21 @@ const ProtopieChurnScoresPage = () => {
 
     useEffect(() => {
         setPage(1);
-    }, [debouncedNamespace, numericPageSize, riskBand, selectedConfigUuid]);
+    }, [
+        debouncedNamespace,
+        numericPageSize,
+        riskBand,
+        selectedConfigUuid,
+        sortValue,
+    ]);
 
     const filters = useMemo<Protopie.ChurnScoreLatestFilters>(
         () => ({
             configUuid: selectedConfigUuid,
             riskBand: riskBand ?? undefined,
             namespace: debouncedNamespace.trim() || undefined,
+            sortBy: sortFilter.sortBy,
+            sortDirection: sortFilter.sortDirection,
             limit: numericPageSize,
             offset: (page - 1) * numericPageSize,
         }),
@@ -68,6 +102,8 @@ const ProtopieChurnScoresPage = () => {
             page,
             riskBand,
             selectedConfigUuid,
+            sortFilter.sortBy,
+            sortFilter.sortDirection,
         ],
     );
     const scores = useProtopieChurnScores({ projectUuid, filters });
@@ -154,6 +190,15 @@ const ProtopieChurnScoresPage = () => {
                             value={namespace}
                             onChange={(event) =>
                                 setNamespace(event.currentTarget.value)
+                            }
+                        />
+                        <Select
+                            label="Sort"
+                            allowDeselect={false}
+                            data={SORT_OPTIONS}
+                            value={sortValue}
+                            onChange={(value) =>
+                                setSortValue(value ?? DEFAULT_SORT_VALUE)
                             }
                         />
                         <Select

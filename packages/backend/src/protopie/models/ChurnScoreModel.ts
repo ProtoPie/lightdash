@@ -22,6 +22,18 @@ type DbChurnScore = {
     run_uuid: string;
 };
 
+const CHURN_SCORE_SORT_BY = new Set<Protopie.ChurnScoreSortBy>([
+    'score',
+    'risk',
+    'namespace',
+    'computed_at',
+]);
+
+const CHURN_SCORE_SORT_DIRECTIONS = new Set<Protopie.ChurnScoreSortDirection>([
+    'asc',
+    'desc',
+]);
+
 export type ProtopieChurnScoreRecord = Protopie.ChurnScore;
 
 export type ProtopieChurnScoreInsert = Omit<
@@ -34,6 +46,44 @@ export class ChurnScoreModel {
 
     constructor({ database }: { database: Knex }) {
         this.database = database;
+    }
+
+    private static getSort({
+        sortBy,
+        sortDirection,
+    }: Protopie.ChurnScoreLatestFilters): {
+        sortBy: Protopie.ChurnScoreSortBy;
+        sortDirection: Protopie.ChurnScoreSortDirection;
+    } {
+        return {
+            sortBy:
+                sortBy && CHURN_SCORE_SORT_BY.has(sortBy) ? sortBy : 'score',
+            sortDirection:
+                sortDirection && CHURN_SCORE_SORT_DIRECTIONS.has(sortDirection)
+                    ? sortDirection
+                    : 'asc',
+        };
+    }
+
+    private static applyScoreSort(
+        query: Knex.QueryBuilder,
+        filters: Protopie.ChurnScoreLatestFilters,
+    ): void {
+        const { sortBy, sortDirection } = ChurnScoreModel.getSort(filters);
+
+        if (sortBy === 'score') {
+            void query.orderBy('normalized_score', sortDirection);
+        } else if (sortBy === 'risk') {
+            void query.orderByRaw(
+                `CASE risk_band WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END ${sortDirection}`,
+            );
+        } else if (sortBy === 'namespace') {
+            void query.orderByRaw(`namespace ${sortDirection} NULLS LAST`);
+        } else if (sortBy === 'computed_at') {
+            void query.orderBy('computed_at', sortDirection);
+        }
+
+        void query.orderBy('account_key', 'asc');
     }
 
     async upsertScores(rows: ProtopieChurnScoreInsert[]): Promise<void> {
@@ -111,7 +161,6 @@ export class ChurnScoreModel {
         const query = this.database
             .select<DbChurnScore[]>('*')
             .from(latestScores)
-            .orderBy('normalized_score', 'asc')
             .limit(limit)
             .offset(offset);
 
@@ -127,6 +176,8 @@ export class ChurnScoreModel {
         if (filters.namespace) {
             void query.where('namespace', 'ilike', `%${filters.namespace}%`);
         }
+
+        ChurnScoreModel.applyScoreSort(query, filters);
 
         const rows = await query;
         return rows.map((row) => ChurnScoreModel.toRecord(row));

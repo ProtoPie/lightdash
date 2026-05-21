@@ -337,6 +337,10 @@ export const useProtopieChurnScores = ({
                 params.set('maxScore', String(filters.maxScore));
             }
             if (filters?.namespace) params.set('namespace', filters.namespace);
+            if (filters?.sortBy) params.set('sortBy', filters.sortBy);
+            if (filters?.sortDirection) {
+                params.set('sortDirection', filters.sortDirection);
+            }
             if (filters?.limit !== undefined) {
                 params.set('limit', String(filters.limit));
             }
