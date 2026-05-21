@@ -74,13 +74,13 @@ When the backend creates a presigned URL for browser-direct upload, it uses `S3_
 
 This repo is a **Protopie-specific fork** of Lightdash. A `protopie/` module is being built to replace ChurnZero (expires **2026-07-30**) with three deliverables:
 
-1. **Churn Score engine** — 9-factor weighted score (0–100) per Account (`team_id`), nightly recompute via Graphile Worker, reading `mart_account_usage_90d` from Amazon Redshift via Lightdash's existing `WarehouseClient`. **Score is computed in the backend, NOT in dbt** — do not add a dbt scoring model; dashboards will silently diverge if you do.
+1. **Churn Score engine** — 9-factor weighted score (0–100) per Account (`team_id`), nightly recompute via Graphile Worker, reading `mart_account_usage_90d` from Amazon Redshift via Lightdash's existing `WarehouseClient`. **Score is computed in the backend, NOT in dbt** — do not add a dbt scoring model; dashboards will silently diverge if you do. **Two parallel score versions ship: v1 (Notion rubric, doc 17, contractual ChurnZero replacement) and v2 (trajectory-aware, doc 18, additive post-cutover). v2 is a separate score, not a blend.** Both live in `protopie_churn_score` discriminated by `config_uuid`.
 2. **Forms system** — Schema-driven Zod forms for sales reps (account touchpoints, renewal status, score overrides). Submissions → `protopie_form_submissions` → dbt source → Redshift marts.
 3. **MCP write tools** — 17 tools total (14 `protopie_*` + 3 `lightdash_*` API bridge) extending the existing read-only `McpService`. `protopie_*` write tools wrap `CoderService` (slug-based, idempotent) and include read-only dbt source tools for `ProtoPie/data-modeling`; `lightdash_api_mutate` calls Lightdash's REST API over HTTP as the MCP user. Gated by `mcp:write` OAuth scope via `requireMcpWrite()` helper + org-level opt-in (`protopie_organization_settings`). Default OFF per org.
 
 **Non-technical stakeholder overview: [`docs/POC.md`](./docs/POC.md)** — explains *what* we're building and *why* for sales leadership, product, finance, and project sponsors. Plain language, no code, no file paths. Covers the idea, what each role gains, timeline, risks, and success criteria. **Not a step-by-step engineering walkthrough.**
 
-**Engineers starting implementation:** Read [`docs/protopie-docs/README.md`](./docs/protopie-docs/README.md) for the index, then the numbered design docs `00–15` in order. Begin with `00-context.md` then `02-isolation-strategy.md`. dbt project is a **separate repo** at `/Users/mamur/Documents/projects/data-modeling` (Amazon Redshift warehouse).
+**Engineers starting implementation:** Read [`docs/protopie-docs/README.md`](./docs/protopie-docs/README.md) for the index, then the numbered design docs `00–18` in order. Begin with `00-context.md` then `02-isolation-strategy.md`. dbt project is a **separate repo** at `/Users/mamur/Documents/projects/data-modeling` (Amazon Redshift warehouse).
 
 ### Implementation phases (hard deadline 2026-07-30)
 
@@ -101,7 +101,7 @@ ALL Protopie code lives under `packages/*/src/protopie/`. Only 7 minimal wire-up
 |---|-----------------|---------------|
 | 1 | `packages/backend/src/App.ts` | `registerProtopieModule()` call |
 | 2 | `packages/backend/knexfile.ts` | Add `src/protopie/database/migrations` directory |
-| 3 | `packages/backend/src/scheduler/SchedulerWorker.ts` | Register `recomputeChurnScore` task |
+| 3 | `packages/backend/src/scheduler/SchedulerWorker.ts` | Register `recomputeChurnScore` task. The EE `CommercialSchedulerWorker` inherits this task via `super.getFullTaskList()`, so no separate EE registration is needed. |
 | 4 | `packages/backend/src/ee/services/McpService/McpService.ts` | `registerProtopieWriteTools(server, deps)` + inject `coderService` |
 | 5 | `packages/common/src/index.ts` | `export * as Protopie from './protopie'` |
 | 6 | `packages/frontend/src/Routes.tsx` | Spread `protopieRoutes` |
@@ -114,7 +114,7 @@ packages/
 ├── backend/src/protopie/    controllers/ services/ models/ database/migrations/ scheduler/ mcp/writeTools/
 ├── common/src/protopie/     forms/schemas/ churn/ mcp/
 └── frontend/src/protopie/   pages/ components/ hooks/ api/
-docs/protopie-docs/          design docs 00–15
+docs/protopie-docs/          design docs 00–17
 ```
 
 Dashboard + chart YAML files live in the **data-modeling repo** at `lightdash/charts/protopie-*.yml` and `lightdash/dashboards/protopie-*.yml`.
@@ -127,11 +127,11 @@ The canonical Account key is **`team_id`** (from `dim_team_summary` in the wareh
 
 - `protopie_form_definitions` — form metadata + JSON schema, versioned; synced from code on startup
 - `protopie_form_submissions` — JSONB payload validated by Zod before insert; `supersedes_submission_uuid` for corrections; extracted join columns: `account_key` (= `team_id`), `cloud_url`, `salesforce_account_id`
-- `protopie_churn_score_configs` — one row per score config version; immutable once `status='active'`; `risk_band_thresholds` JSONB controls band cutoffs
-- `protopie_churn_score_factors` — N factors (weights, goals, event groups as JSONB) per config; FK to `protopie_churn_score_configs`
-- `protopie_churn_score` — daily score per Account per `config_uuid`; `factor_scores` JSONB breakdown inline; unique on `(account_key, scored_for_date, lookback_days, config_uuid)`
+- `protopie_churn_score_configs` — one row per score config version; immutable once `status='active'`; `risk_band_thresholds` JSONB controls band cutoffs **(see doc 17)**
+- `protopie_churn_score_factors` — N factors (weights, goals, event groups as JSONB) per config; FK to `protopie_churn_score_configs` **(see doc 17)**
+- `protopie_churn_score` — daily score per Account per `config_uuid`; stores `total_points` (raw), `max_points`, `score_percent`, and `normalized_score` (0–100, user-facing) so dashboards never re-derive them; `factor_scores` JSONB breakdown inline; unique on `(account_key, scored_for_date, lookback_days, config_uuid)` **(see doc 17)**
 - `protopie_churn_score_factor_results` — optional normalized factor breakdown; defer to v1.1
-- `protopie_churn_score_runs` — audit log per recompute run
+- `protopie_churn_score_runs` — audit log per recompute run **(see doc 17)**
 - `protopie_account_overrides` — force scores / exclusions; `valid_until` for time-bounded overrides
 - `protopie_organization_settings` — org-level MCP write-tools toggle (`mcp_write_tools_enabled`, default FALSE); one row per org
 - `protopie_mcp_audit_log` — every MCP write tool call: `auth_method`, `tool_name`, `input_summary` (slugs only, no full payloads), `outcome`
@@ -180,7 +180,7 @@ dbt build --select +marts.warehouse.protopie
 - **Account key** is `team_id` on all Postgres tables — `cloud_url` is a display/secondary identifier only
 - **Score computation is backend-only** — `ChurnScoreService.recomputeAll()` reads `mart_account_usage_90d` via `WarehouseClient`, applies weights from Postgres config, writes `protopie_churn_score`; never replicate this in dbt SQL
 - **Score history default is "as-was"** — past rows keep their `config_uuid`; backfill is opt-in via admin action, not automatic on weight change
-- **Forms** are code-defined (TypeScript Zod schemas in `packages/common/src/protopie/forms/schemas/`) — no DB-defined forms in v1
+- **Forms** are code-defined (TypeScript Zod schemas in `packages/common/src/protopie/forms/schemas/`) — no DB-defined forms in v1; the placeholder `churnScoreInput.ts` schema in that folder is **deleted in PR 3 (UI)** alongside the rubric editor (churn scoring uses dedicated tables, not the generic forms framework — see doc 17)
 - **Do NOT add custom CASL scopes** in v1 — doing so requires editing `projectMemberAbility.ts`, `roleToScopeMapping.ts`, `serviceAccountAbility.ts`, which violates the isolation rule; use inline role checks in controllers
 - **TSOA** auto-discovers `**/*Controller.ts` globs — Protopie controllers need no extra wiring beyond `pnpm generate-api`
 - **Service injection** — use `getProtopieServices(repository)` typed adapter inside Protopie controllers; do NOT augment Lightdash's `ServiceRepository` type

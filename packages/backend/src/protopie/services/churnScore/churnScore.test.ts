@@ -10,6 +10,18 @@ const factors: Protopie.ChurnScoreFactor[] =
         configUuid: 'config-uuid',
     }));
 
+const factorByKey = (factorKey: string): Protopie.ChurnScoreFactor => {
+    const factor = factors.find(
+        (candidate) => candidate.factorKey === factorKey,
+    );
+
+    if (!factor) {
+        throw new Error(`Missing test factor ${factorKey}`);
+    }
+
+    return factor;
+};
+
 describe('scoreAccount', () => {
     test('returns zero when there are no users or events', () => {
         const result = scoreAccount({
@@ -25,7 +37,7 @@ describe('scoreAccount', () => {
         });
 
         expect(result.totalPoints).toEqual(0);
-        expect(result.maxPoints).toEqual(90);
+        expect(result.maxPoints).toEqual(100);
         expect(result.normalizedScore).toEqual(0);
         expect(result.riskBand).toEqual('high');
     });
@@ -48,11 +60,12 @@ describe('scoreAccount', () => {
                 pct_users_with_ai_feature_usage_users: 5,
                 pct_users_with_trigger_or_response_action_users: 5,
                 trigger_response_actions_per_user_event_count: 200,
+                number_of_messages_received_event_count: 5,
             },
         });
 
-        expect(result.totalPoints).toEqual(90);
-        expect(result.maxPoints).toEqual(90);
+        expect(result.totalPoints).toEqual(100);
+        expect(result.maxPoints).toEqual(100);
         expect(result.scorePercent).toEqual(1);
         expect(result.normalizedScore).toEqual(100);
         expect(result.riskBand).toEqual('low');
@@ -60,7 +73,10 @@ describe('scoreAccount', () => {
 
     test('applies linear partial credit and clamps over-goal factors', () => {
         const result = scoreAccount({
-            factors: [factors[1], factors[8]],
+            factors: [
+                factorByKey('starting_actions_per_user'),
+                factorByKey('active_days'),
+            ],
             thresholds: Protopie.DEFAULT_CHURN_SCORE_RISK_BAND_THRESHOLDS,
             row: {
                 account_key: 'team-1',
@@ -83,7 +99,7 @@ describe('scoreAccount', () => {
         const result = scoreAccount({
             factors: [
                 {
-                    ...factors[8],
+                    ...factorByKey('active_days'),
                     goalValue: 0,
                 },
             ],
@@ -133,6 +149,9 @@ describe('buildAggregationQuery', () => {
             'ea.event_name IN ($1, $2, $3, $4) THEN ea.user_id',
         );
         expect(sql).toContain('ea.event_name IN ($25, $26) THEN 1 ELSE 0 END');
+        expect(sql).toContain(
+            'COALESCE(SUM(CASE WHEN FALSE THEN 1 ELSE 0 END), 0) AS number_of_messages_received_event_count',
+        );
         expect(sql).toContain(
             "COUNT(DISTINCT DATE_TRUNC('day', ea.event_time)) AS active_days",
         );

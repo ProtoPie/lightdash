@@ -51,6 +51,12 @@ const protopieChurnConfigQueryKey = (projectUuid?: string) => [
     projectUuid,
 ];
 
+const protopieChurnConfigVersionsQueryKey = (projectUuid?: string) => [
+    'protopie',
+    'churn-config-versions',
+    projectUuid,
+];
+
 const protopieChurnRunsQueryKey = (projectUuid?: string) => [
     'protopie',
     'churn-runs',
@@ -187,6 +193,17 @@ export const useProtopieChurnConfig = (projectUuid?: string) =>
             }) as Promise<Protopie.ChurnScoreConfigWithFactors>,
     });
 
+export const useProtopieChurnConfigVersions = (projectUuid?: string) =>
+    useQuery<Protopie.ChurnScoreConfig[], ApiError>({
+        queryKey: protopieChurnConfigVersionsQueryKey(projectUuid),
+        enabled: Boolean(projectUuid),
+        queryFn: () =>
+            lightdashApi<AnyType>({
+                method: 'GET',
+                url: `/projects/${projectUuid}/protopie/churn/config/versions`,
+            }) as Promise<Protopie.ChurnScoreConfig[]>,
+    });
+
 export const useUpdateProtopieChurnConfig = (projectUuid?: string) => {
     const queryClient = useQueryClient();
     const { showToastApiError, showToastSuccess } = useToaster();
@@ -207,6 +224,9 @@ export const useUpdateProtopieChurnConfig = (projectUuid?: string) => {
                 queryKey: protopieChurnConfigQueryKey(projectUuid),
             });
             await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigVersionsQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
                 queryKey: protopieChurnScoresQueryKeyBase(projectUuid),
             });
             showToastSuccess({
@@ -216,6 +236,40 @@ export const useUpdateProtopieChurnConfig = (projectUuid?: string) => {
         onError: ({ error }) => {
             showToastApiError({
                 title: 'Failed to save churn rubric',
+                apiError: error,
+            });
+        },
+    });
+};
+
+export const useRestoreProtopieChurnConfigVersion = (projectUuid?: string) => {
+    const queryClient = useQueryClient();
+    const { showToastApiError, showToastSuccess } = useToaster();
+
+    return useMutation<Protopie.ChurnScoreConfigWithFactors, ApiError, string>({
+        mutationFn: (configUuid) =>
+            lightdashApi<AnyType>({
+                method: 'POST',
+                url: `/projects/${projectUuid}/protopie/churn/config/versions/${configUuid}/restore`,
+                body: undefined,
+            }) as Promise<Protopie.ChurnScoreConfigWithFactors>,
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigVersionsQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnScoresQueryKeyBase(projectUuid),
+            });
+            showToastSuccess({
+                title: 'Churn rubric restored',
+            });
+        },
+        onError: ({ error }) => {
+            showToastApiError({
+                title: 'Failed to restore churn rubric',
                 apiError: error,
             });
         },
@@ -281,6 +335,7 @@ export const useProtopieChurnScores = ({
     useQuery<Protopie.ChurnScore[], ApiError>({
         queryKey: protopieChurnScoresQueryKey(projectUuid, filters),
         enabled: Boolean(projectUuid),
+        keepPreviousData: true,
         queryFn: () => {
             const params = new URLSearchParams();
             if (filters?.riskBand) params.set('riskBand', filters.riskBand);

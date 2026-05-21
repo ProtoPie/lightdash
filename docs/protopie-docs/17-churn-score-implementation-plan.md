@@ -1,14 +1,16 @@
-# 17 — Churn Score Service: Implementation Plan (review draft)
+# 17 — Churn Score v1: Implementation Plan (review draft)
 
 > **Status:** implementation started. Backend schema, service/API, scheduler hook, and a minimal rubric/scores UI are in progress from this plan.
 >
-> **Goal:** ship a service that calculates a 0–100 churn score per **enterprise customer** (team), driven by an **editable rubric** that sales can adjust. Manual recompute first; scheduled nightly recompute as the natural next step.
+> **Goal:** ship a v1 churn score that calculates a 0–100 number per **enterprise customer** (team), driven by an **editable rubric** that sales can adjust. Manual recompute first; scheduled nightly recompute as the natural next step.
+>
+> **v1 / v2 context.** This is the **v1** spec — the sales-owned, ChurnZero-equivalent rubric required for the 2026-07-30 cutover. A **v2** trajectory-aware companion score is specified in [18-churn-score-v2-trajectory.md](./18-churn-score-v2-trajectory.md) and ships post-cutover. Both versions coexist in the same `protopie_churn_score` table, discriminated by `config_uuid`; they are **separate scores side-by-side, not blended**.
 
 ---
 
 ## 1. What the Notion page says — formula recap
 
-Sales currently runs a 9-factor weighted score in ChurnZero. From the Notion page tables:
+Sales currently runs a 10-factor weighted score in ChurnZero. From the Notion page tables:
 
 | Weight | Factor name | Goal (per 90 days) | Source events |
 |--------|------------|---------------------|----------------|
@@ -20,8 +22,8 @@ Sales currently runs a 9-factor weighted score in ChurnZero. From the Notion pag
 | 10 | % users with AI feature usage | ≥ 50% | `Studio - AI - Prompt Sent`, `Studio - AI Panel - Panel Toggled` |
 | 15 | % users with Trigger or Response action | ≥ 50% | `Studio - Response Interaction - Added`, `Studio - Trigger Interaction - Added` |
 | 15 | # trigger/response actions per user | ≥ 20 | (same events) |
+| 10 | Number of Messages Received | ≥ 5 | editable event mapping; defaults empty until data source is finalized |
 | 10 | Active days | ≥ 10 | — (any event timestamp counts) |
-| ~~10~~ | ~~Number of Messages Received~~ | ~~5+~~ | struck-through in Notion — excluded |
 | **100** | | | |
 
 **Formula (per factor, linear partial credit):**
@@ -30,11 +32,11 @@ Sales currently runs a 9-factor weighted score in ChurnZero. From the Notion pag
 points_awarded = LEAST(actual_value / goal_value, 1) * max_points
 ```
 
-**Per-Account roll-up. Active factors sum to *90*, not 100** — the struck-through "Number of Messages Received" was worth 10 points and is excluded. We store **two** score values so neither the rubric editor nor downstream dashboards have to reason about which max applies:
+**Per-Account roll-up. Active factors sum to *100*.** We store **two** score values so neither the rubric editor nor downstream dashboards have to reason about which max applies if sales later changes weights:
 
 ```
-total_points     = SUM(points_awarded over active factors)          // raw, 0 → max_points (90 today)
-max_points       = SUM(max_points over active factors)              // 90 today; changes if sales adds factors
+total_points     = SUM(points_awarded over active factors)          // raw, 0 → max_points (100 today)
+max_points       = SUM(max_points over active factors)              // 100 today; changes if sales adds factors
 score_percent    = total_points / max_points                         // 0 → 1
 normalized_score = score_percent * 100                               // 0 → 100, the user-facing number
 risk_band        = CASE
@@ -46,7 +48,7 @@ END
 
 The Notion page's two referenced anchors both reinforce the linear-prorate form (one is the rubric screenshot, one is the "12 events per user → 7 points" example, which is just `LEAST(12 / goal, 1) * weight` in disguise). No step-wise function yet.
 
-> **Weights can sum to any value, not just 90 or 100.** Sales is allowed to add a factor or change a weight that pushes the sum below or above 90. The rubric editor **does not reject** non-100 / non-90 sums — it shows the current `SUM(max_points)` next to the save button and uses that as the normalization denominator. The user-facing `normalized_score` is always 0–100 regardless of how weights drift. See §9.
+> **Weights can sum to any value, not just 100.** Sales is allowed to add a factor or change a weight that pushes the sum below or above 100. The rubric editor **does not reject** non-100 sums — it shows the current `SUM(max_points)` next to the save button and uses that as the normalization denominator. The user-facing `normalized_score` is always 0–100 regardless of how weights drift. See §9.
 
 ---
 
@@ -166,7 +168,7 @@ One row per **score snapshot** per enterprise team. We persist both the raw poin
 | `lookback_days` | int | Snapshotted from the config at compute time. |
 | `config_uuid` | uuid fk → configs (restrict) | |
 | `config_version` | int | Denormalized. |
-| `total_points` | numeric(6,2) | Raw sum of `points_awarded` over active factors. With today's rubric, max is 90. |
+| `total_points` | numeric(6,2) | Raw sum of `points_awarded` over active factors. With today's rubric, max is 100. |
 | `max_points` | numeric(6,2) | Sum of `max_points` over the factors active in this config version. |
 | `score_percent` | numeric(5,4) | `total_points / max_points`. 0..1. |
 | `normalized_score` | numeric(6,2) | `score_percent * 100`. The user-facing 0–100 number. |
@@ -420,8 +422,8 @@ These are additive to the 7 touch points already documented; nothing is replaced
 | Unit (TS) | `scoreAccount(factors, accountRow)` — golden cases: all-zero inputs → `totalPoints=0, normalizedScore=0`; meet-every-goal inputs → `totalPoints=max_points, normalizedScore=100`; mixed inputs → expected mid score; over-goal inputs clamp at the factor max. |
 | Unit (TS) | `scoreAccount` with `goalValue=0` does not divide by zero (clamped to 1e-9). |
 | Unit (TS) | Risk-band derivation from `risk_band_thresholds` JSONB. Custom thresholds (e.g., `{ low: 0.8, medium: 0.6 }`) are honored. |
-| Unit (TS) | `scoreAccount` with weights summing to **anything other than 100** still produces a 0–100 `normalizedScore`. Specifically: today's 9-factor rubric (sum 90) produces `normalizedScore=100` when every factor meets its goal. |
-| Unit (TS) | `upsertConfigAsNewVersion` — version increments correctly; the prior version's `effective_to` is filled; **non-100 / non-90 weight sums are accepted** (only the editor's UI shows a warning); duplicate `factor_key` within the same submit is rejected. |
+| Unit (TS) | `scoreAccount` with weights summing to **anything other than 100** still produces a 0–100 `normalizedScore`. Today's 10-factor rubric produces `normalizedScore=100` when every factor meets its goal. |
+| Unit (TS) | `upsertConfigAsNewVersion` — version increments correctly; the prior version's `effective_to` is filled; **non-100 weight sums are accepted** (only the editor's UI shows a warning); duplicate `factor_key` within the same submit is rejected. |
 | Integration | Fixture Redshift query mocked via `WarehouseClient` test double. Recompute writes the expected rows. |
 | Integration | Async recompute end-to-end: enqueue via HTTP → worker picks up → run transitions queued → running → completed; `GET /runs/:runUuid` reflects each state. |
 | Integration | Re-running recompute the same day overwrites (idempotent on the unique key). |
@@ -432,15 +434,15 @@ These are additive to the 7 touch points already documented; nothing is replaced
 
 ## 10. Resolved questions + still-open items
 
-### Resolved after codex review (2026-05-14)
+### Resolved implementation decisions (2026-05-14)
 
-- **Score is per `team_id`, with `namespace` carried alongside** for enterprise rollups. Documented in §6.4. Codex confirmed per-team is right.
-- **`PUT /config` is atomic create-and-activate** (current plan). Codex did not push back.
-- **Empty event group for `active_days`** stays — semantics carried by the `aggregation` column. Codex confirmed.
+- **Score is per `team_id`, with `namespace` carried alongside** for enterprise rollups. Documented in §6.4.
+- **`PUT /config` is atomic create-and-activate** (current plan).
+- **Empty event group for `active_days`** stays — semantics carried by the `aggregation` column.
 - **`goal_value = 0` clamps to 1e-9** in `scoreAccount` (no divide-by-zero) AND the rubric editor surfaces a warning. The save itself is not rejected.
-- **Non-100 / non-90 weight sums are allowed.** The editor shows the current `SUM(max_points)` next to the save button; the persisted score's `normalizedScore` always renders 0–100 by dividing by the active `max_points`. The earlier "warn" vs "reject" wording is reconciled in §9.
+- **Non-100 weight sums are allowed.** The editor shows the current `SUM(max_points)` next to the save button; the persisted score's `normalizedScore` always renders 0–100 by dividing by the active `max_points`. The earlier "warn" vs "reject" wording is reconciled in §9.
 - **Async recompute** via Graphile Worker job (not synchronous in the HTTP request). §6.2 / §6.3 / §5.
-- **EE scheduler worker** is a touch point — both OSS and EE handler maps register the new task. §8.
+- **EE scheduler worker** inherits the OSS handler map via `super.getFullTaskList()`; no separate EE task registration is needed in the current codebase. §8.
 - **Schema substitution.** No hardcoded `mart.`. Real Redshift schema (`warehouse` / `warehouse_staging`) is read from the project's warehouse connection config. §6.3.
 - **Parameterization strategy.** One placeholder per event; whitelist guard on event names at save time. No reliance on `IN (:array)` expansion. §6.3.
 - **Score model.** Persist both `total_points` (raw) and `normalized_score` (0–100), plus `score_percent` and `max_points`. §4.3, §1.
@@ -456,7 +458,7 @@ These are additive to the 7 touch points already documented; nothing is replaced
 
 ---
 
-## 11. Concrete files to add (so codex can sanity-check the surface)
+## 11. Concrete files to add
 
 ```
 packages/backend/src/protopie/
@@ -481,7 +483,7 @@ packages/backend/src/protopie/
 
 packages/common/src/protopie/churnScore/
 ├── types.ts                                                  ← shared types
-├── constants.ts                                              ← default 9-factor rubric, risk band defaults
+├── constants.ts                                              ← default 10-factor rubric, risk band defaults
 └── index.ts
 
 packages/common/src/types/schedulerTaskList.ts                ← +1 task name + payload
@@ -544,13 +546,13 @@ If sales asks for it, **PR 4** adds the nightly cron line.
 
 ---
 
-## 15. Quick decision summary (after codex review — these are the current commitments)
+## 15. Quick decision summary
 
 - **Dedicated tables (not a generic form)** for the rubric. → §4, §5.
 - **Linear formula only** in v1; schema-reserved for stepwise. → §1, §4.2.
 - **Per-project rubric** rather than org-global. → §4.1.
 - **Persist both `total_points` (raw) and `normalized_score` (0–100)** so weight sums other than 100 don't break dashboards. → §1, §4.3.
-- **Non-100 weight sums are allowed** (today's rubric sums to 90 because "Number of Messages Received" is excluded). The editor warns; the persisted score is always 0–100. → §1, §9, §10.
+- **Non-100 weight sums are allowed.** Today's default rubric sums to 100, but the editor warns instead of blocking if sales changes the total; the persisted score is always 0–100. → §1, §9, §10.
 - **Per-`team_id` grain**, `namespace` carried alongside for enterprise rollups. → §6.4.
 - **Same-day recompute overwrites** the row; `protopie_churn_score_runs` is the audit. → §4.3.
 - **Inline admin check**, no new CASL scopes. → §5.

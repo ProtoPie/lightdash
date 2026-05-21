@@ -18,6 +18,7 @@ import {
 import {
     IconCalculator,
     IconDeviceFloppy,
+    IconHistory,
     IconRefresh,
 } from '@tabler/icons-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -25,8 +26,10 @@ import MantineIcon from '../components/common/MantineIcon';
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import {
     useProtopieChurnConfig,
+    useProtopieChurnConfigVersions,
     useProtopieChurnRun,
     useRecomputeProtopieChurnScore,
+    useRestoreProtopieChurnConfigVersion,
     useUpdateProtopieChurnConfig,
 } from './api';
 import classes from './ProtopieFormsPage.module.css';
@@ -34,12 +37,14 @@ import ProtopieSectionTabs from './ProtopieSectionTabs';
 
 const aggregationOptions = [
     { value: 'pct_users_with_event', label: '% users with event' },
+    { value: 'event_count', label: 'Event count' },
     { value: 'event_count_per_user', label: 'Events per user' },
     { value: 'active_days', label: 'Active days' },
 ];
 
 const goalUnitOptions = [
     { value: 'fraction', label: 'Fraction' },
+    { value: 'count', label: 'Count' },
     { value: 'count_per_user', label: 'Count per user' },
     { value: 'days', label: 'Days' },
 ];
@@ -67,7 +72,9 @@ const parseEvents = (value: string): string[] =>
 const ProtopieChurnScoreRubricPage = () => {
     const projectUuid = useProjectUuid();
     const configQuery = useProtopieChurnConfig(projectUuid);
+    const versionsQuery = useProtopieChurnConfigVersions(projectUuid);
     const updateConfig = useUpdateProtopieChurnConfig(projectUuid);
+    const restoreVersion = useRestoreProtopieChurnConfigVersion(projectUuid);
     const recompute = useRecomputeProtopieChurnScore(projectUuid);
     const [runUuid, setRunUuid] = useState<string | undefined>();
     const runQuery = useProtopieChurnRun({ projectUuid, runUuid });
@@ -78,6 +85,9 @@ const ProtopieChurnScoreRubricPage = () => {
     const [mediumThreshold, setMediumThreshold] = useState(0.5);
     const [factors, setFactors] = useState<Protopie.ChurnScoreFactorInput[]>(
         [],
+    );
+    const [restoreConfigUuid, setRestoreConfigUuid] = useState<string | null>(
+        null,
     );
 
     useEffect(() => {
@@ -119,6 +129,32 @@ const ProtopieChurnScoreRubricPage = () => {
             ),
         [factors],
     );
+
+    const versionOptions = useMemo(
+        () =>
+            (versionsQuery.data ?? [])
+                .filter(
+                    (version) =>
+                        version.configUuid !==
+                        configQuery.data?.config.configUuid,
+                )
+                .map((version) => ({
+                    value: version.configUuid,
+                    label: `v${version.version} (${version.status}) - ${new Date(
+                        version.updatedAt,
+                    ).toLocaleString()}`,
+                })),
+        [configQuery.data?.config.configUuid, versionsQuery.data],
+    );
+
+    useEffect(() => {
+        if (
+            restoreConfigUuid &&
+            !versionOptions.some((option) => option.value === restoreConfigUuid)
+        ) {
+            setRestoreConfigUuid(null);
+        }
+    }, [restoreConfigUuid, versionOptions]);
 
     const updateFactor = (
         index: number,
@@ -378,13 +414,60 @@ const ProtopieChurnScoreRubricPage = () => {
                         </Alert>
                     )}
 
+                    <Stack gap="xs">
+                        <Text fw={600} size="sm">
+                            Version history
+                        </Text>
+                        <Group align="flex-end" wrap="nowrap">
+                            <Select
+                                style={{ flex: 1 }}
+                                label="Previous version"
+                                description="Restoring copies the selected rubric into a new active version."
+                                placeholder={
+                                    versionsQuery.isLoading
+                                        ? 'Loading versions'
+                                        : 'No previous versions yet'
+                                }
+                                disabled={
+                                    versionsQuery.isLoading ||
+                                    versionOptions.length === 0
+                                }
+                                data={versionOptions}
+                                value={restoreConfigUuid}
+                                onChange={setRestoreConfigUuid}
+                            />
+                            <Button
+                                variant="default"
+                                leftSection={<MantineIcon icon={IconHistory} />}
+                                loading={restoreVersion.isLoading}
+                                disabled={!restoreConfigUuid}
+                                onClick={() => {
+                                    if (!restoreConfigUuid) return;
+
+                                    restoreVersion.mutate(restoreConfigUuid, {
+                                        onSuccess: () =>
+                                            setRestoreConfigUuid(null),
+                                    });
+                                }}
+                            >
+                                Restore as new version
+                            </Button>
+                        </Group>
+                    </Stack>
+
+                    {restoreVersion.error && (
+                        <Alert color="red" title="Restore failed">
+                            {restoreVersion.error.error.message}
+                        </Alert>
+                    )}
+
                     <Group justify="flex-end">
                         <Button
                             variant="default"
                             leftSection={<MantineIcon icon={IconRefresh} />}
                             onClick={() => void configQuery.refetch()}
                         >
-                            Reset
+                            Reset unsaved changes
                         </Button>
                         <Button
                             variant="default"

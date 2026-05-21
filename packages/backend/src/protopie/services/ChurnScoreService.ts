@@ -158,6 +158,75 @@ export class ChurnScoreService extends BaseService {
         });
     }
 
+    async restoreConfigVersion({
+        projectUuid,
+        configUuid,
+        user,
+    }: {
+        projectUuid: string;
+        configUuid: string;
+        user: SessionUser;
+    }): Promise<Protopie.ChurnScoreConfigWithFactors> {
+        this.requireProjectManage(user, projectUuid);
+
+        return this.database.transaction(async (trx) => {
+            const sourceConfig = await this.churnScoreConfigModel.getByUuid({
+                configUuid,
+                trx,
+            });
+
+            if (!sourceConfig || sourceConfig.projectUuid !== projectUuid) {
+                throw new NotFoundError(
+                    `Churn score config ${configUuid} was not found.`,
+                );
+            }
+
+            const sourceFactors =
+                await this.churnScoreFactorModel.listByConfigUuid({
+                    configUuid: sourceConfig.configUuid,
+                    trx,
+                });
+
+            if (sourceConfig.status === 'active') {
+                return {
+                    config: sourceConfig,
+                    factors: sourceFactors,
+                };
+            }
+
+            const version = await this.churnScoreConfigModel.getNextVersion({
+                projectUuid,
+                name: sourceConfig.name,
+                trx,
+            });
+
+            await this.churnScoreConfigModel.archiveActive({
+                projectUuid,
+                name: sourceConfig.name,
+                userUuid: user.userUuid,
+                trx,
+            });
+
+            const config = await this.churnScoreConfigModel.insertConfig({
+                projectUuid,
+                name: sourceConfig.name,
+                version,
+                lookbackDays: sourceConfig.lookbackDays,
+                scoreFunction: sourceConfig.scoreFunction,
+                riskBandThresholds: sourceConfig.riskBandThresholds,
+                userUuid: user.userUuid,
+                trx,
+            });
+            const factors = await this.churnScoreFactorModel.insertFactors({
+                configUuid: config.configUuid,
+                factors: sourceFactors.map(ChurnScoreService.toFactorInput),
+                trx,
+            });
+
+            return { config, factors };
+        });
+    }
+
     async enqueueRecompute({
         projectUuid,
         user,
@@ -453,6 +522,22 @@ export class ChurnScoreService extends BaseService {
         throw new ParameterError(
             'Churn score requires a warehouse connection with a schema.',
         );
+    }
+
+    private static toFactorInput(
+        factor: ProtopieChurnScoreFactorRecord,
+    ): Protopie.ChurnScoreFactorInput {
+        return {
+            factorKey: factor.factorKey,
+            label: factor.label,
+            maxPoints: factor.maxPoints,
+            goalValue: factor.goalValue,
+            goalUnit: factor.goalUnit,
+            aggregation: factor.aggregation,
+            eventGroup: factor.eventGroup,
+            stepThresholds: factor.stepThresholds ?? null,
+            sortOrder: factor.sortOrder,
+        };
     }
 
     private requireProjectView(user: SessionUser, projectUuid: string): void {

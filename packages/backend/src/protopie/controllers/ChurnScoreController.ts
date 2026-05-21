@@ -104,6 +104,38 @@ export class ProtopieChurnScoreController extends BaseController {
     }
 
     /**
+     * Restore a previous churn score rubric version as a new active version.
+     * @summary Restore Protopie churn score rubric version
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Post('config/versions/{configUuid}/restore')
+    @OperationId('RestoreProtopieChurnScoreConfigVersion')
+    async restoreVersion(
+        @Path() projectUuid: string,
+        @Path() configUuid: string,
+        @Request() req: express.Request,
+    ): Promise<ApiChurnScoreConfigResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: await getProtopieServices(
+                this.services,
+            ).churnScoreService.restoreConfigVersion({
+                projectUuid,
+                configUuid,
+                user: toSessionUser(req.account),
+            }),
+        };
+    }
+
+    /**
      * Save edited churn score factors as a new active rubric version.
      * @summary Update Protopie churn score rubric
      */

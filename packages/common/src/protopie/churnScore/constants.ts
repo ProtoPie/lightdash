@@ -154,6 +154,20 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
         sortOrder: 80,
     },
     {
+        factorKey: 'number_of_messages_received',
+        label: 'Number of Messages Received',
+        maxPoints: 10,
+        goalValue: 5,
+        goalUnit: 'count',
+        aggregation: 'event_count',
+        eventGroup: {
+            operator: 'or',
+            events: [],
+        },
+        stepThresholds: null,
+        sortOrder: 90,
+    },
+    {
         factorKey: 'active_days',
         label: 'Active days',
         maxPoints: 10,
@@ -165,6 +179,6 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
             events: [],
         },
         stepThresholds: null,
-        sortOrder: 90,
+        sortOrder: 100,
     },
 ];

@@ -47,6 +47,8 @@ const actualForFactor = ({
             return totalUsers > 0
                 ? numberValue(row[`${factor.factorKey}_users`]) / totalUsers
                 : 0;
+        case 'event_count':
+            return numberValue(row[`${factor.factorKey}_event_count`]);
         case 'event_count_per_user':
             return totalUsers > 0
                 ? numberValue(row[`${factor.factorKey}_event_count`]) /

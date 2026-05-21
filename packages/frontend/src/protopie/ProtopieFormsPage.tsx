@@ -12,7 +12,6 @@ import {
     Stack,
     Switch,
     Table,
-    Tabs,
     Text,
     TextInput,
     Textarea,
@@ -29,6 +28,8 @@ import {
 } from './api';
 import classes from './ProtopieFormsPage.module.css';
 import ProtopieSectionTabs from './ProtopieSectionTabs';
+
+const CHURN_SCORE_FORM_KEY = 'churn_score_input';
 
 const normalizePayload = (
     form: Protopie.ProtopieClientFormDefinition,
@@ -62,7 +63,7 @@ const normalizePayload = (
     }, {});
 
 const getInitialValues = (
-    form?: Protopie.ProtopieClientFormDefinition,
+    form?: Protopie.ProtopieClientFormDefinition | null,
 ): Record<string, unknown> =>
     form?.fields.reduce<Record<string, unknown>>((values, field) => {
         values[field.key] = field.type === 'switch' ? false : '';
@@ -143,13 +144,12 @@ const DynamicField = ({
 const ProtopieFormsPage = () => {
     const projectUuid = useProjectUuid();
     const schemas = useProtopieFormSchemas(projectUuid);
-    const [activeFormKey, setActiveFormKey] = useState<string | null>(null);
 
     const activeForm = useMemo(
         () =>
-            schemas.data?.find((form) => form.key === activeFormKey) ??
-            schemas.data?.[0],
-        [activeFormKey, schemas.data],
+            schemas.data?.find((form) => form.key === CHURN_SCORE_FORM_KEY) ??
+            null,
+        [schemas.data],
     );
     const submissions = useProtopieFormSubmissions({
         projectUuid,
@@ -160,12 +160,6 @@ const ProtopieFormsPage = () => {
         formKey: activeForm?.key,
     });
     const [values, setValues] = useState<Record<string, unknown>>({});
-
-    useEffect(() => {
-        if (schemas.data?.length && !activeFormKey) {
-            setActiveFormKey(schemas.data[0].key);
-        }
-    }, [activeFormKey, schemas.data]);
 
     useEffect(() => {
         setValues(getInitialValues(activeForm));
@@ -180,14 +174,14 @@ const ProtopieFormsPage = () => {
         return (
             <Group className={classes.page}>
                 <Loader size="sm" />
-                <Text c="dimmed">Loading forms</Text>
+                <Text c="dimmed">Loading churn input</Text>
             </Group>
         );
     }
 
     if (schemas.error) {
         return (
-            <Alert color="red" title="Forms could not load">
+            <Alert color="red" title="Churn input could not load">
                 {schemas.error.error.message}
             </Alert>
         );
@@ -198,7 +192,7 @@ const ProtopieFormsPage = () => {
             <Stack className={classes.section} gap="xs">
                 <Group justify="space-between" align="flex-start">
                     <Stack gap={4}>
-                        <Title order={3}>Protopie forms</Title>
+                        <Title order={3}>Churn input</Title>
                         <Text c="dimmed" size="sm">
                             Submit sales-owned account context into Lightdash.
                         </Text>
@@ -214,19 +208,17 @@ const ProtopieFormsPage = () => {
                 </Group>
 
                 <ProtopieSectionTabs />
-
-                <Tabs value={activeForm?.key} onChange={setActiveFormKey}>
-                    <Tabs.List>
-                        {schemas.data?.map((form) => (
-                            <Tabs.Tab key={form.key} value={form.key}>
-                                {form.title}
-                            </Tabs.Tab>
-                        ))}
-                    </Tabs.List>
-                </Tabs>
             </Stack>
 
-            {activeForm && (
+            {!activeForm ? (
+                <Alert
+                    color="yellow"
+                    title="Churn input form is not configured"
+                >
+                    The churn score input schema was not returned by the
+                    backend.
+                </Alert>
+            ) : (
                 <Grid className={classes.section} gutter="lg">
                     <Grid.Col span={{ base: 12, md: 5 }}>
                         <Card withBorder className={classes.formPanel}>

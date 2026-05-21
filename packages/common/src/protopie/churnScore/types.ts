@@ -1,7 +1,12 @@
-export type ChurnScoreGoalUnit = 'fraction' | 'count_per_user' | 'days';
+export type ChurnScoreGoalUnit =
+    | 'fraction'
+    | 'count'
+    | 'count_per_user'
+    | 'days';
 
 export type ChurnScoreAggregation =
     | 'pct_users_with_event'
+    | 'event_count'
     | 'event_count_per_user'
     | 'active_days';
 

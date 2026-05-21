@@ -2,6 +2,7 @@ import { type Protopie } from '@lightdash/common';
 import {
     Alert,
     Badge,
+    Button,
     Card,
     Group,
     Loader,
@@ -12,9 +13,11 @@ import {
     TextInput,
     Title,
 } from '@mantine-8/core';
-import { useMemo, useState } from 'react';
+import { useDebouncedValue } from '@mantine-8/hooks';
+import { useEffect, useMemo, useState } from 'react';
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import { useProtopieChurnScores } from './api';
+import ProtopieChurnScoreMethodCards from './ProtopieChurnScoreMethodCards';
 import classes from './ProtopieFormsPage.module.css';
 import ProtopieSectionTabs from './ProtopieSectionTabs';
 
@@ -24,22 +27,38 @@ const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
     high: 'red',
 };
 
+const DEFAULT_PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = ['25', '50', '100', '200'];
+
 const ProtopieChurnScoresPage = () => {
     const projectUuid = useProjectUuid();
     const [riskBand, setRiskBand] =
         useState<Protopie.ChurnScoreRiskBand | null>(null);
     const [namespace, setNamespace] = useState('');
+    const [debouncedNamespace] = useDebouncedValue(namespace, 300);
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(String(DEFAULT_PAGE_SIZE));
+    const numericPageSize = Number(pageSize);
+
+    useEffect(() => {
+        setPage(1);
+    }, [debouncedNamespace, numericPageSize, riskBand]);
+
     const filters = useMemo<Protopie.ChurnScoreLatestFilters>(
         () => ({
             riskBand: riskBand ?? undefined,
-            namespace: namespace || undefined,
-            limit: 200,
+            namespace: debouncedNamespace.trim() || undefined,
+            limit: numericPageSize,
+            offset: (page - 1) * numericPageSize,
         }),
-        [namespace, riskBand],
+        [debouncedNamespace, numericPageSize, page, riskBand],
     );
     const scores = useProtopieChurnScores({ projectUuid, filters });
+    const rows = scores.data ?? [];
+    const hasPreviousPage = page > 1;
+    const hasNextPage = rows.length === numericPageSize;
 
-    if (scores.isLoading) {
+    if (scores.isLoading && !scores.data) {
         return (
             <Group className={classes.page}>
                 <Loader size="sm" />
@@ -61,32 +80,38 @@ const ProtopieChurnScoresPage = () => {
             <Stack className={classes.section} gap="xs">
                 <Group justify="space-between" align="flex-start">
                     <Stack gap={4}>
-                        <Title order={3}>Churn scores</Title>
+                        <Title order={3}>Churn score v1</Title>
                         <Text c="dimmed" size="sm">
-                            Latest enterprise-team scores for the active rubric.
+                            Latest enterprise-team scores for the active Notion
+                            rubric.
                         </Text>
                     </Stack>
-                    <Badge variant="light">{scores.data?.length ?? 0}</Badge>
+                    <Badge variant="light">{rows.length}</Badge>
                 </Group>
 
                 <ProtopieSectionTabs />
             </Stack>
+
+            <ProtopieChurnScoreMethodCards variant="v1" />
 
             <Card withBorder className={classes.formPanel}>
                 <Stack gap="md">
                     <Group grow>
                         <Select
                             label="Risk band"
-                            clearable
+                            allowDeselect={false}
                             data={[
+                                { value: 'all', label: 'All' },
                                 { value: 'high', label: 'High' },
                                 { value: 'medium', label: 'Medium' },
                                 { value: 'low', label: 'Low' },
                             ]}
-                            value={riskBand}
+                            value={riskBand ?? 'all'}
                             onChange={(value) =>
                                 setRiskBand(
-                                    value as Protopie.ChurnScoreRiskBand | null,
+                                    value === 'all'
+                                        ? null
+                                        : (value as Protopie.ChurnScoreRiskBand),
                                 )
                             }
                         />
@@ -95,6 +120,15 @@ const ProtopieChurnScoresPage = () => {
                             value={namespace}
                             onChange={(event) =>
                                 setNamespace(event.currentTarget.value)
+                            }
+                        />
+                        <Select
+                            label="Rows"
+                            allowDeselect={false}
+                            data={PAGE_SIZE_OPTIONS}
+                            value={pageSize}
+                            onChange={(value) =>
+                                setPageSize(value ?? String(DEFAULT_PAGE_SIZE))
                             }
                         />
                     </Group>
@@ -112,7 +146,7 @@ const ProtopieChurnScoresPage = () => {
                                 </Table.Tr>
                             </Table.Thead>
                             <Table.Tbody>
-                                {scores.data?.map((score) => (
+                                {rows.map((score) => (
                                     <Table.Tr key={score.scoreUuid}>
                                         <Table.Td>
                                             <Text size="sm">
@@ -166,6 +200,37 @@ const ProtopieChurnScoresPage = () => {
                             </Table.Tbody>
                         </Table>
                     </Table.ScrollContainer>
+
+                    <Group justify="space-between">
+                        <Text size="sm" c="dimmed">
+                            Page {page} · Showing {rows.length} scores
+                            {scores.isFetching ? ' · Refreshing' : ''}
+                        </Text>
+                        <Group gap="xs">
+                            <Button
+                                variant="default"
+                                size="xs"
+                                disabled={!hasPreviousPage || scores.isFetching}
+                                onClick={() =>
+                                    setPage((currentPage) =>
+                                        Math.max(currentPage - 1, 1),
+                                    )
+                                }
+                            >
+                                Previous
+                            </Button>
+                            <Button
+                                variant="default"
+                                size="xs"
+                                disabled={!hasNextPage || scores.isFetching}
+                                onClick={() =>
+                                    setPage((currentPage) => currentPage + 1)
+                                }
+                            >
+                                Next
+                            </Button>
+                        </Group>
+                    </Group>
                 </Stack>
             </Card>
         </Stack>

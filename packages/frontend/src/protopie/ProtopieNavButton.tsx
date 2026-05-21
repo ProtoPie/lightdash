@@ -21,7 +21,7 @@ export const ProtopieNavButton: FC<Props> = ({ projectUuid }) => {
             }
             onClick={() => navigate(`/projects/${projectUuid}/protopie/forms`)}
         >
-            Forms
+            Churn
         </Button>
     );
 };

@@ -77,6 +77,13 @@ export const buildAggregationQuery = ({
             return;
         }
 
+        if (factor.aggregation === 'event_count') {
+            metricExpressions.push(
+                `COALESCE(SUM(CASE WHEN ${predicate} THEN 1 ELSE 0 END), 0) AS ${factor.factorKey}_event_count`,
+            );
+            return;
+        }
+
         if (factor.aggregation === 'event_count_per_user') {
             metricExpressions.push(
                 `COALESCE(SUM(CASE WHEN ${predicate} THEN 1 ELSE 0 END), 0) AS ${factor.factorKey}_event_count`,
