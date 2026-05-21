@@ -12,18 +12,13 @@ const ProtopieSectionTabs: FC = () => {
         ? 'scores-v2'
         : location.pathname.includes('/protopie/churn/scores')
           ? 'scores-v1'
-          : location.pathname.includes('/protopie/churn/rubric')
-            ? 'rubric'
-            : 'input';
+          : 'rubric';
 
     return (
         <Tabs
             value={value}
             onChange={(nextValue) => {
                 if (!nextValue) return;
-                if (nextValue === 'input') {
-                    void navigate(`/projects/${projectUuid}/protopie/forms`);
-                }
                 if (nextValue === 'rubric') {
                     void navigate(
                         `/projects/${projectUuid}/protopie/churn/rubric`,
@@ -42,7 +37,6 @@ const ProtopieSectionTabs: FC = () => {
             }}
         >
             <Tabs.List>
-                <Tabs.Tab value="input">Input</Tabs.Tab>
                 <Tabs.Tab value="rubric">Rubric</Tabs.Tab>
                 <Tabs.Tab value="scores-v1">Scores v1</Tabs.Tab>
                 <Tabs.Tab value="scores-v2">Scores v2</Tabs.Tab>

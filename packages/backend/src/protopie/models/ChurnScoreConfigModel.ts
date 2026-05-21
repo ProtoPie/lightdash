@@ -65,6 +65,22 @@ export class ChurnScoreConfigModel {
         return row ? ChurnScoreConfigModel.toRecord(row) : undefined;
     }
 
+    async listActiveConfigs({
+        projectUuid,
+    }: {
+        projectUuid: string;
+    }): Promise<ProtopieChurnScoreConfigRecord[]> {
+        const rows = await this.query()
+            .where({
+                project_uuid: projectUuid,
+                status: 'active',
+            })
+            .whereNull('effective_to')
+            .orderBy('name', 'asc');
+
+        return rows.map((row) => ChurnScoreConfigModel.toRecord(row));
+    }
+
     async listVersions({
         projectUuid,
         name = Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME,

@@ -1,31 +1,39 @@
-import { type Protopie } from '@lightdash/common';
+import { subject } from '@casl/ability';
+import { Protopie } from '@lightdash/common';
 import {
+    ActionIcon,
     Alert,
     Badge,
     Button,
     Card,
     Group,
     Loader,
+    MultiSelect,
     NumberInput,
     Select,
     Stack,
     Table,
     Text,
-    Textarea,
     TextInput,
     Title,
 } from '@mantine-8/core';
+import { useDebouncedValue } from '@mantine-8/hooks';
 import {
     IconCalculator,
     IconDeviceFloppy,
     IconHistory,
+    IconPlus,
     IconRefresh,
+    IconTrash,
 } from '@tabler/icons-react';
 import { useEffect, useMemo, useState } from 'react';
 import MantineIcon from '../components/common/MantineIcon';
 import { useProjectUuid } from '../hooks/useProjectUuid';
+import useApp from '../providers/App/useApp';
 import {
     useProtopieChurnConfig,
+    useProtopieChurnConfigs,
+    useProtopieChurnEvents,
     useProtopieChurnConfigVersions,
     useProtopieChurnRun,
     useRecomputeProtopieChurnScore,
@@ -49,6 +57,10 @@ const goalUnitOptions = [
     { value: 'days', label: 'Days' },
 ];
 
+const DEFAULT_CONFIG_NAME = Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME;
+const POINT_TOTAL = 100;
+const POINT_TOTAL_TOLERANCE = 0.000001;
+
 const toFactorInput = (
     factor: Protopie.ChurnScoreFactor,
 ): Protopie.ChurnScoreFactorInput => ({
@@ -63,29 +75,36 @@ const toFactorInput = (
     sortOrder: factor.sortOrder,
 });
 
-const parseEvents = (value: string): string[] =>
-    value
-        .split(/\n|,/)
-        .map((eventName) => eventName.trim())
-        .filter(Boolean);
-
 const ProtopieChurnScoreRubricPage = () => {
     const projectUuid = useProjectUuid();
-    const configQuery = useProtopieChurnConfig(projectUuid);
-    const versionsQuery = useProtopieChurnConfigVersions(projectUuid);
+    const { user } = useApp();
+    const [selectedConfigName, setSelectedConfigName] =
+        useState(DEFAULT_CONFIG_NAME);
+    const [eventSearch, setEventSearch] = useState('');
+    const [debouncedEventSearch] = useDebouncedValue(eventSearch, 300);
+    const configsQuery = useProtopieChurnConfigs(projectUuid);
+    const configQuery = useProtopieChurnConfig(projectUuid, selectedConfigName);
+    const versionsQuery = useProtopieChurnConfigVersions(
+        projectUuid,
+        selectedConfigName,
+    );
+    const eventsQuery = useProtopieChurnEvents({
+        projectUuid,
+        search: debouncedEventSearch,
+    });
     const updateConfig = useUpdateProtopieChurnConfig(projectUuid);
     const restoreVersion = useRestoreProtopieChurnConfigVersion(projectUuid);
     const recompute = useRecomputeProtopieChurnScore(projectUuid);
     const [runUuid, setRunUuid] = useState<string | undefined>();
     const runQuery = useProtopieChurnRun({ projectUuid, runUuid });
 
-    const [name, setName] = useState('');
     const [lookbackDays, setLookbackDays] = useState(90);
     const [lowThreshold, setLowThreshold] = useState(0.75);
     const [mediumThreshold, setMediumThreshold] = useState(0.5);
     const [factors, setFactors] = useState<Protopie.ChurnScoreFactorInput[]>(
         [],
     );
+    const [newRubricName, setNewRubricName] = useState('');
     const [restoreConfigUuid, setRestoreConfigUuid] = useState<string | null>(
         null,
     );
@@ -93,7 +112,6 @@ const ProtopieChurnScoreRubricPage = () => {
     useEffect(() => {
         if (!configQuery.data) return;
 
-        setName(configQuery.data.config.name);
         setLookbackDays(configQuery.data.config.lookbackDays);
         setLowThreshold(configQuery.data.config.riskBandThresholds.low);
         setMediumThreshold(configQuery.data.config.riskBandThresholds.medium);
@@ -129,6 +147,47 @@ const ProtopieChurnScoreRubricPage = () => {
             ),
         [factors],
     );
+    const name = configQuery.data?.config.name ?? selectedConfigName;
+    const totalPointsInvalid =
+        Math.abs(totalPoints - POINT_TOTAL) > POINT_TOTAL_TOLERANCE;
+
+    const configOptions = useMemo(() => {
+        const configs = configsQuery.data ?? [];
+        const fallback = configQuery.data?.config;
+        const allConfigs = fallback
+            ? [
+                  ...configs,
+                  ...(configs.some(
+                      (config) => config.configUuid === fallback.configUuid,
+                  )
+                      ? []
+                      : [fallback]),
+              ]
+            : configs;
+
+        return allConfigs.map((config) => ({
+            value: config.name,
+            label: `${config.name} (v${config.version})`,
+        }));
+    }, [configQuery.data?.config, configsQuery.data]);
+
+    const eventOptions = useMemo(() => {
+        const existingEvents = factors.flatMap(
+            (factor) => factor.eventGroup.events,
+        );
+        const eventNames = new Set<string>([
+            ...(eventsQuery.data ?? []),
+            ...existingEvents,
+        ]);
+
+        return [...eventNames]
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b))
+            .map((eventName) => ({
+                value: eventName,
+                label: eventName,
+            }));
+    }, [eventsQuery.data, factors]);
 
     const versionOptions = useMemo(
         () =>
@@ -167,10 +226,82 @@ const ProtopieChurnScoreRubricPage = () => {
         );
     };
 
+    const addFactor = () => {
+        setFactors((currentFactors) => {
+            const keys = new Set(
+                currentFactors.map((factor) => factor.factorKey),
+            );
+            let index = 1;
+            while (keys.has(`custom_factor_${index}`)) {
+                index += 1;
+            }
+
+            return [
+                ...currentFactors,
+                {
+                    factorKey: `custom_factor_${index}`,
+                    label: `Custom factor ${index}`,
+                    maxPoints: 0,
+                    goalValue: 1,
+                    goalUnit: 'count',
+                    aggregation: 'event_count',
+                    eventGroup: {
+                        operator: 'or',
+                        events: [],
+                    },
+                    stepThresholds: null,
+                    sortOrder:
+                        Math.max(
+                            0,
+                            ...currentFactors.map((factor) => factor.sortOrder),
+                        ) + 10,
+                },
+            ];
+        });
+    };
+
+    const removeFactor = (index: number) => {
+        setFactors((currentFactors) =>
+            currentFactors
+                .filter((_, factorIndex) => factorIndex !== index)
+                .map((factor, factorIndex) => ({
+                    ...factor,
+                    sortOrder: (factorIndex + 1) * 10,
+                })),
+        );
+    };
+
     const thresholdsInvalid = lowThreshold <= mediumThreshold;
+    const rubricInvalid = thresholdsInvalid || totalPointsInvalid;
+    const isDefaultRubric = name === DEFAULT_CONFIG_NAME;
+    const canManageProject =
+        (user.data?.ability?.can(
+            'manage',
+            subject('Project', {
+                organizationUuid: user.data.organizationUuid,
+                projectUuid,
+            }),
+        ) ||
+            user.data?.ability?.can(
+                'manage',
+                subject('Organization', {
+                    organizationUuid: user.data?.organizationUuid,
+                }),
+            )) ??
+        false;
+    const defaultRubricBlocked = isDefaultRubric && !canManageProject;
+    const trimmedNewRubricName = newRubricName.trim();
+    const visibleRubricNameExists = (configsQuery.data ?? []).some(
+        (config) =>
+            config.name.toLowerCase() === trimmedNewRubricName.toLowerCase(),
+    );
+    const canCreateRubric =
+        trimmedNewRubricName.length > 0 &&
+        trimmedNewRubricName !== DEFAULT_CONFIG_NAME &&
+        !visibleRubricNameExists;
 
     const handleSave = () => {
-        if (thresholdsInvalid) {
+        if (rubricInvalid) {
             return;
         }
 
@@ -184,6 +315,31 @@ const ProtopieChurnScoreRubricPage = () => {
             },
             factors,
         });
+    };
+
+    const handleCreateRubric = () => {
+        if (!canCreateRubric || rubricInvalid) {
+            return;
+        }
+
+        updateConfig.mutate(
+            {
+                name: trimmedNewRubricName,
+                lookbackDays,
+                scoreFunction: 'linear',
+                riskBandThresholds: {
+                    low: lowThreshold,
+                    medium: mediumThreshold,
+                },
+                factors,
+            },
+            {
+                onSuccess: (response) => {
+                    setSelectedConfigName(response.config.name);
+                    setNewRubricName('');
+                },
+            },
+        );
     };
 
     if (configQuery.isLoading) {
@@ -210,15 +366,23 @@ const ProtopieChurnScoreRubricPage = () => {
                     <Stack gap={4}>
                         <Title order={3}>Churn score rubric</Title>
                         <Text c="dimmed" size="sm">
-                            Edit factor weights and goals used by the churn
-                            score worker.
+                            Select the shared default rubric or create your own
+                            rubric, then compute scores from that version.
                         </Text>
                     </Stack>
                     <Group>
+                        {isDefaultRubric && (
+                            <Badge variant="outline">
+                                Admin-managed default
+                            </Badge>
+                        )}
                         <Badge variant="light">
                             v{configQuery.data?.config.version}
                         </Badge>
-                        <Badge variant="outline">
+                        <Badge
+                            variant="outline"
+                            color={totalPointsInvalid ? 'red' : undefined}
+                        >
                             Max points {totalPoints.toFixed(2)}
                         </Badge>
                     </Group>
@@ -230,13 +394,42 @@ const ProtopieChurnScoreRubricPage = () => {
             <Card withBorder className={classes.formPanel}>
                 <Stack gap="md">
                     <Group grow align="flex-end">
+                        <Select
+                            label="Rubric"
+                            allowDeselect={false}
+                            data={configOptions}
+                            value={selectedConfigName}
+                            onChange={(value) => {
+                                setSelectedConfigName(
+                                    value ?? DEFAULT_CONFIG_NAME,
+                                );
+                                setRestoreConfigUuid(null);
+                            }}
+                        />
                         <TextInput
-                            label="Rubric name"
-                            value={name}
+                            label="New custom rubric"
+                            placeholder="Example: EMEA renewal rubric"
+                            value={newRubricName}
+                            error={
+                                visibleRubricNameExists
+                                    ? 'Name already exists'
+                                    : undefined
+                            }
                             onChange={(event) =>
-                                setName(event.currentTarget.value)
+                                setNewRubricName(event.currentTarget.value)
                             }
                         />
+                        <Button
+                            variant="default"
+                            disabled={!canCreateRubric || rubricInvalid}
+                            loading={updateConfig.isLoading}
+                            onClick={handleCreateRubric}
+                        >
+                            Save edits as custom rubric
+                        </Button>
+                    </Group>
+
+                    <Group grow align="flex-end">
                         <NumberInput
                             label="Lookback days"
                             min={1}
@@ -277,7 +470,17 @@ const ProtopieChurnScoreRubricPage = () => {
                         />
                     </Group>
 
-                    <Table.ScrollContainer minWidth={1200}>
+                    <Group justify="flex-end">
+                        <Button
+                            variant="default"
+                            leftSection={<MantineIcon icon={IconPlus} />}
+                            onClick={addFactor}
+                        >
+                            Add factor
+                        </Button>
+                    </Group>
+
+                    <Table.ScrollContainer minWidth={1300}>
                         <Table verticalSpacing="sm">
                             <Table.Thead>
                                 <Table.Tr>
@@ -287,11 +490,12 @@ const ProtopieChurnScoreRubricPage = () => {
                                     <Table.Th>Unit</Table.Th>
                                     <Table.Th>Aggregation</Table.Th>
                                     <Table.Th>Events</Table.Th>
+                                    <Table.Th>Actions</Table.Th>
                                 </Table.Tr>
                             </Table.Thead>
                             <Table.Tbody>
                                 {factors.map((factor, index) => (
-                                    <Table.Tr key={factor.factorKey}>
+                                    <Table.Tr key={index}>
                                         <Table.Td>
                                             <TextInput
                                                 value={factor.label}
@@ -304,9 +508,19 @@ const ProtopieChurnScoreRubricPage = () => {
                                                     })
                                                 }
                                             />
-                                            <Text size="xs" c="dimmed">
-                                                {factor.factorKey}
-                                            </Text>
+                                            <TextInput
+                                                mt="xs"
+                                                size="xs"
+                                                value={factor.factorKey}
+                                                onChange={(event) =>
+                                                    updateFactor(index, {
+                                                        ...factor,
+                                                        factorKey:
+                                                            event.currentTarget
+                                                                .value,
+                                                    })
+                                                }
+                                            />
                                         </Table.Td>
                                         <Table.Td>
                                             <NumberInput
@@ -361,30 +575,48 @@ const ProtopieChurnScoreRubricPage = () => {
                                             />
                                         </Table.Td>
                                         <Table.Td>
-                                            <Textarea
-                                                minRows={2}
-                                                autosize
+                                            <MultiSelect
+                                                searchable
+                                                clearable
+                                                data={eventOptions}
+                                                searchValue={eventSearch}
+                                                onSearchChange={setEventSearch}
+                                                placeholder={
+                                                    factor.aggregation ===
+                                                    'active_days'
+                                                        ? 'Not used'
+                                                        : eventsQuery.isLoading
+                                                          ? 'Loading events'
+                                                          : 'Select events'
+                                                }
                                                 disabled={
                                                     factor.aggregation ===
                                                     'active_days'
                                                 }
-                                                value={factor.eventGroup.events.join(
-                                                    '\n',
-                                                )}
-                                                onChange={(event) =>
+                                                value={factor.eventGroup.events}
+                                                onChange={(events) =>
                                                     updateFactor(index, {
                                                         ...factor,
                                                         eventGroup: {
                                                             operator: 'or',
-                                                            events: parseEvents(
-                                                                event
-                                                                    .currentTarget
-                                                                    .value,
-                                                            ),
+                                                            events,
                                                         },
                                                     })
                                                 }
                                             />
+                                        </Table.Td>
+                                        <Table.Td>
+                                            <ActionIcon
+                                                variant="subtle"
+                                                color="red"
+                                                aria-label="Remove factor"
+                                                disabled={factors.length <= 1}
+                                                onClick={() =>
+                                                    removeFactor(index)
+                                                }
+                                            >
+                                                <MantineIcon icon={IconTrash} />
+                                            </ActionIcon>
                                         </Table.Td>
                                     </Table.Tr>
                                 ))}
@@ -395,6 +627,20 @@ const ProtopieChurnScoreRubricPage = () => {
                     {updateConfig.error && (
                         <Alert color="red" title="Save failed">
                             {updateConfig.error.error.message}
+                        </Alert>
+                    )}
+
+                    {totalPointsInvalid && (
+                        <Alert color="red" title="Weights must total 100">
+                            Current total is {totalPoints.toFixed(2)}.
+                        </Alert>
+                    )}
+
+                    {defaultRubricBlocked && (
+                        <Alert color="blue" title="Default rubric is shared">
+                            Only project or organization admins can save new
+                            default rubric versions. Create a custom rubric to
+                            test your own weights.
                         </Alert>
                     )}
 
@@ -440,7 +686,9 @@ const ProtopieChurnScoreRubricPage = () => {
                                 variant="default"
                                 leftSection={<MantineIcon icon={IconHistory} />}
                                 loading={restoreVersion.isLoading}
-                                disabled={!restoreConfigUuid}
+                                disabled={
+                                    !restoreConfigUuid || defaultRubricBlocked
+                                }
                                 onClick={() => {
                                     if (!restoreConfigUuid) return;
 
@@ -473,7 +721,14 @@ const ProtopieChurnScoreRubricPage = () => {
                             variant="default"
                             leftSection={<MantineIcon icon={IconCalculator} />}
                             loading={recompute.isLoading}
-                            onClick={() => recompute.mutate()}
+                            disabled={rubricInvalid || defaultRubricBlocked}
+                            onClick={() =>
+                                recompute.mutate({
+                                    name,
+                                    configUuid:
+                                        configQuery.data?.config.configUuid,
+                                })
+                            }
                         >
                             Recompute now
                         </Button>
@@ -482,7 +737,7 @@ const ProtopieChurnScoreRubricPage = () => {
                                 <MantineIcon icon={IconDeviceFloppy} />
                             }
                             loading={updateConfig.isLoading}
-                            disabled={thresholdsInvalid}
+                            disabled={rubricInvalid || defaultRubricBlocked}
                             onClick={handleSave}
                         >
                             Save as new version

@@ -2,6 +2,7 @@ import { Protopie } from '@lightdash/common';
 import { buildAggregationQuery } from './buildAggregationQuery';
 import { deriveRiskBand } from './deriveRiskBand';
 import { scoreAccount } from './scoreAccount';
+import { validateChurnScoreConfigInput } from './validateChurnScoreConfigInput';
 
 const factors: Protopie.ChurnScoreFactor[] =
     Protopie.DEFAULT_CHURN_SCORE_FACTORS.map((factor, index) => ({
@@ -129,6 +130,39 @@ describe('deriveRiskBand', () => {
     });
 });
 
+describe('validateChurnScoreConfigInput', () => {
+    test('allows custom factor counts when weights total 100', () => {
+        const result = validateChurnScoreConfigInput({
+            name: 'Custom',
+            lookbackDays: 90,
+            scoreFunction: 'linear',
+            riskBandThresholds:
+                Protopie.DEFAULT_CHURN_SCORE_RISK_BAND_THRESHOLDS,
+            factors: Protopie.DEFAULT_CHURN_SCORE_FACTORS.slice(0, 2).map(
+                (factor) => ({
+                    ...factor,
+                    maxPoints: 50,
+                }),
+            ),
+        });
+
+        expect(result.factors).toHaveLength(2);
+    });
+
+    test('requires weights to total 100', () => {
+        expect(() =>
+            validateChurnScoreConfigInput({
+                name: 'Custom',
+                lookbackDays: 90,
+                scoreFunction: 'linear',
+                riskBandThresholds:
+                    Protopie.DEFAULT_CHURN_SCORE_RISK_BAND_THRESHOLDS,
+                factors: Protopie.DEFAULT_CHURN_SCORE_FACTORS.slice(0, 2),
+            }),
+        ).toThrow('Churn score factor weights must total 100');
+    });
+});
+
 describe('buildAggregationQuery', () => {
     test('uses validated schema interpolation and one placeholder per event', () => {
         const { sql, values } = buildAggregationQuery({
@@ -183,7 +217,7 @@ describe('buildAggregationQuery', () => {
                         ...factors[0],
                         eventGroup: {
                             operator: 'or',
-                            events: ['safe', 'bad/event'],
+                            events: ['safe', 'bad\u0000event'],
                         },
                     },
                 ],

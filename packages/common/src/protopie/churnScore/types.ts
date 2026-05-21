@@ -122,6 +122,7 @@ export type ChurnScoreRun = {
 };
 
 export type ChurnScoreLatestFilters = {
+    configUuid?: string;
     riskBand?: ChurnScoreRiskBand;
     minScore?: number;
     maxScore?: number;

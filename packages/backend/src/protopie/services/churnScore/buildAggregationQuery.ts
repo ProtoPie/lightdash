@@ -1,7 +1,6 @@
 import { ParameterError, type Protopie } from '@lightdash/common';
 
-const IDENTIFIER_REGEX = /^[a-z][a-z0-9_]*$/;
-const EVENT_NAME_REGEX = /^[A-Za-z0-9 _-]+$/;
+const IDENTIFIER_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const validateIdentifier = (value: string, label: string): void => {
     if (!IDENTIFIER_REGEX.test(value)) {
@@ -15,7 +14,14 @@ export const validateChurnScoreFactorInput = (
     validateIdentifier(factor.factorKey, 'factor key');
 
     factor.eventGroup.events.forEach((eventName) => {
-        if (!eventName || !EVENT_NAME_REGEX.test(eventName)) {
+        if (
+            !eventName ||
+            eventName.length > 255 ||
+            [...eventName].some((character) => {
+                const code = character.charCodeAt(0);
+                return code < 32 || code === 127;
+            })
+        ) {
             throw new ParameterError(
                 `Invalid churn score event name for ${factor.factorKey}: ${eventName}`,
             );

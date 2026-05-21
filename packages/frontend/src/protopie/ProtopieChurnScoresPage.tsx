@@ -16,7 +16,7 @@ import {
 import { useDebouncedValue } from '@mantine-8/hooks';
 import { useEffect, useMemo, useState } from 'react';
 import { useProjectUuid } from '../hooks/useProjectUuid';
-import { useProtopieChurnScores } from './api';
+import { useProtopieChurnConfigs, useProtopieChurnScores } from './api';
 import ProtopieChurnScoreMethodCards from './ProtopieChurnScoreMethodCards';
 import classes from './ProtopieFormsPage.module.css';
 import ProtopieSectionTabs from './ProtopieSectionTabs';
@@ -38,22 +38,47 @@ const ProtopieChurnScoresPage = () => {
     const [debouncedNamespace] = useDebouncedValue(namespace, 300);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(String(DEFAULT_PAGE_SIZE));
+    const [selectedConfigUuid, setSelectedConfigUuid] = useState<
+        string | undefined
+    >();
     const numericPageSize = Number(pageSize);
+    const configs = useProtopieChurnConfigs(projectUuid);
+
+    useEffect(() => {
+        if (selectedConfigUuid || !configs.data?.length) return;
+
+        setSelectedConfigUuid(configs.data[0].configUuid);
+    }, [configs.data, selectedConfigUuid]);
 
     useEffect(() => {
         setPage(1);
-    }, [debouncedNamespace, numericPageSize, riskBand]);
+    }, [debouncedNamespace, numericPageSize, riskBand, selectedConfigUuid]);
 
     const filters = useMemo<Protopie.ChurnScoreLatestFilters>(
         () => ({
+            configUuid: selectedConfigUuid,
             riskBand: riskBand ?? undefined,
             namespace: debouncedNamespace.trim() || undefined,
             limit: numericPageSize,
             offset: (page - 1) * numericPageSize,
         }),
-        [debouncedNamespace, numericPageSize, page, riskBand],
+        [
+            debouncedNamespace,
+            numericPageSize,
+            page,
+            riskBand,
+            selectedConfigUuid,
+        ],
     );
     const scores = useProtopieChurnScores({ projectUuid, filters });
+    const configOptions = useMemo(
+        () =>
+            (configs.data ?? []).map((config) => ({
+                value: config.configUuid,
+                label: `${config.name} (v${config.version})`,
+            })),
+        [configs.data],
+    );
     const rows = scores.data ?? [];
     const hasPreviousPage = page > 1;
     const hasNextPage = rows.length === numericPageSize;
@@ -97,6 +122,15 @@ const ProtopieChurnScoresPage = () => {
             <Card withBorder className={classes.formPanel}>
                 <Stack gap="md">
                     <Group grow>
+                        <Select
+                            label="Rubric"
+                            allowDeselect={false}
+                            data={configOptions}
+                            value={selectedConfigUuid}
+                            onChange={(value) =>
+                                setSelectedConfigUuid(value ?? undefined)
+                            }
+                        />
                         <Select
                             label="Risk band"
                             allowDeselect={false}

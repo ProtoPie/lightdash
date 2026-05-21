@@ -3,23 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { lightdashApi } from '../api';
 import useToaster from '../hooks/toaster/useToaster';
 
-export type ProtopieFormSubmissionRecord = {
-    formSubmissionUuid: string;
-    organizationUuid: string;
-    projectUuid: string;
-    formDefinitionUuid: string;
-    formKey: string;
-    schemaVersion: number;
-    accountKey: string | null;
-    cloudUrl: string | null;
-    salesforceAccountId: string | null;
-    payload: Record<string, unknown>;
-    createdByUserUuid: string;
-    createdAt: string;
-    updatedAt: string;
-    deletedAt: string | null;
-};
-
 type ProtopieMcpSettings = {
     mcpWriteEnabled: boolean;
     settings?: {
@@ -32,30 +15,26 @@ type ProtopieMcpSettings = {
     };
 };
 
-const protopieFormsQueryKey = (projectUuid?: string) => [
-    'protopie',
-    'forms',
-    projectUuid,
-];
-
 const protopieMcpSettingsQueryKey = ['protopie', 'mcp-settings'];
 
-const protopieSubmissionsQueryKey = (
+const protopieChurnConfigsQueryKey = (projectUuid?: string) => [
+    'protopie',
+    'churn-configs',
+    projectUuid,
+];
+
+const protopieChurnConfigQueryKey = (projectUuid?: string, name?: string) =>
+    name
+        ? ['protopie', 'churn-config', projectUuid, name]
+        : ['protopie', 'churn-config', projectUuid];
+
+const protopieChurnConfigVersionsQueryKey = (
     projectUuid?: string,
-    formKey?: string,
-) => ['protopie', 'form-submissions', projectUuid, formKey];
-
-const protopieChurnConfigQueryKey = (projectUuid?: string) => [
-    'protopie',
-    'churn-config',
-    projectUuid,
-];
-
-const protopieChurnConfigVersionsQueryKey = (projectUuid?: string) => [
-    'protopie',
-    'churn-config-versions',
-    projectUuid,
-];
+    name?: string,
+) =>
+    name
+        ? ['protopie', 'churn-config-versions', projectUuid, name]
+        : ['protopie', 'churn-config-versions', projectUuid];
 
 const protopieChurnRunsQueryKey = (projectUuid?: string) => [
     'protopie',
@@ -80,6 +59,13 @@ const protopieChurnScoresQueryKey = (
     projectUuid?: string,
     filters?: Protopie.ChurnScoreLatestFilters,
 ) => [...protopieChurnScoresQueryKeyBase(projectUuid), filters];
+
+const protopieChurnEventsQueryKey = (projectUuid?: string, search?: string) => [
+    'protopie',
+    'churn-events',
+    projectUuid,
+    search,
+];
 
 export const useProtopieMcpSettings = () =>
     useQuery<ProtopieMcpSettings, ApiError>({
@@ -126,82 +112,46 @@ export const useUpdateProtopieMcpSettings = () => {
     );
 };
 
-export const useProtopieFormSchemas = (projectUuid?: string) =>
-    useQuery<Protopie.ProtopieClientFormDefinition[], ApiError>({
-        queryKey: protopieFormsQueryKey(projectUuid),
+export const useProtopieChurnConfigs = (projectUuid?: string) =>
+    useQuery<Protopie.ChurnScoreConfig[], ApiError>({
+        queryKey: protopieChurnConfigsQueryKey(projectUuid),
         enabled: Boolean(projectUuid),
         queryFn: () =>
-            lightdashApi<Protopie.ProtopieClientFormDefinition[]>({
-                method: 'GET',
-                url: `/projects/${projectUuid}/protopie/forms/schemas`,
-            }),
-    });
-
-export const useProtopieFormSubmissions = ({
-    projectUuid,
-    formKey,
-}: {
-    projectUuid?: string;
-    formKey?: string;
-}) =>
-    useQuery<ProtopieFormSubmissionRecord[], ApiError>({
-        queryKey: protopieSubmissionsQueryKey(projectUuid, formKey),
-        enabled: Boolean(projectUuid && formKey),
-        queryFn: () =>
-            lightdashApi<ProtopieFormSubmissionRecord[]>({
-                method: 'GET',
-                url: `/projects/${projectUuid}/protopie/forms/${formKey}/submissions`,
-            }),
-    });
-
-export const useSubmitProtopieForm = ({
-    projectUuid,
-    formKey,
-}: {
-    projectUuid?: string;
-    formKey?: string;
-}) => {
-    const queryClient = useQueryClient();
-
-    return useMutation<
-        ProtopieFormSubmissionRecord,
-        ApiError,
-        Record<string, unknown>
-    >({
-        mutationFn: (payload) =>
             lightdashApi<AnyType>({
-                method: 'POST',
-                url: `/projects/${projectUuid}/protopie/forms/${formKey}/submissions`,
-                body: JSON.stringify(payload),
-            }) as Promise<ProtopieFormSubmissionRecord>,
-        onSuccess: async () => {
-            await queryClient.invalidateQueries({
-                queryKey: protopieSubmissionsQueryKey(projectUuid, formKey),
-            });
+                method: 'GET',
+                url: `/projects/${projectUuid}/protopie/churn/configs`,
+            }) as Promise<Protopie.ChurnScoreConfig[]>,
+    });
+
+export const useProtopieChurnConfig = (projectUuid?: string, name?: string) =>
+    useQuery<Protopie.ChurnScoreConfigWithFactors, ApiError>({
+        queryKey: protopieChurnConfigQueryKey(projectUuid, name),
+        enabled: Boolean(projectUuid),
+        queryFn: () => {
+            const params = new URLSearchParams();
+            if (name) params.set('name', name);
+            return lightdashApi<AnyType>({
+                method: 'GET',
+                url: `/projects/${projectUuid}/protopie/churn/config?${params.toString()}`,
+            }) as Promise<Protopie.ChurnScoreConfigWithFactors>;
         },
     });
-};
 
-export const useProtopieChurnConfig = (projectUuid?: string) =>
-    useQuery<Protopie.ChurnScoreConfigWithFactors, ApiError>({
-        queryKey: protopieChurnConfigQueryKey(projectUuid),
-        enabled: Boolean(projectUuid),
-        queryFn: () =>
-            lightdashApi<AnyType>({
-                method: 'GET',
-                url: `/projects/${projectUuid}/protopie/churn/config`,
-            }) as Promise<Protopie.ChurnScoreConfigWithFactors>,
-    });
-
-export const useProtopieChurnConfigVersions = (projectUuid?: string) =>
+export const useProtopieChurnConfigVersions = (
+    projectUuid?: string,
+    name?: string,
+) =>
     useQuery<Protopie.ChurnScoreConfig[], ApiError>({
-        queryKey: protopieChurnConfigVersionsQueryKey(projectUuid),
+        queryKey: protopieChurnConfigVersionsQueryKey(projectUuid, name),
         enabled: Boolean(projectUuid),
-        queryFn: () =>
-            lightdashApi<AnyType>({
+        queryFn: () => {
+            const params = new URLSearchParams();
+            if (name) params.set('name', name);
+            return lightdashApi<AnyType>({
                 method: 'GET',
-                url: `/projects/${projectUuid}/protopie/churn/config/versions`,
-            }) as Promise<Protopie.ChurnScoreConfig[]>,
+                url: `/projects/${projectUuid}/protopie/churn/config/versions?${params.toString()}`,
+            }) as Promise<Protopie.ChurnScoreConfig[]>;
+        },
     });
 
 export const useUpdateProtopieChurnConfig = (projectUuid?: string) => {
@@ -220,6 +170,9 @@ export const useUpdateProtopieChurnConfig = (projectUuid?: string) => {
                 body: JSON.stringify(payload),
             }) as Promise<Protopie.ChurnScoreConfigWithFactors>,
         onSuccess: async () => {
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigsQueryKey(projectUuid),
+            });
             await queryClient.invalidateQueries({
                 queryKey: protopieChurnConfigQueryKey(projectUuid),
             });
@@ -255,6 +208,9 @@ export const useRestoreProtopieChurnConfigVersion = (projectUuid?: string) => {
             }) as Promise<Protopie.ChurnScoreConfigWithFactors>,
         onSuccess: async () => {
             await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigsQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
                 queryKey: protopieChurnConfigQueryKey(projectUuid),
             });
             await queryClient.invalidateQueries({
@@ -280,13 +236,23 @@ export const useRecomputeProtopieChurnScore = (projectUuid?: string) => {
     const queryClient = useQueryClient();
     const { showToastApiError, showToastSuccess } = useToaster();
 
-    return useMutation<{ runUuid: string; status: 'queued' }, ApiError>({
-        mutationFn: () =>
-            lightdashApi<AnyType>({
+    return useMutation<
+        { runUuid: string; status: 'queued' },
+        ApiError,
+        { name?: string; configUuid?: string } | undefined
+    >({
+        mutationFn: (payload) => {
+            const params = new URLSearchParams();
+            if (payload?.name) params.set('name', payload.name);
+            if (payload?.configUuid) {
+                params.set('configUuid', payload.configUuid);
+            }
+            return lightdashApi<AnyType>({
                 method: 'POST',
-                url: `/projects/${projectUuid}/protopie/churn/recompute`,
+                url: `/projects/${projectUuid}/protopie/churn/recompute?${params.toString()}`,
                 body: undefined,
-            }) as Promise<{ runUuid: string; status: 'queued' }>,
+            }) as Promise<{ runUuid: string; status: 'queued' }>;
+        },
         onSuccess: async () => {
             await queryClient.invalidateQueries({
                 queryKey: protopieChurnRunsQueryKey(projectUuid),
@@ -303,6 +269,28 @@ export const useRecomputeProtopieChurnScore = (projectUuid?: string) => {
         },
     });
 };
+
+export const useProtopieChurnEvents = ({
+    projectUuid,
+    search,
+}: {
+    projectUuid?: string;
+    search?: string;
+}) =>
+    useQuery<string[], ApiError>({
+        queryKey: protopieChurnEventsQueryKey(projectUuid, search),
+        enabled: Boolean(projectUuid),
+        keepPreviousData: true,
+        queryFn: () => {
+            const params = new URLSearchParams();
+            if (search) params.set('search', search);
+            params.set('limit', '200');
+            return lightdashApi<AnyType>({
+                method: 'GET',
+                url: `/projects/${projectUuid}/protopie/churn/events?${params.toString()}`,
+            }) as Promise<string[]>;
+        },
+    });
 
 export const useProtopieChurnRun = ({
     projectUuid,
@@ -339,6 +327,9 @@ export const useProtopieChurnScores = ({
         queryFn: () => {
             const params = new URLSearchParams();
             if (filters?.riskBand) params.set('riskBand', filters.riskBand);
+            if (filters?.configUuid) {
+                params.set('configUuid', filters.configUuid);
+            }
             if (filters?.minScore !== undefined) {
                 params.set('minScore', String(filters.minScore));
             }

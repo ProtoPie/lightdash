@@ -19,7 +19,9 @@ export const ProtopieNavButton: FC<Props> = ({ projectUuid }) => {
             leftSection={
                 <MantineIcon icon={IconClipboardList} color="ldGray.6" />
             }
-            onClick={() => navigate(`/projects/${projectUuid}/protopie/forms`)}
+            onClick={() =>
+                navigate(`/projects/${projectUuid}/protopie/churn/rubric`)
+            }
         >
             Churn
         </Button>

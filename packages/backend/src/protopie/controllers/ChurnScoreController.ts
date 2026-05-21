@@ -32,6 +32,8 @@ import { getProtopieServices } from '../services';
 type ApiChurnScoreConfigResponse =
     ApiSuccess<Protopie.ChurnScoreConfigWithFactors>;
 
+type ApiChurnScoreConfigsResponse = ApiSuccess<Protopie.ChurnScoreConfig[]>;
+
 type ApiChurnScoreConfigVersionsResponse = ApiSuccess<
     Protopie.ChurnScoreConfig[]
 >;
@@ -46,6 +48,8 @@ type ApiChurnScoreRunResponse = ApiSuccess<Protopie.ChurnScoreRun>;
 type ApiChurnScoreRunsResponse = ApiSuccess<Protopie.ChurnScoreRun[]>;
 
 type ApiChurnScoresResponse = ApiSuccess<Protopie.ChurnScore[]>;
+
+type ApiChurnScoreEventsResponse = ApiSuccess<string[]>;
 
 @Route('/api/v1/projects/{projectUuid}/protopie/churn')
 @Response<ApiErrorPayload>('default', 'Error')
@@ -62,6 +66,7 @@ export class ProtopieChurnScoreController extends BaseController {
     async getConfig(
         @Path() projectUuid: string,
         @Request() req: express.Request,
+        @Query() name?: string,
     ): Promise<ApiChurnScoreConfigResponse> {
         assertRegisteredAccount(req.account);
         this.setStatus(200);
@@ -71,6 +76,33 @@ export class ProtopieChurnScoreController extends BaseController {
             results: await getProtopieServices(
                 this.services,
             ).churnScoreService.getActiveConfig({
+                projectUuid,
+                name,
+                user: toSessionUser(req.account),
+            }),
+        };
+    }
+
+    /**
+     * List active churn score rubrics visible to the current user.
+     * @summary List Protopie churn score rubrics
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('configs')
+    @OperationId('ListProtopieChurnScoreConfigs')
+    async listConfigs(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+    ): Promise<ApiChurnScoreConfigsResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: await getProtopieServices(
+                this.services,
+            ).churnScoreService.listActiveConfigs({
                 projectUuid,
                 user: toSessionUser(req.account),
             }),
@@ -88,6 +120,7 @@ export class ProtopieChurnScoreController extends BaseController {
     async listVersions(
         @Path() projectUuid: string,
         @Request() req: express.Request,
+        @Query() name?: string,
     ): Promise<ApiChurnScoreConfigVersionsResponse> {
         assertRegisteredAccount(req.account);
         this.setStatus(200);
@@ -98,6 +131,7 @@ export class ProtopieChurnScoreController extends BaseController {
                 this.services,
             ).churnScoreService.listVersions({
                 projectUuid,
+                name,
                 user: toSessionUser(req.account),
             }),
         };
@@ -182,6 +216,8 @@ export class ProtopieChurnScoreController extends BaseController {
     async recompute(
         @Path() projectUuid: string,
         @Request() req: express.Request,
+        @Query() name?: string,
+        @Query() configUuid?: string,
     ): Promise<ApiChurnScoreRunQueuedResponse> {
         assertRegisteredAccount(req.account);
         this.setStatus(202);
@@ -192,8 +228,40 @@ export class ProtopieChurnScoreController extends BaseController {
                 this.services,
             ).churnScoreService.enqueueRecompute({
                 projectUuid,
+                name,
+                configUuid,
                 user: toSessionUser(req.account),
                 triggeredBy: 'manual',
+            }),
+        };
+    }
+
+    /**
+     * List available product event names for churn score rubric factors.
+     * @summary List Protopie churn score event names
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('events')
+    @OperationId('ListProtopieChurnScoreEvents')
+    async listEvents(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+        @Query() search?: string,
+        @Query() limit?: number,
+    ): Promise<ApiChurnScoreEventsResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: await getProtopieServices(
+                this.services,
+            ).churnScoreService.listEventNames({
+                projectUuid,
+                search,
+                limit,
+                user: toSessionUser(req.account),
             }),
         };
     }
@@ -266,6 +334,7 @@ export class ProtopieChurnScoreController extends BaseController {
         @Path() projectUuid: string,
         @Request() req: express.Request,
         @Query() riskBand?: Protopie.ChurnScoreRiskBand,
+        @Query() configUuid?: string,
         @Query() minScore?: number,
         @Query() maxScore?: number,
         @Query() namespace?: string,
@@ -282,6 +351,7 @@ export class ProtopieChurnScoreController extends BaseController {
             ).churnScoreService.listLatestScores({
                 projectUuid,
                 filters: {
+                    configUuid,
                     riskBand,
                     minScore,
                     maxScore,

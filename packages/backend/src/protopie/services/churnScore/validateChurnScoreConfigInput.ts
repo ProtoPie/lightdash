@@ -4,6 +4,9 @@ import { validateChurnScoreFactorInput } from './buildAggregationQuery';
 const isFiniteNumber = (value: number): boolean =>
     typeof value === 'number' && Number.isFinite(value);
 
+const POINT_TOTAL = 100;
+const POINT_TOTAL_TOLERANCE = 0.000001;
+
 export const validateChurnScoreConfigInput = (
     payload: Protopie.ChurnScoreConfigInput,
 ): Protopie.ChurnScoreConfigInput => {
@@ -73,6 +76,16 @@ export const validateChurnScoreConfigInput = (
 
         validateChurnScoreFactorInput(factor);
     });
+
+    const maxPointsTotal = normalizedFactors.reduce(
+        (total, factor) => total + factor.maxPoints,
+        0,
+    );
+    if (Math.abs(maxPointsTotal - POINT_TOTAL) > POINT_TOTAL_TOLERANCE) {
+        throw new ParameterError(
+            `Churn score factor weights must total ${POINT_TOTAL}. Current total is ${maxPointsTotal}.`,
+        );
+    }
 
     return {
         ...payload,

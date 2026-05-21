@@ -89,16 +89,23 @@ export class ChurnScoreService extends BaseService {
 
     async getActiveConfig({
         projectUuid,
+        name,
         user,
     }: {
         projectUuid: string;
+        name?: string;
         user: SessionUser;
     }): Promise<Protopie.ChurnScoreConfigWithFactors> {
         this.requireProjectView(user, projectUuid);
-        return this.getOrCreateActiveConfig(projectUuid);
+        const configWithFactors = await this.getActiveConfigByName({
+            projectUuid,
+            name,
+        });
+        this.requireConfigView(user, projectUuid, configWithFactors.config);
+        return configWithFactors;
     }
 
-    async listVersions({
+    async listActiveConfigs({
         projectUuid,
         user,
     }: {
@@ -106,8 +113,52 @@ export class ChurnScoreService extends BaseService {
         user: SessionUser;
     }): Promise<ProtopieChurnScoreConfigRecord[]> {
         this.requireProjectView(user, projectUuid);
-        await this.getOrCreateActiveConfig(projectUuid);
-        return this.churnScoreConfigModel.listVersions({ projectUuid });
+        await this.getOrCreateDefaultConfig(projectUuid);
+
+        const configs = await this.churnScoreConfigModel.listActiveConfigs({
+            projectUuid,
+        });
+
+        if (this.canManageProject(user, projectUuid)) {
+            return ChurnScoreService.sortDefaultFirst(configs);
+        }
+
+        return ChurnScoreService.sortDefaultFirst(
+            configs.filter(
+                (config) =>
+                    ChurnScoreService.isDefaultConfig(config.name) ||
+                    config.createdByUserUuid === user.userUuid,
+            ),
+        );
+    }
+
+    async listVersions({
+        projectUuid,
+        name,
+        user,
+    }: {
+        projectUuid: string;
+        name?: string;
+        user: SessionUser;
+    }): Promise<ProtopieChurnScoreConfigRecord[]> {
+        this.requireProjectView(user, projectUuid);
+        const configName =
+            name?.trim() || Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME;
+        if (ChurnScoreService.isDefaultConfig(configName)) {
+            await this.getOrCreateDefaultConfig(projectUuid);
+        }
+        const versions = await this.churnScoreConfigModel.listVersions({
+            projectUuid,
+            name: configName,
+        });
+        if (
+            !ChurnScoreService.isDefaultConfig(configName) &&
+            versions.length > 0
+        ) {
+            this.requireConfigView(user, projectUuid, versions[0]);
+        }
+
+        return versions;
     }
 
     async upsertConfigAsNewVersion({
@@ -119,12 +170,15 @@ export class ChurnScoreService extends BaseService {
         payload: Protopie.ChurnScoreConfigInput;
         user: SessionUser;
     }): Promise<Protopie.ChurnScoreConfigWithFactors> {
-        this.requireProjectManage(user, projectUuid);
         const validated = validateChurnScoreConfigInput(payload);
+        const name = validated.name ?? Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME;
+        const active = await this.churnScoreConfigModel.getActiveConfig({
+            projectUuid,
+            name,
+        });
+        this.requireConfigEdit(user, projectUuid, active, name);
 
         return this.database.transaction(async (trx) => {
-            const name =
-                validated.name ?? Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME;
             const version = await this.churnScoreConfigModel.getNextVersion({
                 projectUuid,
                 name,
@@ -167,8 +221,6 @@ export class ChurnScoreService extends BaseService {
         configUuid: string;
         user: SessionUser;
     }): Promise<Protopie.ChurnScoreConfigWithFactors> {
-        this.requireProjectManage(user, projectUuid);
-
         return this.database.transaction(async (trx) => {
             const sourceConfig = await this.churnScoreConfigModel.getByUuid({
                 configUuid,
@@ -180,12 +232,19 @@ export class ChurnScoreService extends BaseService {
                     `Churn score config ${configUuid} was not found.`,
                 );
             }
+            this.requireConfigEdit(
+                user,
+                projectUuid,
+                sourceConfig,
+                sourceConfig.name,
+            );
 
             const sourceFactors =
                 await this.churnScoreFactorModel.listByConfigUuid({
                     configUuid: sourceConfig.configUuid,
                     trx,
                 });
+            ChurnScoreService.assertFactorWeightsTotal(sourceFactors);
 
             if (sourceConfig.status === 'active') {
                 return {
@@ -229,16 +288,28 @@ export class ChurnScoreService extends BaseService {
 
     async enqueueRecompute({
         projectUuid,
+        name,
+        configUuid,
         user,
         triggeredBy = 'manual',
     }: {
         projectUuid: string;
+        name?: string;
+        configUuid?: string;
         user: SessionUser;
         triggeredBy?: Protopie.ChurnScoreRunTrigger;
     }): Promise<{ runUuid: string; status: 'queued' }> {
-        this.requireProjectManage(user, projectUuid);
         const organizationUuid = ChurnScoreService.requireOrganization(user);
-        const { config } = await this.getOrCreateActiveConfig(projectUuid);
+        const config = await this.getConfigForRun({
+            projectUuid,
+            name,
+            configUuid,
+        });
+        this.requireConfigEdit(user, projectUuid, config, config.name);
+        const factors = await this.churnScoreFactorModel.listByConfigUuid({
+            configUuid: config.configUuid,
+        });
+        ChurnScoreService.assertFactorWeightsTotal(factors);
 
         const run = await this.churnScoreRunModel.insertRun({
             projectUuid,
@@ -317,7 +388,11 @@ export class ChurnScoreService extends BaseService {
         user: SessionUser;
     }): Promise<ProtopieChurnScoreRecord[]> {
         this.requireProjectView(user, projectUuid);
-        const { config } = await this.getOrCreateActiveConfig(projectUuid);
+        const config = await this.getConfigForScores({
+            projectUuid,
+            configUuid: filters.configUuid,
+        });
+        this.requireConfigView(user, projectUuid, config);
         return this.churnScoreModel.listLatestScores({
             projectUuid,
             configUuid: config.configUuid,
@@ -344,6 +419,62 @@ export class ChurnScoreService extends BaseService {
         });
     }
 
+    async listEventNames({
+        projectUuid,
+        search,
+        limit,
+        user,
+    }: {
+        projectUuid: string;
+        search?: string;
+        limit?: number;
+        user: SessionUser;
+    }): Promise<string[]> {
+        this.requireProjectView(user, projectUuid);
+        const credentials =
+            await this.projectModel.getWarehouseCredentialsForProject(
+                projectUuid,
+            );
+        const schema = ChurnScoreService.getWarehouseSchema(credentials);
+        const safeLimit = Math.min(Math.max(limit ?? 100, 1), 500);
+        const values: string[] = [];
+        const searchTerm = search?.trim();
+        const searchPredicate = searchTerm
+            ? `AND event_name ILIKE $${values.push(`%${searchTerm}%`)}`
+            : '';
+        const sql = `
+            SELECT DISTINCT event_name
+            FROM ${schema}.dim_product_all_events
+            WHERE event_name IS NOT NULL
+              ${searchPredicate}
+            ORDER BY event_name
+            LIMIT ${safeLimit}
+        `;
+        const { warehouseClient, sshTunnel } =
+            await this.projectService._getWarehouseClient(
+                projectUuid,
+                credentials,
+            );
+
+        try {
+            const results = await warehouseClient.runQuery(
+                sql,
+                {
+                    project_uuid: projectUuid,
+                    query_context: QueryExecutionContext.API,
+                },
+                credentials.dataTimezone,
+                values,
+            );
+
+            return results.rows
+                .map((row) => row.event_name)
+                .filter((eventName): eventName is string => Boolean(eventName));
+        } finally {
+            await sshTunnel.disconnect();
+        }
+    }
+
     async executeRecompute(runUuid: string): Promise<void> {
         const run = await this.churnScoreRunModel.getByUuid(runUuid);
         if (!run) {
@@ -367,6 +498,7 @@ export class ChurnScoreService extends BaseService {
             const factors = await this.churnScoreFactorModel.listByConfigUuid({
                 configUuid: config.configUuid,
             });
+            ChurnScoreService.assertFactorWeightsTotal(factors);
             const warehouseRows = await this.getWarehouseAggregationRows({
                 projectUuid: run.projectUuid,
                 config,
@@ -420,11 +552,96 @@ export class ChurnScoreService extends BaseService {
         }
     }
 
-    private async getOrCreateActiveConfig(
+    private async getActiveConfigByName({
+        projectUuid,
+        name,
+    }: {
+        projectUuid: string;
+        name?: string;
+    }): Promise<Protopie.ChurnScoreConfigWithFactors> {
+        const configName =
+            name?.trim() || Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME;
+
+        if (ChurnScoreService.isDefaultConfig(configName)) {
+            return this.getOrCreateDefaultConfig(projectUuid);
+        }
+
+        const active = await this.churnScoreConfigModel.getActiveConfig({
+            projectUuid,
+            name: configName,
+        });
+
+        if (!active) {
+            throw new NotFoundError(
+                `Churn score rubric does not exist: ${configName}`,
+            );
+        }
+
+        return {
+            config: active,
+            factors: await this.churnScoreFactorModel.listByConfigUuid({
+                configUuid: active.configUuid,
+            }),
+        };
+    }
+
+    private async getConfigForRun({
+        projectUuid,
+        name,
+        configUuid,
+    }: {
+        projectUuid: string;
+        name?: string;
+        configUuid?: string;
+    }): Promise<ProtopieChurnScoreConfigRecord> {
+        if (configUuid) {
+            const config = await this.churnScoreConfigModel.getByUuid({
+                configUuid,
+            });
+            if (!config || config.projectUuid !== projectUuid) {
+                throw new NotFoundError(
+                    `Churn score config ${configUuid} was not found.`,
+                );
+            }
+            return config;
+        }
+
+        const { config } = await this.getActiveConfigByName({
+            projectUuid,
+            name,
+        });
+        return config;
+    }
+
+    private async getConfigForScores({
+        projectUuid,
+        configUuid,
+    }: {
+        projectUuid: string;
+        configUuid?: string;
+    }): Promise<ProtopieChurnScoreConfigRecord> {
+        if (configUuid) {
+            const config = await this.churnScoreConfigModel.getByUuid({
+                configUuid,
+            });
+            if (!config || config.projectUuid !== projectUuid) {
+                throw new NotFoundError(
+                    `Churn score config ${configUuid} was not found.`,
+                );
+            }
+            return config;
+        }
+
+        const { config } = await this.getOrCreateDefaultConfig(projectUuid);
+        return config;
+    }
+
+    private async getOrCreateDefaultConfig(
         projectUuid: string,
     ): Promise<Protopie.ChurnScoreConfigWithFactors> {
         const active = await this.churnScoreConfigModel.getActiveConfig({
             projectUuid,
+            name: Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME,
         });
 
         if (active) {
@@ -439,6 +656,7 @@ export class ChurnScoreService extends BaseService {
         return this.database.transaction(async (trx) => {
             const existing = await this.churnScoreConfigModel.getActiveConfig({
                 projectUuid,
+                name: Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME,
                 trx,
             });
             if (existing) {
@@ -453,6 +671,7 @@ export class ChurnScoreService extends BaseService {
 
             const config = await this.churnScoreConfigModel.insertConfig({
                 projectUuid,
+                name: Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME,
                 version: 1,
                 lookbackDays: Protopie.DEFAULT_CHURN_SCORE_LOOKBACK_DAYS,
                 scoreFunction: 'linear',
@@ -516,12 +735,39 @@ export class ChurnScoreService extends BaseService {
         credentials: CreateWarehouseCredentials,
     ): string {
         if ('schema' in credentials) {
+            ChurnScoreService.validateWarehouseIdentifier(
+                credentials.schema,
+                'warehouse schema',
+            );
             return credentials.schema;
         }
 
         throw new ParameterError(
             'Churn score requires a warehouse connection with a schema.',
         );
+    }
+
+    private static validateWarehouseIdentifier(
+        value: string,
+        label: string,
+    ): void {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+            throw new ParameterError(`Invalid ${label}: ${value}`);
+        }
+    }
+
+    private static assertFactorWeightsTotal(
+        factors: Array<{ maxPoints: number }>,
+    ): void {
+        const total = factors.reduce(
+            (sum, factor) => sum + Number(factor.maxPoints || 0),
+            0,
+        );
+        if (Math.abs(total - 100) > 0.000001) {
+            throw new ParameterError(
+                `Churn score factor weights must total 100. Current total is ${total}.`,
+            );
+        }
     }
 
     private static toFactorInput(
@@ -556,7 +802,7 @@ export class ChurnScoreService extends BaseService {
         }
     }
 
-    private requireProjectManage(user: SessionUser, projectUuid: string): void {
+    private canManageProject(user: SessionUser, projectUuid: string): boolean {
         const organizationUuid = ChurnScoreService.requireOrganization(user);
         const ability = this.createAuditedAbility(user);
         const projectSubject = subject('Project', {
@@ -567,12 +813,77 @@ export class ChurnScoreService extends BaseService {
             organizationUuid,
         });
 
-        if (
-            ability.cannot('manage', projectSubject) &&
-            ability.cannot('manage', organizationSubject)
-        ) {
+        return (
+            ability.can('manage', projectSubject) ||
+            ability.can('manage', organizationSubject)
+        );
+    }
+
+    private requireProjectManage(user: SessionUser, projectUuid: string): void {
+        if (!this.canManageProject(user, projectUuid)) {
             throw new ForbiddenError();
         }
+    }
+
+    private requireConfigView(
+        user: SessionUser,
+        projectUuid: string,
+        config: ProtopieChurnScoreConfigRecord,
+    ): void {
+        this.requireProjectView(user, projectUuid);
+        if (
+            ChurnScoreService.isDefaultConfig(config.name) ||
+            config.createdByUserUuid === user.userUuid ||
+            this.canManageProject(user, projectUuid)
+        ) {
+            return;
+        }
+
+        throw new ForbiddenError(
+            'You can only view your own churn score rubrics.',
+        );
+    }
+
+    private requireConfigEdit(
+        user: SessionUser,
+        projectUuid: string,
+        config: ProtopieChurnScoreConfigRecord | undefined,
+        name: string,
+    ): void {
+        const isDefault = ChurnScoreService.isDefaultConfig(name);
+        if (isDefault) {
+            this.requireProjectManage(user, projectUuid);
+            return;
+        }
+
+        this.requireProjectView(user, projectUuid);
+        if (
+            !config ||
+            config.createdByUserUuid === user.userUuid ||
+            this.canManageProject(user, projectUuid)
+        ) {
+            return;
+        }
+
+        throw new ForbiddenError(
+            `A churn score rubric named "${name}" already exists. Choose a different name.`,
+        );
+    }
+
+    private static isDefaultConfig(name: string): boolean {
+        return name === Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME;
+    }
+
+    private static sortDefaultFirst(
+        configs: ProtopieChurnScoreConfigRecord[],
+    ): ProtopieChurnScoreConfigRecord[] {
+        return [...configs].sort((a, b) => {
+            const aDefault = ChurnScoreService.isDefaultConfig(a.name);
+            const bDefault = ChurnScoreService.isDefaultConfig(b.name);
+            if (aDefault && !bDefault) return -1;
+            if (!aDefault && bDefault) return 1;
+            return a.name.localeCompare(b.name);
+        });
     }
 
     private static requireOrganization(user: SessionUser): string {
