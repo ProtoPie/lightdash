@@ -16,11 +16,13 @@ import {
     Text,
     TextInput,
     Title,
+    Tooltip,
 } from '@mantine-8/core';
 import { useDebouncedValue } from '@mantine-8/hooks';
 import {
     IconCalculator,
     IconDeviceFloppy,
+    IconHelpCircle,
     IconHistory,
     IconPlus,
     IconRefresh,
@@ -60,6 +62,51 @@ const goalUnitOptions = [
 const DEFAULT_CONFIG_NAME = Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME;
 const POINT_TOTAL = 100;
 const POINT_TOTAL_TOLERANCE = 0.000001;
+
+type RubricHelpLabelProps = {
+    label: string;
+    description: string;
+};
+
+const RubricHelpLabel = ({ label, description }: RubricHelpLabelProps) => (
+    <Group gap={4} wrap="nowrap">
+        <Text span inherit>
+            {label}
+        </Text>
+        <Tooltip
+            multiline
+            withinPortal
+            maw={420}
+            position="top-start"
+            label={description}
+        >
+            <span>
+                <MantineIcon icon={IconHelpCircle} size="sm" color="gray" />
+            </span>
+        </Tooltip>
+    </Group>
+);
+
+const rubricLabels = {
+    rubric: 'A rubric is a named churn-score formula. Saving changes creates a new version so old scores can still be audited.',
+    newCustomRubric:
+        'Creates a private/custom copy of the current rubric using the unsaved edits on this page. Use this to test a different scoring model without changing the shared default.',
+    lookbackDays:
+        'The number of days of product events included in one recompute. A 90-day lookback means only matching events from the last 90 days are counted.',
+    lowRiskThreshold:
+        'Risk uses scorePercent = total earned points / total possible points. If scorePercent is at or above this value, the account is Low risk. Example: 0.75 means normalized score >= 75.',
+    mediumRiskThreshold:
+        'If scorePercent is below the Low threshold but at or above this value, the account is Medium risk. Scores below this value are High risk.',
+    factor: 'One scoring rule. The label is what users see; the key is the stable internal identifier saved in the score breakdown.',
+    weight: 'Maximum points this factor can contribute. All factor weights must add up to 100. Earned points = min(actual / goal, 1) * weight.',
+    goal: 'The target value for this factor. Reaching the goal earns the full weight; partial progress earns proportional points.',
+    unit: 'How to read the goal value: Fraction is 0-1, Count is total events, Count per user is events divided by active users, Days is active days in the lookback window.',
+    aggregation:
+        'How the backend calculates actual before scoring: percent of users with selected events, total event count, events per user, or active days.',
+    events: 'Product event names included in this factor. Selected events are combined with OR. Active days ignores this list and counts distinct event dates.',
+    actions:
+        'Remove this factor from the rubric. After removing factors, the remaining weights still must total 100.',
+};
 
 const toFactorInput = (
     factor: Protopie.ChurnScoreFactor,
@@ -395,7 +442,12 @@ const ProtopieChurnScoreRubricPage = () => {
                 <Stack gap="md">
                     <Group grow align="flex-end">
                         <Select
-                            label="Rubric"
+                            label={
+                                <RubricHelpLabel
+                                    label="Rubric"
+                                    description={rubricLabels.rubric}
+                                />
+                            }
                             allowDeselect={false}
                             data={configOptions}
                             value={selectedConfigName}
@@ -407,7 +459,12 @@ const ProtopieChurnScoreRubricPage = () => {
                             }}
                         />
                         <TextInput
-                            label="New custom rubric"
+                            label={
+                                <RubricHelpLabel
+                                    label="New custom rubric"
+                                    description={rubricLabels.newCustomRubric}
+                                />
+                            }
                             placeholder="Example: EMEA renewal rubric"
                             value={newRubricName}
                             error={
@@ -431,7 +488,12 @@ const ProtopieChurnScoreRubricPage = () => {
 
                     <Group grow align="flex-end">
                         <NumberInput
-                            label="Lookback days"
+                            label={
+                                <RubricHelpLabel
+                                    label="Lookback days"
+                                    description={rubricLabels.lookbackDays}
+                                />
+                            }
                             min={1}
                             value={lookbackDays}
                             onChange={(value) =>
@@ -439,7 +501,12 @@ const ProtopieChurnScoreRubricPage = () => {
                             }
                         />
                         <NumberInput
-                            label="Low risk threshold"
+                            label={
+                                <RubricHelpLabel
+                                    label="Low risk threshold"
+                                    description={rubricLabels.lowRiskThreshold}
+                                />
+                            }
                             min={0}
                             max={1}
                             decimalScale={2}
@@ -454,7 +521,14 @@ const ProtopieChurnScoreRubricPage = () => {
                             }
                         />
                         <NumberInput
-                            label="Medium risk threshold"
+                            label={
+                                <RubricHelpLabel
+                                    label="Medium risk threshold"
+                                    description={
+                                        rubricLabels.mediumRiskThreshold
+                                    }
+                                />
+                            }
                             min={0}
                             max={1}
                             decimalScale={2}
@@ -484,13 +558,50 @@ const ProtopieChurnScoreRubricPage = () => {
                         <Table verticalSpacing="sm">
                             <Table.Thead>
                                 <Table.Tr>
-                                    <Table.Th>Factor</Table.Th>
-                                    <Table.Th>Weight</Table.Th>
-                                    <Table.Th>Goal</Table.Th>
-                                    <Table.Th>Unit</Table.Th>
-                                    <Table.Th>Aggregation</Table.Th>
-                                    <Table.Th>Events</Table.Th>
-                                    <Table.Th>Actions</Table.Th>
+                                    <Table.Th>
+                                        <RubricHelpLabel
+                                            label="Factor"
+                                            description={rubricLabels.factor}
+                                        />
+                                    </Table.Th>
+                                    <Table.Th>
+                                        <RubricHelpLabel
+                                            label="Weight"
+                                            description={rubricLabels.weight}
+                                        />
+                                    </Table.Th>
+                                    <Table.Th>
+                                        <RubricHelpLabel
+                                            label="Goal"
+                                            description={rubricLabels.goal}
+                                        />
+                                    </Table.Th>
+                                    <Table.Th>
+                                        <RubricHelpLabel
+                                            label="Unit"
+                                            description={rubricLabels.unit}
+                                        />
+                                    </Table.Th>
+                                    <Table.Th>
+                                        <RubricHelpLabel
+                                            label="Aggregation"
+                                            description={
+                                                rubricLabels.aggregation
+                                            }
+                                        />
+                                    </Table.Th>
+                                    <Table.Th>
+                                        <RubricHelpLabel
+                                            label="Events"
+                                            description={rubricLabels.events}
+                                        />
+                                    </Table.Th>
+                                    <Table.Th>
+                                        <RubricHelpLabel
+                                            label="Actions"
+                                            description={rubricLabels.actions}
+                                        />
+                                    </Table.Th>
                                 </Table.Tr>
                             </Table.Thead>
                             <Table.Tbody>
