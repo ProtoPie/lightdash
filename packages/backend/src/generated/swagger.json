@@ -964,6 +964,178 @@
             "ApiChurnScoresResponse": {
                 "$ref": "#/components/schemas/ApiSuccess_ChurnScore-Array_"
             },
+            "ApiChurnScoreFactorDetail": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/ChurnScoreFactor"
+                    },
+                    {
+                        "properties": {
+                            "score": {
+                                "allOf": [
+                                    {
+                                        "$ref": "#/components/schemas/ChurnScoreFactorScore"
+                                    },
+                                    {
+                                        "properties": {
+                                            "achievementPercent": {
+                                                "type": "number",
+                                                "format": "double"
+                                            }
+                                        },
+                                        "required": ["achievementPercent"],
+                                        "type": "object"
+                                    }
+                                ]
+                            }
+                        },
+                        "required": ["score"],
+                        "type": "object"
+                    }
+                ]
+            },
+            "ApiChurnScoreAccountEventSummary": {
+                "properties": {
+                    "eventName": {
+                        "type": "string"
+                    },
+                    "eventCount": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "activeUsers": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "activeDays": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "shareOfEvents": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "firstSeenAt": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "lastSeenAt": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "eventName",
+                    "eventCount",
+                    "activeUsers",
+                    "activeDays",
+                    "shareOfEvents",
+                    "firstSeenAt",
+                    "lastSeenAt"
+                ],
+                "type": "object"
+            },
+            "ApiChurnScoreAccountEventDailyCount": {
+                "properties": {
+                    "eventDate": {
+                        "type": "string"
+                    },
+                    "eventName": {
+                        "type": "string"
+                    },
+                    "eventCount": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "activeUsers": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": [
+                    "eventDate",
+                    "eventName",
+                    "eventCount",
+                    "activeUsers"
+                ],
+                "type": "object"
+            },
+            "ApiChurnScoreAccountEventUsage": {
+                "properties": {
+                    "lookbackDays": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "totalEvents": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "selectedEventNames": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
+                    "events": {
+                        "items": {
+                            "$ref": "#/components/schemas/ApiChurnScoreAccountEventSummary"
+                        },
+                        "type": "array"
+                    },
+                    "daily": {
+                        "items": {
+                            "$ref": "#/components/schemas/ApiChurnScoreAccountEventDailyCount"
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": [
+                    "lookbackDays",
+                    "totalEvents",
+                    "selectedEventNames",
+                    "events",
+                    "daily"
+                ],
+                "type": "object"
+            },
+            "ApiChurnScoreAccountDetails": {
+                "properties": {
+                    "score": {
+                        "$ref": "#/components/schemas/ChurnScore"
+                    },
+                    "config": {
+                        "$ref": "#/components/schemas/ChurnScoreConfig"
+                    },
+                    "factors": {
+                        "items": {
+                            "$ref": "#/components/schemas/ApiChurnScoreFactorDetail"
+                        },
+                        "type": "array"
+                    },
+                    "eventUsage": {
+                        "$ref": "#/components/schemas/ApiChurnScoreAccountEventUsage"
+                    }
+                },
+                "required": ["score", "config", "factors", "eventUsage"],
+                "type": "object"
+            },
+            "ApiSuccess_ApiChurnScoreAccountDetails_": {
+                "properties": {
+                    "results": {
+                        "$ref": "#/components/schemas/ApiChurnScoreAccountDetails"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiChurnScoreAccountDetailsResponse": {
+                "$ref": "#/components/schemas/ApiSuccess_ApiChurnScoreAccountDetails_"
+            },
             "ApiSuccessEmpty": {
                 "properties": {
                     "results": {},
@@ -33825,6 +33997,63 @@
                         "schema": {
                             "format": "double",
                             "type": "number"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/scores/account/details": {
+            "get": {
+                "operationId": "GetProtopieChurnScoreAccountDetails",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreAccountDetailsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Get latest churn score details and event usage for one account.",
+                "summary": "Get Protopie churn score account details",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "accountKey",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "configUuid",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 ]

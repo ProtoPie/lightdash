@@ -1,6 +1,7 @@
 import { type Protopie } from '@lightdash/common';
 import {
     Alert,
+    Anchor,
     Badge,
     Button,
     Card,
@@ -15,6 +16,7 @@ import {
 } from '@mantine-8/core';
 import { useDebouncedValue } from '@mantine-8/hooks';
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import { useProtopieChurnConfigs, useProtopieChurnScores } from './api';
 import ProtopieChurnScoreMethodCards from './ProtopieChurnScoreMethodCards';
@@ -212,12 +214,11 @@ const ProtopieChurnScoresPage = () => {
                         />
                     </Group>
 
-                    <Table.ScrollContainer minWidth={900}>
+                    <Table.ScrollContainer minWidth={820}>
                         <Table verticalSpacing="sm">
                             <Table.Thead>
                                 <Table.Tr>
-                                    <Table.Th>Account key</Table.Th>
-                                    <Table.Th>Namespace</Table.Th>
+                                    <Table.Th>Account</Table.Th>
                                     <Table.Th>Score</Table.Th>
                                     <Table.Th>Risk</Table.Th>
                                     <Table.Th>Raw points</Table.Th>
@@ -228,13 +229,9 @@ const ProtopieChurnScoresPage = () => {
                                 {rows.map((score) => (
                                     <Table.Tr key={score.scoreUuid}>
                                         <Table.Td>
-                                            <Text size="sm">
-                                                {score.accountKey}
-                                            </Text>
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Text size="sm">
-                                                {score.namespace ?? '-'}
+                                            <Text size="sm" fw={600}>
+                                                {score.namespace ??
+                                                    score.accountKey}
                                             </Text>
                                             {score.cloudUrl && (
                                                 <Text size="xs" c="dimmed">
@@ -243,11 +240,17 @@ const ProtopieChurnScoresPage = () => {
                                             )}
                                         </Table.Td>
                                         <Table.Td>
-                                            <Text fw={600}>
+                                            <Anchor
+                                                component={Link}
+                                                to={`/projects/${projectUuid}/protopie/churn/scores/${encodeURIComponent(
+                                                    score.accountKey,
+                                                )}?configUuid=${score.configUuid}`}
+                                                fw={600}
+                                            >
                                                 {score.normalizedScore.toFixed(
                                                     2,
                                                 )}
-                                            </Text>
+                                            </Anchor>
                                         </Table.Td>
                                         <Table.Td>
                                             <Badge

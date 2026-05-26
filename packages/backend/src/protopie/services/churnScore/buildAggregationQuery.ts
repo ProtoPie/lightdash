@@ -85,14 +85,14 @@ export const buildAggregationQuery = ({
 
         if (factor.aggregation === 'event_count') {
             metricExpressions.push(
-                `COALESCE(SUM(CASE WHEN ${predicate} THEN 1 ELSE 0 END), 0) AS ${factor.factorKey}_event_count`,
+                `COUNT(DISTINCT CASE WHEN ${predicate} THEN ea.event_id END) AS ${factor.factorKey}_event_count`,
             );
             return;
         }
 
         if (factor.aggregation === 'event_count_per_user') {
             metricExpressions.push(
-                `COALESCE(SUM(CASE WHEN ${predicate} THEN 1 ELSE 0 END), 0) AS ${factor.factorKey}_event_count`,
+                `COUNT(DISTINCT CASE WHEN ${predicate} THEN ea.event_id END) AS ${factor.factorKey}_event_count`,
             );
         }
     });
@@ -127,15 +127,15 @@ export const buildAggregationQuery = ({
         ),
         per_account AS (
             SELECT
-                et.team_id AS account_key,
+                et.namespace AS account_key,
                 et.namespace,
-                et.cloud_url,
+                MAX(et.cloud_url) AS cloud_url,
                 COUNT(DISTINCT ea.user_id) AS total_users,
                 ${metricExpressions.join(',\n                ')}
             FROM enterprise_teams et
             LEFT JOIN event_attribution ea
                 ON ea.team_id = et.team_id
-            GROUP BY et.team_id, et.namespace, et.cloud_url
+            GROUP BY et.namespace
         )
         SELECT *
         FROM per_account

@@ -32654,6 +32654,74 @@ export function RegisterRoutes(app: Router) {
         },
     );
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    const argsProtopieChurnScoreController_getAccountDetails: Record<
+        string,
+        TsoaRoute.ParameterSchema
+    > = {
+        projectUuid: {
+            in: 'path',
+            name: 'projectUuid',
+            required: true,
+            dataType: 'string',
+        },
+        req: { in: 'request', name: 'req', required: true, dataType: 'object' },
+        accountKey: {
+            in: 'query',
+            name: 'accountKey',
+            required: true,
+            dataType: 'string',
+        },
+        configUuid: { in: 'query', name: 'configUuid', dataType: 'string' },
+    };
+    app.get(
+        '/api/v1/projects/:projectUuid/protopie/churn/scores/account/details',
+        ...fetchMiddlewares<RequestHandler>(ProtopieChurnScoreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ProtopieChurnScoreController.prototype.getAccountDetails,
+        ),
+
+        async function ProtopieChurnScoreController_getAccountDetails(
+            request: ExRequest,
+            response: ExResponse,
+            next: any,
+        ) {
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = templateService.getValidatedArgs({
+                    args: argsProtopieChurnScoreController_getAccountDetails,
+                    request,
+                    response,
+                });
+
+                const container: IocContainer =
+                    typeof iocContainer === 'function'
+                        ? (iocContainer as IocContainerFactory)(request)
+                        : iocContainer;
+
+                const controller: any =
+                    await container.get<ProtopieChurnScoreController>(
+                        ProtopieChurnScoreController,
+                    );
+                if (typeof controller['setStatus'] === 'function') {
+                    controller.setStatus(undefined);
+                }
+
+                await templateService.apiHandler({
+                    methodName: 'getAccountDetails',
+                    controller,
+                    response,
+                    next,
+                    validatedArgs,
+                    successStatus: 200,
+                });
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     const argsProtopieChurnScoreController_getAccountHistory: Record<
         string,
         TsoaRoute.ParameterSchema

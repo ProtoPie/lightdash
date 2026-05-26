@@ -49,6 +49,18 @@ type ChurnScoreServiceArguments = {
     churnScoreRunModel: ChurnScoreRunModel;
 };
 
+type ChurnScoreAccountEventUsageRow = {
+    event_date: Date | string;
+    event_name: string;
+    event_count: string | number;
+    active_users: string | number;
+    first_seen_at: Date | string | null;
+    last_seen_at: Date | string | null;
+    event_total_count: string | number;
+    event_active_users: string | number;
+    event_active_days: string | number;
+};
+
 export class ChurnScoreService extends BaseService {
     private readonly database: Knex;
 
@@ -419,6 +431,80 @@ export class ChurnScoreService extends BaseService {
         });
     }
 
+    async getAccountDetails({
+        projectUuid,
+        accountKey,
+        configUuid,
+        user,
+    }: {
+        projectUuid: string;
+        accountKey: string;
+        configUuid?: string;
+        user: SessionUser;
+    }): Promise<Protopie.ChurnScoreAccountDetails> {
+        this.requireProjectView(user, projectUuid);
+        const trimmedAccountKey = accountKey.trim();
+        if (!trimmedAccountKey) {
+            throw new ParameterError('accountKey is required.');
+        }
+
+        const score = await this.churnScoreModel.getLatestScoreByAccount({
+            projectUuid,
+            accountKey: trimmedAccountKey,
+            configUuid,
+        });
+        if (!score) {
+            throw new NotFoundError('Churn score account was not found.');
+        }
+
+        const config = await this.churnScoreConfigModel.getByUuid({
+            configUuid: score.configUuid,
+        });
+        if (!config) {
+            throw new NotFoundError('Churn score rubric was not found.');
+        }
+        this.requireConfigView(user, projectUuid, config);
+
+        const factors = await this.churnScoreFactorModel.listByConfigUuid({
+            configUuid: score.configUuid,
+        });
+        const eventUsage = await this.getAccountEventUsage({
+            projectUuid,
+            namespace: score.namespace ?? trimmedAccountKey,
+            config,
+            factors,
+        });
+
+        return {
+            score,
+            config,
+            factors: factors.map((factor) => {
+                const factorScore = score.factorScores[factor.factorKey] ?? {
+                    raw: 0,
+                    goal: factor.goalValue,
+                    points: 0,
+                };
+                const goal = Number(factorScore.goal || factor.goalValue || 0);
+                const achievementPercent =
+                    goal > 0
+                        ? Math.min(Number(factorScore.raw || 0) / goal, 1) * 100
+                        : 0;
+
+                return {
+                    ...factor,
+                    score: {
+                        ...factorScore,
+                        achievementPercent: ChurnScoreService.round(
+                            achievementPercent,
+                            2,
+                        ),
+                    },
+                };
+            }),
+            eventUsage,
+        };
+    }
+
     async listEventNames({
         projectUuid,
         search,
@@ -690,6 +776,129 @@ export class ChurnScoreService extends BaseService {
         });
     }
 
+    private async getAccountEventUsage({
+        projectUuid,
+        namespace,
+        config,
+        factors,
+    }: {
+        projectUuid: string;
+        namespace: string;
+        config: ProtopieChurnScoreConfigRecord;
+        factors: ProtopieChurnScoreFactorRecord[];
+    }): Promise<Protopie.ChurnScoreAccountEventUsage> {
+        const selectedEventNames = Array.from(
+            new Set(
+                factors.flatMap((factor) =>
+                    factor.aggregation === 'active_days'
+                        ? []
+                        : factor.eventGroup.events,
+                ),
+            ),
+        ).filter(Boolean);
+
+        if (selectedEventNames.length === 0) {
+            return {
+                lookbackDays: config.lookbackDays,
+                totalEvents: 0,
+                selectedEventNames,
+                events: [],
+                daily: [],
+            };
+        }
+
+        const credentials =
+            await this.projectModel.getWarehouseCredentialsForProject(
+                projectUuid,
+            );
+        const schema = ChurnScoreService.getWarehouseSchema(credentials);
+        const values = [namespace];
+        const eventPlaceholders = selectedEventNames.map((eventName) => {
+            values.push(eventName);
+            return `$${values.length}`;
+        });
+        const sql = `
+            WITH account_teams AS (
+                SELECT DISTINCT
+                    t.team_id
+                FROM ${schema}.dim_team_summary t
+                WHERE t.namespace = $1
+                  AND t.team_id IS NOT NULL
+            ), event_attribution AS (
+                SELECT DISTINCT
+                    e.event_id,
+                    DATE_TRUNC('day', e.event_time) AS event_date,
+                    e.event_time,
+                    e.event_name,
+                    e.user_id
+                FROM ${schema}.dim_product_all_events e
+                LEFT JOIN ${schema}.dim_product_all_event_properties ep
+                    ON e.event_id = ep.event_id
+                INNER JOIN account_teams at
+                    ON at.team_id = ep.team_id
+                WHERE e.event_time >= CURRENT_DATE - ${config.lookbackDays}
+                  AND e.event_name IN (${eventPlaceholders.join(', ')})
+            )
+            , daily AS (
+                SELECT
+                    event_date,
+                    event_name,
+                    COUNT(DISTINCT event_id) AS event_count,
+                    COUNT(DISTINCT user_id) AS active_users
+                FROM event_attribution
+                GROUP BY event_date, event_name
+            ), event_summary AS (
+                SELECT
+                    event_name,
+                    COUNT(DISTINCT event_id) AS event_total_count,
+                    COUNT(DISTINCT user_id) AS event_active_users,
+                    COUNT(DISTINCT event_date) AS event_active_days,
+                    MIN(event_time) AS first_seen_at,
+                    MAX(event_time) AS last_seen_at
+                FROM event_attribution
+                GROUP BY event_name
+            )
+            SELECT
+                d.event_date,
+                d.event_name,
+                d.event_count,
+                d.active_users,
+                s.event_total_count,
+                s.event_active_users,
+                s.event_active_days,
+                s.first_seen_at,
+                s.last_seen_at
+            FROM daily d
+            JOIN event_summary s
+                ON d.event_name = s.event_name
+            ORDER BY d.event_date, d.event_name
+        `;
+        const { warehouseClient, sshTunnel } =
+            await this.projectService._getWarehouseClient(
+                projectUuid,
+                credentials,
+            );
+
+        try {
+            const results = await warehouseClient.runQuery(
+                sql,
+                {
+                    project_uuid: projectUuid,
+                    query_context: QueryExecutionContext.API,
+                },
+                credentials.dataTimezone,
+                values,
+            );
+            return ChurnScoreService.toAccountEventUsage({
+                lookbackDays: config.lookbackDays,
+                selectedEventNames,
+                rows: results.rows as ChurnScoreAccountEventUsageRow[],
+            });
+        } finally {
+            await sshTunnel.disconnect();
+        }
+    }
+
     private async getWarehouseAggregationRows({
         projectUuid,
         config,
@@ -729,6 +938,136 @@ export class ChurnScoreService extends BaseService {
         } finally {
             await sshTunnel.disconnect();
         }
+    }
+
+    private static toAccountEventUsage({
+        lookbackDays,
+        selectedEventNames,
+        rows,
+    }: {
+        lookbackDays: number;
+        selectedEventNames: string[];
+        rows: ChurnScoreAccountEventUsageRow[];
+    }): Protopie.ChurnScoreAccountEventUsage {
+        const events = new Map<string, Protopie.ChurnScoreAccountEventSummary>(
+            selectedEventNames.map((eventName) => [
+                eventName,
+                {
+                    eventName,
+                    eventCount: 0,
+                    activeUsers: 0,
+                    activeDays: 0,
+                    shareOfEvents: 0,
+                    firstSeenAt: null,
+                    lastSeenAt: null,
+                },
+            ]),
+        );
+        const activeDaysByEvent = new Map<string, Set<string>>();
+        const userCountByEvent = new Map<string, number>();
+        const daily = rows.map((row) => {
+            const eventName = String(row.event_name);
+            const eventDate = ChurnScoreService.toDateString(row.event_date);
+            const eventCount = ChurnScoreService.numberValue(row.event_count);
+            const activeUsers = ChurnScoreService.numberValue(row.active_users);
+            const firstSeenAt = ChurnScoreService.toIsoString(
+                row.first_seen_at,
+            );
+            const lastSeenAt = ChurnScoreService.toIsoString(row.last_seen_at);
+            const summary = events.get(eventName) ?? {
+                eventName,
+                eventCount: 0,
+                activeUsers: 0,
+                activeDays: 0,
+                shareOfEvents: 0,
+                firstSeenAt: null,
+                lastSeenAt: null,
+            };
+
+            summary.eventCount = ChurnScoreService.numberValue(
+                row.event_total_count,
+            );
+            summary.activeUsers = ChurnScoreService.numberValue(
+                row.event_active_users,
+            );
+            summary.activeDays = ChurnScoreService.numberValue(
+                row.event_active_days,
+            );
+            summary.firstSeenAt = firstSeenAt;
+            summary.lastSeenAt = lastSeenAt;
+            events.set(eventName, summary);
+
+            const activeDays = activeDaysByEvent.get(eventName) ?? new Set();
+            activeDays.add(eventDate);
+            activeDaysByEvent.set(eventName, activeDays);
+            userCountByEvent.set(eventName, summary.activeUsers);
+
+            return {
+                eventDate,
+                eventName,
+                eventCount,
+                activeUsers,
+            };
+        });
+        const totalEvents = Array.from(events.values()).reduce(
+            (sum, event) => sum + event.eventCount,
+            0,
+        );
+        const eventSummaries = Array.from(events.values())
+            .map((event) => ({
+                ...event,
+                activeUsers:
+                    event.activeUsers ||
+                    userCountByEvent.get(event.eventName) ||
+                    0,
+                activeDays:
+                    event.activeDays ||
+                    activeDaysByEvent.get(event.eventName)?.size ||
+                    0,
+                shareOfEvents:
+                    totalEvents > 0
+                        ? ChurnScoreService.round(
+                              event.eventCount / totalEvents,
+                              4,
+                          )
+                        : 0,
+            }))
+            .sort((a, b) => b.eventCount - a.eventCount);
+
+        return {
+            lookbackDays,
+            totalEvents,
+            selectedEventNames,
+            events: eventSummaries,
+            daily,
+        };
+    }
+
+    private static numberValue(value: unknown): number {
+        const parsed = Number(value ?? 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    private static round(value: number, decimals: number): number {
+        const multiplier = 10 ** decimals;
+        return Math.round((value + Number.EPSILON) * multiplier) / multiplier;
+    }
+
+    private static toDateString(value: Date | string): string {
+        if (value instanceof Date) {
+            return value.toISOString().slice(0, 10);
+        }
+
+        return String(value).slice(0, 10);
+    }
+
+    private static toIsoString(value: Date | string | null): string | null {
+        if (!value) return null;
+        if (value instanceof Date) return value.toISOString();
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime())
+            ? String(value)
+            : parsed.toISOString();
     }
 
     private static getWarehouseSchema(

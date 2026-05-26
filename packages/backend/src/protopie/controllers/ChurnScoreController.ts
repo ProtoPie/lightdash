@@ -49,6 +49,55 @@ type ApiChurnScoreRunsResponse = ApiSuccess<Protopie.ChurnScoreRun[]>;
 
 type ApiChurnScoresResponse = ApiSuccess<Protopie.ChurnScore[]>;
 
+type ApiChurnScoreFactorDetail = {
+    factorUuid?: string;
+    configUuid?: string;
+    factorKey: string;
+    label: string;
+    maxPoints: number;
+    goalValue: number;
+    goalUnit: Protopie.ChurnScoreGoalUnit;
+    aggregation: Protopie.ChurnScoreAggregation;
+    eventGroup: Protopie.ChurnScoreEventGroup;
+    stepThresholds?: Record<string, unknown> | null;
+    sortOrder: number;
+    score: Protopie.ChurnScoreFactorScore & {
+        achievementPercent: number;
+    };
+};
+
+type ApiChurnScoreAccountEventSummary = {
+    eventName: string;
+    eventCount: number;
+    activeUsers: number;
+    activeDays: number;
+    shareOfEvents: number;
+    firstSeenAt: string | null;
+    lastSeenAt: string | null;
+};
+
+type ApiChurnScoreAccountEventDailyCount = {
+    eventDate: string;
+    eventName: string;
+    eventCount: number;
+    activeUsers: number;
+};
+
+type ApiChurnScoreAccountEventUsage = {
+    lookbackDays: number;
+    totalEvents: number;
+    selectedEventNames: string[];
+    events: ApiChurnScoreAccountEventSummary[];
+    daily: ApiChurnScoreAccountEventDailyCount[];
+};
+
+type ApiChurnScoreAccountDetailsResponse = ApiSuccess<{
+    score: Protopie.ChurnScore;
+    config: Protopie.ChurnScoreConfig;
+    factors: ApiChurnScoreFactorDetail[];
+    eventUsage: ApiChurnScoreAccountEventUsage;
+}>;
+
 type ApiChurnScoreEventsResponse = ApiSuccess<string[]>;
 
 @Route('/api/v1/projects/{projectUuid}/protopie/churn')
@@ -363,6 +412,36 @@ export class ProtopieChurnScoreController extends BaseController {
                     limit,
                     offset,
                 },
+                user: toSessionUser(req.account),
+            }),
+        };
+    }
+
+    /**
+     * Get latest churn score details and event usage for one account.
+     * @summary Get Protopie churn score account details
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('scores/account/details')
+    @OperationId('GetProtopieChurnScoreAccountDetails')
+    async getAccountDetails(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+        @Query() accountKey: string,
+        @Query() configUuid?: string,
+    ): Promise<ApiChurnScoreAccountDetailsResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: await getProtopieServices(
+                this.services,
+            ).churnScoreService.getAccountDetails({
+                projectUuid,
+                accountKey,
+                configUuid,
                 user: toSessionUser(req.account),
             }),
         };

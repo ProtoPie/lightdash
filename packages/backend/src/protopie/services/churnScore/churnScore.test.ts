@@ -182,9 +182,11 @@ describe('buildAggregationQuery', () => {
         expect(sql).toContain(
             'ea.event_name IN ($1, $2, $3, $4) THEN ea.user_id',
         );
-        expect(sql).toContain('ea.event_name IN ($25, $26) THEN 1 ELSE 0 END');
         expect(sql).toContain(
-            'COALESCE(SUM(CASE WHEN FALSE THEN 1 ELSE 0 END), 0) AS number_of_messages_received_event_count',
+            'ea.event_name IN ($25, $26) THEN ea.event_id END',
+        );
+        expect(sql).toContain(
+            'COUNT(DISTINCT CASE WHEN FALSE THEN ea.event_id END) AS number_of_messages_received_event_count',
         );
         expect(sql).toContain(
             "COUNT(DISTINCT DATE_TRUNC('day', ea.event_time)) AS active_days",
@@ -193,7 +195,8 @@ describe('buildAggregationQuery', () => {
         expect(sql).toContain(
             'EXISTS (\n                  SELECT 1\n                  FROM warehouse_staging.dim_enterprise_summary es',
         );
-        expect(sql).toContain('GROUP BY t.team_id');
+        expect(sql).toContain('et.namespace AS account_key');
+        expect(sql).toContain('GROUP BY et.namespace');
         expect(sql).toContain('e.event_time >= CURRENT_DATE - 90');
         expect(sql).not.toContain('IN (:');
         expect(sql).not.toContain('DATEADD');

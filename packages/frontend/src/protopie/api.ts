@@ -60,6 +60,22 @@ const protopieChurnScoresQueryKey = (
     filters?: Protopie.ChurnScoreLatestFilters,
 ) => [...protopieChurnScoresQueryKeyBase(projectUuid), filters];
 
+const protopieChurnScoreAccountDetailsQueryKey = ({
+    projectUuid,
+    accountKey,
+    configUuid,
+}: {
+    projectUuid?: string;
+    accountKey?: string;
+    configUuid?: string;
+}) => [
+    'protopie',
+    'churn-score-account-details',
+    projectUuid,
+    accountKey,
+    configUuid,
+];
+
 const protopieChurnEventsQueryKey = (projectUuid?: string, search?: string) => [
     'protopie',
     'churn-events',
@@ -311,6 +327,35 @@ export const useProtopieChurnRun = ({
                 method: 'GET',
                 url: `/projects/${projectUuid}/protopie/churn/runs/${runUuid}`,
             }) as Promise<Protopie.ChurnScoreRun>,
+    });
+
+export const useProtopieChurnScoreAccountDetails = ({
+    projectUuid,
+    accountKey,
+    configUuid,
+}: {
+    projectUuid?: string;
+    accountKey?: string;
+    configUuid?: string;
+}) =>
+    useQuery<Protopie.ChurnScoreAccountDetails, ApiError>({
+        queryKey: protopieChurnScoreAccountDetailsQueryKey({
+            projectUuid,
+            accountKey,
+            configUuid,
+        }),
+        enabled: Boolean(projectUuid && accountKey),
+        keepPreviousData: true,
+        queryFn: () => {
+            const params = new URLSearchParams();
+            if (accountKey) params.set('accountKey', accountKey);
+            if (configUuid) params.set('configUuid', configUuid);
+
+            return lightdashApi<AnyType>({
+                method: 'GET',
+                url: `/projects/${projectUuid}/protopie/churn/scores/account/details?${params.toString()}`,
+            }) as Promise<Protopie.ChurnScoreAccountDetails>;
+        },
     });
 
 export const useProtopieChurnScores = ({

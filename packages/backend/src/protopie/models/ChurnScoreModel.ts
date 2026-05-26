@@ -143,6 +143,17 @@ export class ChurnScoreModel {
         configUuid: string;
         filters: Protopie.ChurnScoreLatestFilters;
     }): Promise<ProtopieChurnScoreRecord[]> {
+        const latestRun = this.database<DbChurnScore>(
+            ProtopieTableName.ChurnScores,
+        )
+            .select('run_uuid')
+            .where({
+                project_uuid: projectUuid,
+                config_uuid: configUuid,
+            })
+            .orderBy('scored_for_date', 'desc')
+            .orderBy('computed_at', 'desc')
+            .limit(1);
         const latestScores = this.database<DbChurnScore>(
             ProtopieTableName.ChurnScores,
         )
@@ -152,6 +163,7 @@ export class ChurnScoreModel {
                 project_uuid: projectUuid,
                 config_uuid: configUuid,
             })
+            .whereIn('run_uuid', latestRun)
             .orderBy('account_key', 'asc')
             .orderBy('scored_for_date', 'desc')
             .orderBy('computed_at', 'desc')
@@ -181,6 +193,32 @@ export class ChurnScoreModel {
 
         const rows = await query;
         return rows.map((row) => ChurnScoreModel.toRecord(row));
+    }
+
+    async getLatestScoreByAccount({
+        projectUuid,
+        accountKey,
+        configUuid,
+    }: {
+        projectUuid: string;
+        accountKey: string;
+        configUuid?: string;
+    }): Promise<ProtopieChurnScoreRecord | undefined> {
+        const query = this.database<DbChurnScore>(ProtopieTableName.ChurnScores)
+            .where({
+                project_uuid: projectUuid,
+                account_key: accountKey,
+            })
+            .orderBy('scored_for_date', 'desc')
+            .orderBy('computed_at', 'desc')
+            .first();
+
+        if (configUuid) {
+            void query.where('config_uuid', configUuid);
+        }
+
+        const row = await query;
+        return row ? ChurnScoreModel.toRecord(row) : undefined;
     }
 
     async getAccountHistory({

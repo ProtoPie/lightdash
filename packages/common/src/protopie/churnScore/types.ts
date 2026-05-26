@@ -111,6 +111,44 @@ export type ChurnScore = {
     runUuid: string;
 };
 
+export type ChurnScoreFactorDetail = ChurnScoreFactor & {
+    score: ChurnScoreFactorScore & {
+        achievementPercent: number;
+    };
+};
+
+export type ChurnScoreAccountEventSummary = {
+    eventName: string;
+    eventCount: number;
+    activeUsers: number;
+    activeDays: number;
+    shareOfEvents: number;
+    firstSeenAt: string | null;
+    lastSeenAt: string | null;
+};
+
+export type ChurnScoreAccountEventDailyCount = {
+    eventDate: string;
+    eventName: string;
+    eventCount: number;
+    activeUsers: number;
+};
+
+export type ChurnScoreAccountEventUsage = {
+    lookbackDays: number;
+    totalEvents: number;
+    selectedEventNames: string[];
+    events: ChurnScoreAccountEventSummary[];
+    daily: ChurnScoreAccountEventDailyCount[];
+};
+
+export type ChurnScoreAccountDetails = {
+    score: ChurnScore;
+    config: ChurnScoreConfig;
+    factors: ChurnScoreFactorDetail[];
+    eventUsage: ChurnScoreAccountEventUsage;
+};
+
 export type ChurnScoreRun = {
     runUuid: string;
     projectUuid: string;
