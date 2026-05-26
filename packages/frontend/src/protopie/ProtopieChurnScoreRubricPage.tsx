@@ -97,7 +97,7 @@ const rubricLabels = {
         'Risk uses scorePercent = total earned points / total possible points. If scorePercent is at or above this value, the account is Low risk. Example: 0.75 means normalized score >= 75.',
     mediumRiskThreshold:
         'If scorePercent is below the Low threshold but at or above this value, the account is Medium risk. Scores below this value are High risk.',
-    factor: 'One scoring rule. The label is what users see; the key is the stable internal identifier saved in the score breakdown.',
+    factor: 'One scoring rule. This label is what users see when reviewing or editing the rubric.',
     weight: 'Maximum points this factor can contribute. All factor weights must add up to 100. Earned points = min(actual / goal, 1) * weight.',
     goal: 'The target value for this factor. Reaching the goal earns the full weight; partial progress earns proportional points.',
     unit: 'How to read the goal value: Fraction is 0-1, Count is total events, Count per user is events divided by active users, Days is active days in the lookback window.',
@@ -616,19 +616,6 @@ const ProtopieChurnScoreRubricPage = () => {
                                                         label: event
                                                             .currentTarget
                                                             .value,
-                                                    })
-                                                }
-                                            />
-                                            <TextInput
-                                                mt="xs"
-                                                size="xs"
-                                                value={factor.factorKey}
-                                                onChange={(event) =>
-                                                    updateFactor(index, {
-                                                        ...factor,
-                                                        factorKey:
-                                                            event.currentTarget
-                                                                .value,
                                                     })
                                                 }
                                             />
