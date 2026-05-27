@@ -61,6 +61,11 @@ type ChurnScoreAccountEventUsageRow = {
     event_active_days: string | number;
 };
 
+type ChurnScoreEventUsageDateRange = {
+    dateFrom: string;
+    dateTo: string;
+};
+
 export class ChurnScoreService extends BaseService {
     private readonly database: Knex;
 
@@ -436,11 +441,15 @@ export class ChurnScoreService extends BaseService {
         accountKey,
         configUuid,
         user,
+        dateFrom,
+        dateTo,
     }: {
         projectUuid: string;
         accountKey: string;
         configUuid?: string;
         user: SessionUser;
+        dateFrom?: string;
+        dateTo?: string;
     }): Promise<Protopie.ChurnScoreAccountDetails> {
         this.requireProjectView(user, projectUuid);
         const trimmedAccountKey = accountKey.trim();
@@ -473,6 +482,12 @@ export class ChurnScoreService extends BaseService {
             namespace: score.namespace ?? trimmedAccountKey,
             config,
             factors,
+            dateRange: ChurnScoreService.resolveEventUsageDateRange({
+                scoredForDate: score.scoredForDate,
+                lookbackDays: config.lookbackDays,
+                dateFrom,
+                dateTo,
+            }),
         });
 
         return {
@@ -781,11 +796,13 @@ export class ChurnScoreService extends BaseService {
         namespace,
         config,
         factors,
+        dateRange,
     }: {
         projectUuid: string;
         namespace: string;
         config: ProtopieChurnScoreConfigRecord;
         factors: ProtopieChurnScoreFactorRecord[];
+        dateRange: ChurnScoreEventUsageDateRange;
     }): Promise<Protopie.ChurnScoreAccountEventUsage> {
         const selectedEventNames = Array.from(
             new Set(
@@ -800,6 +817,8 @@ export class ChurnScoreService extends BaseService {
         if (selectedEventNames.length === 0) {
             return {
                 lookbackDays: config.lookbackDays,
+                dateFrom: dateRange.dateFrom,
+                dateTo: dateRange.dateTo,
                 totalEvents: 0,
                 selectedEventNames,
                 events: [],
@@ -812,7 +831,7 @@ export class ChurnScoreService extends BaseService {
                 projectUuid,
             );
         const schema = ChurnScoreService.getWarehouseSchema(credentials);
-        const values = [namespace];
+        const values = [namespace, dateRange.dateFrom, dateRange.dateTo];
         const eventPlaceholders = selectedEventNames.map((eventName) => {
             values.push(eventName);
             return `$${values.length}`;
@@ -824,6 +843,10 @@ export class ChurnScoreService extends BaseService {
                 FROM ${schema}.dim_team_summary t
                 WHERE t.namespace = $1
                   AND t.team_id IS NOT NULL
+            ), date_filter AS (
+                SELECT
+                    $2::date AS date_from,
+                    ($3::date + 1) AS date_to_exclusive
             ), event_attribution AS (
                 SELECT DISTINCT
                     e.event_id,
@@ -836,7 +859,9 @@ export class ChurnScoreService extends BaseService {
                     ON e.event_id = ep.event_id
                 INNER JOIN account_teams at
                     ON at.team_id = ep.team_id
-                WHERE e.event_time >= CURRENT_DATE - ${config.lookbackDays}
+                CROSS JOIN date_filter df
+                WHERE e.event_time >= df.date_from
+                  AND e.event_time < df.date_to_exclusive
                   AND e.event_name IN (${eventPlaceholders.join(', ')})
             )
             , daily AS (
@@ -891,6 +916,7 @@ export class ChurnScoreService extends BaseService {
             );
             return ChurnScoreService.toAccountEventUsage({
                 lookbackDays: config.lookbackDays,
+                dateRange,
                 selectedEventNames,
                 rows: results.rows as ChurnScoreAccountEventUsageRow[],
             });
@@ -940,12 +966,79 @@ export class ChurnScoreService extends BaseService {
         }
     }
 
+    private static resolveEventUsageDateRange({
+        scoredForDate,
+        lookbackDays,
+        dateFrom,
+        dateTo,
+    }: {
+        scoredForDate: string;
+        lookbackDays: number;
+        dateFrom?: string;
+        dateTo?: string;
+    }): ChurnScoreEventUsageDateRange {
+        const resolvedDateTo = dateTo?.trim() || scoredForDate;
+        ChurnScoreService.validateDateString(resolvedDateTo, 'dateTo');
+
+        const resolvedDateFrom =
+            dateFrom?.trim() ||
+            ChurnScoreService.addDays(
+                resolvedDateTo,
+                -(Math.max(Math.floor(lookbackDays), 1) - 1),
+            );
+        ChurnScoreService.validateDateString(resolvedDateFrom, 'dateFrom');
+
+        const fromDate = new Date(`${resolvedDateFrom}T00:00:00.000Z`);
+        const toDate = new Date(`${resolvedDateTo}T00:00:00.000Z`);
+        if (fromDate > toDate) {
+            throw new ParameterError(
+                'dateFrom must be before or equal to dateTo.',
+            );
+        }
+
+        const days =
+            Math.floor(
+                (toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000),
+            ) + 1;
+        if (days > 366) {
+            throw new ParameterError(
+                'Event usage date range cannot exceed 366 days.',
+            );
+        }
+
+        return {
+            dateFrom: resolvedDateFrom,
+            dateTo: resolvedDateTo,
+        };
+    }
+
+    private static validateDateString(value: string, label: string): void {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            throw new ParameterError(`${label} must use YYYY-MM-DD format.`);
+        }
+        const parsed = new Date(`${value}T00:00:00.000Z`);
+        if (
+            Number.isNaN(parsed.getTime()) ||
+            parsed.toISOString().slice(0, 10) !== value
+        ) {
+            throw new ParameterError(`${label} must be a valid calendar date.`);
+        }
+    }
+
+    private static addDays(value: string, days: number): string {
+        const parsed = new Date(`${value}T00:00:00.000Z`);
+        parsed.setUTCDate(parsed.getUTCDate() + days);
+        return parsed.toISOString().slice(0, 10);
+    }
+
     private static toAccountEventUsage({
         lookbackDays,
+        dateRange,
         selectedEventNames,
         rows,
     }: {
         lookbackDays: number;
+        dateRange: ChurnScoreEventUsageDateRange;
         selectedEventNames: string[];
         rows: ChurnScoreAccountEventUsageRow[];
     }): Protopie.ChurnScoreAccountEventUsage {
@@ -1036,6 +1129,8 @@ export class ChurnScoreService extends BaseService {
 
         return {
             lookbackDays,
+            dateFrom: dateRange.dateFrom,
+            dateTo: dateRange.dateTo,
             totalEvents,
             selectedEventNames,
             events: eventSummaries,

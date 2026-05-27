@@ -32672,6 +32672,8 @@ export function RegisterRoutes(app: Router) {
             dataType: 'string',
         },
         configUuid: { in: 'query', name: 'configUuid', dataType: 'string' },
+        dateFrom: { in: 'query', name: 'dateFrom', dataType: 'string' },
+        dateTo: { in: 'query', name: 'dateTo', dataType: 'string' },
     };
     app.get(
         '/api/v1/projects/:projectUuid/protopie/churn/scores/account/details',
@@ -41368,8 +41370,6 @@ export function RegisterRoutes(app: Router) {
             ],
         },
         humanScore: { in: 'query', name: 'humanScore', dataType: 'double' },
-        dateFrom: { in: 'query', name: 'dateFrom', dataType: 'string' },
-        dateTo: { in: 'query', name: 'dateTo', dataType: 'string' },
         search: { in: 'query', name: 'search', dataType: 'string' },
         sortField: {
             in: 'query',

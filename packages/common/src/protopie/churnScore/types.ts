@@ -136,6 +136,8 @@ export type ChurnScoreAccountEventDailyCount = {
 
 export type ChurnScoreAccountEventUsage = {
     lookbackDays: number;
+    dateFrom: string;
+    dateTo: string;
     totalEvents: number;
     selectedEventNames: string[];
     events: ChurnScoreAccountEventSummary[];

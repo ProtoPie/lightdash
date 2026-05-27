@@ -64,16 +64,22 @@ const protopieChurnScoreAccountDetailsQueryKey = ({
     projectUuid,
     accountKey,
     configUuid,
+    dateFrom,
+    dateTo,
 }: {
     projectUuid?: string;
     accountKey?: string;
     configUuid?: string;
+    dateFrom?: string;
+    dateTo?: string;
 }) => [
     'protopie',
     'churn-score-account-details',
     projectUuid,
     accountKey,
     configUuid,
+    dateFrom,
+    dateTo,
 ];
 
 const protopieChurnEventsQueryKey = (projectUuid?: string, search?: string) => [
@@ -333,16 +339,22 @@ export const useProtopieChurnScoreAccountDetails = ({
     projectUuid,
     accountKey,
     configUuid,
+    dateFrom,
+    dateTo,
 }: {
     projectUuid?: string;
     accountKey?: string;
     configUuid?: string;
+    dateFrom?: string;
+    dateTo?: string;
 }) =>
     useQuery<Protopie.ChurnScoreAccountDetails, ApiError>({
         queryKey: protopieChurnScoreAccountDetailsQueryKey({
             projectUuid,
             accountKey,
             configUuid,
+            dateFrom,
+            dateTo,
         }),
         enabled: Boolean(projectUuid && accountKey),
         keepPreviousData: true,
@@ -350,6 +362,8 @@ export const useProtopieChurnScoreAccountDetails = ({
             const params = new URLSearchParams();
             if (accountKey) params.set('accountKey', accountKey);
             if (configUuid) params.set('configUuid', configUuid);
+            if (dateFrom) params.set('dateFrom', dateFrom);
+            if (dateTo) params.set('dateTo', dateTo);
 
             return lightdashApi<AnyType>({
                 method: 'GET',

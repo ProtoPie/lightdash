@@ -85,6 +85,8 @@ type ApiChurnScoreAccountEventDailyCount = {
 
 type ApiChurnScoreAccountEventUsage = {
     lookbackDays: number;
+    dateFrom: string;
+    dateTo: string;
     totalEvents: number;
     selectedEventNames: string[];
     events: ApiChurnScoreAccountEventSummary[];
@@ -430,6 +432,8 @@ export class ProtopieChurnScoreController extends BaseController {
         @Request() req: express.Request,
         @Query() accountKey: string,
         @Query() configUuid?: string,
+        @Query() dateFrom?: string,
+        @Query() dateTo?: string,
     ): Promise<ApiChurnScoreAccountDetailsResponse> {
         assertRegisteredAccount(req.account);
         this.setStatus(200);
@@ -442,6 +446,8 @@ export class ProtopieChurnScoreController extends BaseController {
                 projectUuid,
                 accountKey,
                 configUuid,
+                dateFrom,
+                dateTo,
                 user: toSessionUser(req.account),
             }),
         };

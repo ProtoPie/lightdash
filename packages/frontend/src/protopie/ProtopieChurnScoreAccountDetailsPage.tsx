@@ -12,10 +12,11 @@ import {
     Stack,
     Table,
     Text,
+    TextInput,
     Title,
 } from '@mantine-8/core';
 import { IconArrowLeft } from '@tabler/icons-react';
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import MantineIcon from '../components/common/MantineIcon';
 import EChartsReact, {
@@ -31,6 +32,8 @@ const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
     medium: 'yellow',
     high: 'red',
 };
+
+const DATE_VALUE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 const chartColors = [
     '#4C6FFF',
@@ -143,12 +146,38 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
             return accountKey;
         }
     }, [accountKey]);
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const configUuid = searchParams.get('configUuid') ?? undefined;
+    const dateFrom = searchParams.get('dateFrom') ?? undefined;
+    const dateTo = searchParams.get('dateTo') ?? undefined;
+    const updateDateFilter = useCallback(
+        (key: 'dateFrom' | 'dateTo', value: string) => {
+            setSearchParams((currentParams) => {
+                const nextParams = new URLSearchParams(currentParams);
+                if (DATE_VALUE_REGEX.test(value)) {
+                    nextParams.set(key, value);
+                } else {
+                    nextParams.delete(key);
+                }
+                return nextParams;
+            });
+        },
+        [setSearchParams],
+    );
+    const clearDateFilters = useCallback(() => {
+        setSearchParams((currentParams) => {
+            const nextParams = new URLSearchParams(currentParams);
+            nextParams.delete('dateFrom');
+            nextParams.delete('dateTo');
+            return nextParams;
+        });
+    }, [setSearchParams]);
     const details = useProtopieChurnScoreAccountDetails({
         projectUuid,
         accountKey: decodedAccountKey,
         configUuid,
+        dateFrom,
+        dateTo,
     });
     const chartOption = useMemo(
         () =>
@@ -180,6 +209,8 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
     }
 
     const { score, config, factors, eventUsage } = details.data;
+    const dateFromValue = dateFrom ?? eventUsage.dateFrom;
+    const dateToValue = dateTo ?? eventUsage.dateTo;
     const topEventCount = Math.max(
         ...eventUsage.events.map((event) => event.eventCount),
         1,
@@ -257,8 +288,8 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                         {eventUsage.totalEvents.toLocaleString()}
                     </Title>
                     <Text size="sm" c="dimmed">
-                        Across {eventUsage.selectedEventNames.length} rubric
-                        events
+                        {eventUsage.dateFrom} to {eventUsage.dateTo} across{' '}
+                        {eventUsage.selectedEventNames.length} rubric events
                     </Text>
                 </Card>
                 <Card withBorder className={classes.formPanel}>
@@ -367,17 +398,51 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
 
             <Card withBorder className={classes.formPanel}>
                 <Stack gap="md">
-                    <Group justify="space-between">
+                    <Group justify="space-between" align="flex-start">
                         <Stack gap={2}>
                             <Title order={4}>Event usage</Title>
                             <Text size="sm" c="dimmed">
-                                Daily selected event volume for this account
-                                over the rubric lookback window.
+                                Daily selected event volume across all teams in
+                                this namespace for the selected date range.
                             </Text>
                         </Stack>
-                        <Badge variant="light">
-                            Last {eventUsage.lookbackDays} days
-                        </Badge>
+                        <Stack gap="xs" align="flex-end">
+                            <Badge variant="light">
+                                {eventUsage.dateFrom} to {eventUsage.dateTo}
+                            </Badge>
+                            <Group gap="xs" align="flex-end">
+                                <TextInput
+                                    label="From"
+                                    type="date"
+                                    value={dateFromValue}
+                                    onChange={(event) =>
+                                        updateDateFilter(
+                                            'dateFrom',
+                                            event.currentTarget.value,
+                                        )
+                                    }
+                                />
+                                <TextInput
+                                    label="To"
+                                    type="date"
+                                    value={dateToValue}
+                                    onChange={(event) =>
+                                        updateDateFilter(
+                                            'dateTo',
+                                            event.currentTarget.value,
+                                        )
+                                    }
+                                />
+                                <Button
+                                    variant="default"
+                                    size="xs"
+                                    onClick={clearDateFilters}
+                                    disabled={!dateFrom && !dateTo}
+                                >
+                                    Reset
+                                </Button>
+                            </Group>
+                        </Stack>
                     </Group>
 
                     {eventUsage.totalEvents > 0 && chartOption ? (
@@ -389,7 +454,7 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                     ) : (
                         <Alert color="gray" title="No matching event usage">
                             This account has no selected rubric events in the
-                            current lookback window.
+                            selected date range.
                         </Alert>
                     )}
 

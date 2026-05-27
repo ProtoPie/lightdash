@@ -1066,6 +1066,12 @@
                         "type": "number",
                         "format": "double"
                     },
+                    "dateFrom": {
+                        "type": "string"
+                    },
+                    "dateTo": {
+                        "type": "string"
+                    },
                     "totalEvents": {
                         "type": "number",
                         "format": "double"
@@ -1091,6 +1097,8 @@
                 },
                 "required": [
                     "lookbackDays",
+                    "dateFrom",
+                    "dateTo",
                     "totalEvents",
                     "selectedEventNames",
                     "events",
@@ -34055,6 +34063,22 @@
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    {
+                        "in": "query",
+                        "name": "dateFrom",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "dateTo",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ]
             }
@@ -36507,22 +36531,6 @@
                         "schema": {
                             "format": "double",
                             "type": "number"
-                        }
-                    },
-                    {
-                        "in": "query",
-                        "name": "dateFrom",
-                        "required": false,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "in": "query",
-                        "name": "dateTo",
-                        "required": false,
-                        "schema": {
-                            "type": "string"
                         }
                     },
                     {
