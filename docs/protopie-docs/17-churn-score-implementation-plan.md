@@ -1,10 +1,8 @@
-# 17 — Churn Score v1: Implementation Plan (review draft)
+# 17 — Churn Score: Implementation Plan (review draft)
 
 > **Status:** implementation started. Backend schema, service/API, scheduler hook, and a minimal rubric/scores UI are in progress from this plan.
 >
-> **Goal:** ship a v1 churn score that calculates a 0–100 number per **enterprise customer** (team), driven by an **editable rubric** that sales can adjust. Manual recompute first; scheduled nightly recompute as the natural next step.
->
-> **v1 / v2 context.** This is the **v1** spec — the sales-owned, ChurnZero-equivalent rubric required for the 2026-07-30 cutover. A **v2** trajectory-aware companion score is specified in [18-churn-score-v2-trajectory.md](./18-churn-score-v2-trajectory.md) and ships post-cutover. Both versions coexist in the same `protopie_churn_score` table, discriminated by `config_uuid`; they are **separate scores side-by-side, not blended**.
+> **Goal:** ship a churn score that calculates a 0–100 number per **enterprise customer** (team), driven by an **editable rubric** that sales can adjust. Manual recompute first; scheduled nightly recompute as the natural next step.
 
 ---
 
@@ -292,7 +290,9 @@ The worker handles long-running steps that mustn't block HTTP:
 1. Load the run row by `run_uuid`; transition to `status='running'`, fill `started_at`.
 2. Re-load the config + factors (the row references `config_uuid` so we use that, not "latest active" — this keeps a recompute reproducible even if sales changes the rubric mid-run).
 3. Resolve the `WarehouseClient` for the project via `ProjectService.getWarehouseCredentialsForProject(projectUuid)` + the `warehouseClientFromCredentials` factory.
-4. Resolve the **configured** mart schema for the project. We do **not** hardcode `mart.` or `warehouse.` — those are dbt model names, not Redshift schemas. Instead we read the project's warehouse `schema`/`database` from the connection config and use `{schema}.dim_product_all_events`, `{schema}.dim_product_all_event_properties`, `{schema}.dim_team_summary`, `{schema}.dim_enterprise_summary`. For dev that's `warehouse_staging`; for prod `warehouse`. The two relation names (events + properties) can be made configurable via env or a project-level setting if the dbt schema deviates.
+4. Resolve the **configured** mart schema for the project. We do **not** hardcode `mart.` or `warehouse.` — those are dbt model names, not Redshift schemas. Instead we read the project's warehouse `schema`/`database` from the connection config and use `{schema}.dim_product_all_events`, `{schema}.dim_product_all_event_properties`, `{schema}.dim_team_summary`, `{schema}.dim_enterprise_summary`. For dev that's `warehouse_dev`; for prod `warehouse_prod` (both in the `prod` database — dev/prod share one Redshift cluster, separated only by schema; see [11-dbt-integration.md](./11-dbt-integration.md)). The two relation names (events + properties) can be made configurable via env or a project-level setting if the dbt schema deviates.
+
+> **The runtime `{schema}` is whatever the Lightdash project's Redshift connection has in its `schema` field** — `getWarehouseSchema()` reads it straight off the credentials with no env override. If the dev project's connection schema is *not* `warehouse_dev` (e.g. left as a stale `warehouse_staging` that has team/enterprise dims but no recent events), every score computes to 0. Verify the connection schema before debugging the rubric.
 5. **Single Redshift query** that, in one pass, returns one row per `team_id` with every metric needed by every factor. Pseudocode (interpolations explained below):
 
    ```sql
@@ -443,7 +443,7 @@ These are additive to the 7 touch points already documented; nothing is replaced
 - **Non-100 weight sums are allowed.** The editor shows the current `SUM(max_points)` next to the save button; the persisted score's `normalizedScore` always renders 0–100 by dividing by the active `max_points`. The earlier "warn" vs "reject" wording is reconciled in §9.
 - **Async recompute** via Graphile Worker job (not synchronous in the HTTP request). §6.2 / §6.3 / §5.
 - **EE scheduler worker** inherits the OSS handler map via `super.getFullTaskList()`; no separate EE task registration is needed in the current codebase. §8.
-- **Schema substitution.** No hardcoded `mart.`. Real Redshift schema (`warehouse` / `warehouse_staging`) is read from the project's warehouse connection config. §6.3.
+- **Schema substitution.** No hardcoded `mart.`. Real Redshift schema (`warehouse_dev` dev / `warehouse_prod` prod, both in the `prod` database) is read from the project's warehouse connection config. §6.3.
 - **Parameterization strategy.** One placeholder per event; whitelist guard on event names at save time. No reliance on `IN (:array)` expansion. §6.3.
 - **Score model.** Persist both `total_points` (raw) and `normalized_score` (0–100), plus `score_percent` and `max_points`. §4.3, §1.
 - **Migration table order:** configs → factors → runs → scores. §4.

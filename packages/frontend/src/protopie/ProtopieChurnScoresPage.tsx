@@ -143,7 +143,7 @@ const ProtopieChurnScoresPage = () => {
             <Stack className={classes.section} gap="xs">
                 <Group justify="space-between" align="flex-start">
                     <Stack gap={4}>
-                        <Title order={3}>Churn score v1</Title>
+                        <Title order={3}>Churn score</Title>
                         <Text c="dimmed" size="sm">
                             Latest enterprise-team scores for the active Notion
                             rubric.
@@ -155,7 +155,7 @@ const ProtopieChurnScoresPage = () => {
                 <ProtopieSectionTabs />
             </Stack>
 
-            <ProtopieChurnScoreMethodCards variant="v1" />
+            <ProtopieChurnScoreMethodCards />
 
             <Card withBorder className={classes.formPanel}>
                 <Stack gap="md">

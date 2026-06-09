@@ -479,7 +479,7 @@ export class ChurnScoreService extends BaseService {
         });
         const eventUsage = await this.getAccountEventUsage({
             projectUuid,
-            namespace: score.namespace ?? trimmedAccountKey,
+            accountUrl: score.cloudUrl ?? trimmedAccountKey,
             config,
             factors,
             dateRange: ChurnScoreService.resolveEventUsageDateRange({
@@ -793,13 +793,13 @@ export class ChurnScoreService extends BaseService {
 
     private async getAccountEventUsage({
         projectUuid,
-        namespace,
+        accountUrl,
         config,
         factors,
         dateRange,
     }: {
         projectUuid: string;
-        namespace: string;
+        accountUrl: string;
         config: ProtopieChurnScoreConfigRecord;
         factors: ProtopieChurnScoreFactorRecord[];
         dateRange: ChurnScoreEventUsageDateRange;
@@ -831,56 +831,42 @@ export class ChurnScoreService extends BaseService {
                 projectUuid,
             );
         const schema = ChurnScoreService.getWarehouseSchema(credentials);
-        const values = [namespace, dateRange.dateFrom, dateRange.dateTo];
+        const values = [accountUrl, dateRange.dateFrom, dateRange.dateTo];
         const eventPlaceholders = selectedEventNames.map((eventName) => {
             values.push(eventName);
             return `$${values.length}`;
         });
         const sql = `
-            WITH account_teams AS (
-                SELECT DISTINCT
-                    t.team_id
-                FROM ${schema}.dim_team_summary t
-                WHERE t.namespace = $1
-                  AND t.team_id IS NOT NULL
-            ), date_filter AS (
-                SELECT
-                    $2::date AS date_from,
-                    ($3::date + 1) AS date_to_exclusive
-            ), event_attribution AS (
-                SELECT DISTINCT
-                    e.event_id,
-                    DATE_TRUNC('day', e.event_time) AS event_date,
-                    e.event_time,
-                    e.event_name,
-                    e.user_id
-                FROM ${schema}.dim_product_all_events e
-                LEFT JOIN ${schema}.dim_product_all_event_properties ep
-                    ON e.event_id = ep.event_id
-                INNER JOIN account_teams at
-                    ON at.team_id = ep.team_id
-                CROSS JOIN date_filter df
-                WHERE e.event_time >= df.date_from
-                  AND e.event_time < df.date_to_exclusive
-                  AND e.event_name IN (${eventPlaceholders.join(', ')})
-            )
-            , daily AS (
+            WITH account_usage AS (
                 SELECT
                     event_date,
                     event_name,
-                    COUNT(DISTINCT event_id) AS event_count,
+                    user_id,
+                    event_count,
+                    first_seen_at,
+                    last_seen_at
+                FROM ${schema}.protopie_account_event_usage_90d
+                WHERE account_url = $1
+                  AND event_date >= $2::date
+                  AND event_date <= $3::date
+                  AND event_name IN (${eventPlaceholders.join(', ')})
+            ), daily AS (
+                SELECT
+                    event_date,
+                    event_name,
+                    SUM(event_count) AS event_count,
                     COUNT(DISTINCT user_id) AS active_users
-                FROM event_attribution
+                FROM account_usage
                 GROUP BY event_date, event_name
             ), event_summary AS (
                 SELECT
                     event_name,
-                    COUNT(DISTINCT event_id) AS event_total_count,
+                    SUM(event_count) AS event_total_count,
                     COUNT(DISTINCT user_id) AS event_active_users,
                     COUNT(DISTINCT event_date) AS event_active_days,
-                    MIN(event_time) AS first_seen_at,
-                    MAX(event_time) AS last_seen_at
-                FROM event_attribution
+                    MIN(first_seen_at) AS first_seen_at,
+                    MAX(last_seen_at) AS last_seen_at
+                FROM account_usage
                 GROUP BY event_name
             )
             SELECT

@@ -170,7 +170,7 @@ Required pieces:
 | Source endpoint | Terraform output from `infra/{dev,prod}` for the Lightdash RDS endpoint. |
 | Source credentials | Read-only Postgres user, not the Lightdash app write user. |
 | Network path | RDS security group allows ingress from the Airflow worker security group or approved private network path. |
-| Destination | Redshift schemas used by `data-modeling`: `warehouse_staging` for dev, `warehouse` for prod. |
+| Destination | Redshift schemas used by `data-modeling`: `warehouse_dev` for dev, `warehouse_prod` for prod (both in the `prod` database). |
 
 The dbt implementation is owned separately, but this Lightdash repo owns the app DB tables and RDS network exposure.
 

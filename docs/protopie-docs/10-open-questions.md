@@ -88,7 +88,7 @@ The Notion page included four open questions (C7–C10). Recommendations below.
 - Sales has access to the same Redshift warehouse via Lightdash UI (no new auth surface).
 - Operationally, we reuse one project's Redshift credentials and don't sprinkle warehouse access across the codebase.
 
-The fully-qualified mart name is `warehouse_staging.mart_account_usage_90d` in dev, `warehouse.mart_account_usage_90d` in prod (controlled by `DBT_ENVIRONMENT` env var in the dbt project's `profiles.yml`). The backend reads this from env config and never hard-codes the schema.
+The fully-qualified mart name is `warehouse_dev.mart_account_usage_90d` in dev, `warehouse_prod.mart_account_usage_90d` in prod (controlled by `DBT_ENVIRONMENT` env var in the dbt project's `profiles.yml`). The backend reads this from env config and never hard-codes the schema.
 
 ### E5. Notification when a score crosses a threshold?
 

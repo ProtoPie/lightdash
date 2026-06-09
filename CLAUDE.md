@@ -74,13 +74,13 @@ When the backend creates a presigned URL for browser-direct upload, it uses `S3_
 
 This repo is a **Protopie-specific fork** of Lightdash. A `protopie/` module is being built to replace ChurnZero (expires **2026-07-30**) with three deliverables:
 
-1. **Churn Score engine** — 9-factor weighted score (0–100) per Account (`team_id`), nightly recompute via Graphile Worker, reading `mart_account_usage_90d` from Amazon Redshift via Lightdash's existing `WarehouseClient`. **Score is computed in the backend, NOT in dbt** — do not add a dbt scoring model; dashboards will silently diverge if you do. **Two parallel score versions ship: v1 (Notion rubric, doc 17, contractual ChurnZero replacement) and v2 (trajectory-aware, doc 18, additive post-cutover). v2 is a separate score, not a blend.** Both live in `protopie_churn_score` discriminated by `config_uuid`.
+1. **Churn Score engine** — 9-factor weighted score (0–100) per Account (`team_id`), nightly recompute via Graphile Worker, reading `mart_account_usage_90d` from Amazon Redshift via Lightdash's existing `WarehouseClient`. **Score is computed in the backend, NOT in dbt** — do not add a dbt scoring model; dashboards will silently diverge if you do. The score follows the Notion rubric (doc 17, contractual ChurnZero replacement) and lives in `protopie_churn_score`, with each rubric version discriminated by `config_uuid`.
 2. **Forms system** — Schema-driven Zod forms for sales reps (account touchpoints, renewal status, score overrides). Submissions → `protopie_form_submissions` → dbt source → Redshift marts.
 3. **MCP write tools** — 17 tools total (14 `protopie_*` + 3 `lightdash_*` API bridge) extending the existing read-only `McpService`. `protopie_*` write tools wrap `CoderService` (slug-based, idempotent) and include read-only dbt source tools for `ProtoPie/data-modeling`; `lightdash_api_mutate` calls Lightdash's REST API over HTTP as the MCP user. Gated by `mcp:write` OAuth scope via `requireMcpWrite()` helper + org-level opt-in (`protopie_organization_settings`). Default OFF per org.
 
 **Non-technical stakeholder overview: [`docs/POC.md`](./docs/POC.md)** — explains *what* we're building and *why* for sales leadership, product, finance, and project sponsors. Plain language, no code, no file paths. Covers the idea, what each role gains, timeline, risks, and success criteria. **Not a step-by-step engineering walkthrough.**
 
-**Engineers starting implementation:** Read [`docs/protopie-docs/README.md`](./docs/protopie-docs/README.md) for the index, then the numbered design docs `00–18` in order. Begin with `00-context.md` then `02-isolation-strategy.md`. dbt project is a **separate repo** at `/Users/mamur/Documents/projects/data-modeling` (Amazon Redshift warehouse).
+**Engineers starting implementation:** Read [`docs/protopie-docs/README.md`](./docs/protopie-docs/README.md) for the index, then the numbered design docs `00–17` in order. Begin with `00-context.md` then `02-isolation-strategy.md`. dbt project is a **separate repo** at `/Users/mamur/Documents/projects/data-modeling` (Amazon Redshift warehouse).
 
 ### Implementation phases (hard deadline 2026-07-30)
 
@@ -169,7 +169,7 @@ dbt build --select +marts.warehouse.protopie
 - **Protopie env vars** (add to `ecs.tf` `container_definitions.environment[]` and `infra/{dev,prod}/.env`):
   - `PROTOPIE_ENABLED` — set `true` in prod, `false` on dev when not testing
   - `PROTOPIE_PROJECT_UUID` — Lightdash project UUID that owns Protopie content
-  - `PROTOPIE_WAREHOUSE_MART_TABLE` — e.g. `warehouse.mart_account_usage_90d`
+  - `PROTOPIE_WAREHOUSE_MART_TABLE` — e.g. `warehouse_prod.mart_account_usage_90d` (Redshift schema is `warehouse_dev` on dev / `warehouse_prod` on prod, both in the `prod` database; see `docs/protopie-docs/11-dbt-integration.md`)
   - `PROTOPIE_RECOMPUTE_CRON` — default `0 2 * * *`
 - **Single container**: HTTP + Graphile Worker run in the same container (`SCHEDULER_ENABLED=true`). No separate scheduler service in v1.
 - **Rollback**: `terraform apply -var "lightdash_oci_tag=<prior-sha>"` or `aws ecs update-service --task-definition lightdash:<prior-revision>`
