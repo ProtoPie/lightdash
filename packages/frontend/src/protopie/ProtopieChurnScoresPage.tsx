@@ -226,13 +226,22 @@ const ProtopieChurnScoresPage = () => {
                                 </Table.Tr>
                             </Table.Thead>
                             <Table.Tbody>
-                                {rows.map((score) => (
+                                {rows.map((score) => {
+                                    const detailTo = `/projects/${projectUuid}/protopie/churn/scores/${encodeURIComponent(
+                                        score.accountKey,
+                                    )}?configUuid=${score.configUuid}`;
+                                    return (
                                     <Table.Tr key={score.scoreUuid}>
                                         <Table.Td>
-                                            <Text size="sm" fw={600}>
+                                            <Anchor
+                                                component={Link}
+                                                to={detailTo}
+                                                size="sm"
+                                                fw={600}
+                                            >
                                                 {score.namespace ??
                                                     score.accountKey}
-                                            </Text>
+                                            </Anchor>
                                             {score.cloudUrl && (
                                                 <Text size="xs" c="dimmed">
                                                     {score.cloudUrl}
@@ -242,9 +251,7 @@ const ProtopieChurnScoresPage = () => {
                                         <Table.Td>
                                             <Anchor
                                                 component={Link}
-                                                to={`/projects/${projectUuid}/protopie/churn/scores/${encodeURIComponent(
-                                                    score.accountKey,
-                                                )}?configUuid=${score.configUuid}`}
+                                                to={detailTo}
                                                 fw={600}
                                             >
                                                 {score.normalizedScore.toFixed(
@@ -278,7 +285,8 @@ const ProtopieChurnScoresPage = () => {
                                             </Text>
                                         </Table.Td>
                                     </Table.Tr>
-                                ))}
+                                    );
+                                })}
                             </Table.Tbody>
                         </Table>
                     </Table.ScrollContainer>
