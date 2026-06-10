@@ -14,7 +14,8 @@ type DbChurnScoreFactor = {
     goal_unit: Protopie.ChurnScoreGoalUnit;
     aggregation: Protopie.ChurnScoreAggregation;
     event_group: Protopie.ChurnScoreEventGroup;
-    step_thresholds: Record<string, unknown> | null;
+    step_thresholds: Protopie.ChurnScoreStepThresholds | null;
+    window_days: number | null;
     sort_order: number;
 };
 
@@ -66,6 +67,7 @@ export class ChurnScoreFactorModel {
                     aggregation: factor.aggregation,
                     event_group: factor.eventGroup,
                     step_thresholds: factor.stepThresholds ?? null,
+                    window_days: factor.windowDays ?? null,
                     sort_order: factor.sortOrder,
                 })),
             )
@@ -94,6 +96,8 @@ export class ChurnScoreFactorModel {
             aggregation: row.aggregation,
             eventGroup: row.event_group,
             stepThresholds: row.step_thresholds,
+            windowDays:
+                row.window_days === null ? null : Number(row.window_days),
             sortOrder: Number(row.sort_order),
         };
     }

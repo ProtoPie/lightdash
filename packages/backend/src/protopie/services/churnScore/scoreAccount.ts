@@ -17,6 +17,7 @@ export type ScoreAccountResult = {
     maxPoints: number;
     scorePercent: number;
     normalizedScore: number;
+    churnScore: number;
     riskBand: Protopie.ChurnScoreRiskBand;
     factorScores: Protopie.ChurnScoreFactorScores;
 };
@@ -61,14 +62,70 @@ const actualForFactor = ({
     }
 };
 
+/**
+ * ChurnZero step-bucket evaluation. `raw` is compared to each range's inclusive
+ * `bottom` with TRUNCATE semantics (no round-up): award the points of the range
+ * with the greatest `bottom <= raw`. A raw value below every nonzero bottom
+ * (e.g. 0.88 against bottoms 21/11/1) falls to the 0 bucket → 0 points.
+ */
+const evaluateStepBucket = (
+    thresholds: Protopie.ChurnScoreStepThresholds,
+    raw: number,
+): number => {
+    const match = thresholds.ranges
+        .filter((range) => raw >= range.bottom)
+        .reduce<Protopie.ChurnScoreStepRange | null>(
+            (best, range) =>
+                best === null || range.bottom > best.bottom ? range : best,
+            null,
+        );
+    return match ? numberValue(match.points) : 0;
+};
+
+/**
+ * The raw value the step bucket compares against. Percentage factors use
+ * percent units (×100) so config buckets read as ChurnZero does (1/26/51);
+ * count/per-user/days factors use their natural value.
+ */
+const rawForBucket = (
+    factor: Protopie.ChurnScoreFactor,
+    actual: number,
+): number =>
+    factor.aggregation === 'pct_users_with_event' ? actual * 100 : actual;
+
+const pointsForFactor = ({
+    factor,
+    actual,
+    scoreFunction,
+}: {
+    factor: Protopie.ChurnScoreFactor;
+    actual: number;
+    scoreFunction: Protopie.ChurnScoreFunction;
+}): number => {
+    const max = numberValue(factor.maxPoints);
+
+    if (scoreFunction === 'stepwise' && factor.stepThresholds) {
+        return evaluateStepBucket(
+            factor.stepThresholds,
+            rawForBucket(factor, actual),
+        );
+    }
+
+    // Linear fallback (legacy configs, or stepwise factors with no buckets).
+    const goal = Math.max(numberValue(factor.goalValue), MIN_GOAL_VALUE);
+    return Math.min(actual / goal, 1) * max;
+};
+
 export const scoreAccount = ({
     factors,
     row,
     thresholds,
+    scoreFunction,
 }: {
     factors: Protopie.ChurnScoreFactor[];
     row: ChurnScoreAccountAggregationRow;
     thresholds: Protopie.ChurnScoreRiskBandThresholds;
+    scoreFunction: Protopie.ChurnScoreFunction;
 }): ScoreAccountResult => {
     const totalUsers = numberValue(row.total_users);
     const factorScores: Protopie.ChurnScoreFactorScores = {};
@@ -79,8 +136,7 @@ export const scoreAccount = ({
     factors.forEach((factor) => {
         const actual = actualForFactor({ factor, row, totalUsers });
         const max = numberValue(factor.maxPoints);
-        const goal = Math.max(numberValue(factor.goalValue), MIN_GOAL_VALUE);
-        const points = Math.min(actual / goal, 1) * max;
+        const points = pointsForFactor({ factor, actual, scoreFunction });
 
         factorScores[factor.factorKey] = {
             raw: round(actual, 4),
@@ -93,6 +149,7 @@ export const scoreAccount = ({
     });
 
     const scorePercent = maxPoints > 0 ? totalPoints / maxPoints : 0;
+    const normalizedScore = round(scorePercent * 100, 2);
 
     return {
         accountKey: row.account_key,
@@ -101,7 +158,8 @@ export const scoreAccount = ({
         totalPoints: round(totalPoints, 2),
         maxPoints: round(maxPoints, 2),
         scorePercent: round(scorePercent, 4),
-        normalizedScore: round(scorePercent * 100, 2),
+        normalizedScore,
+        churnScore: round(100 - normalizedScore, 2),
         riskBand: deriveRiskBand({ scorePercent, thresholds }),
         factorScores,
     };

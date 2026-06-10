@@ -105,6 +105,7 @@ export const getProtopieServices = (
                 projectModel: repository.models.getProjectModel(),
                 projectService: repository.getProjectService(),
                 schedulerClient: repository.clients.getSchedulerClient(),
+                slackClient: repository.clients.getSlackClient(),
                 churnScoreConfigModel: models.churnScoreConfigModel,
                 churnScoreFactorModel: models.churnScoreFactorModel,
                 churnScoreModel: models.churnScoreModel,

@@ -10,6 +10,8 @@ import {
     type SessionUser,
 } from '@lightdash/common';
 import { type Knex } from 'knex';
+import { type SlackClient } from '../../clients/Slack/SlackClient';
+import Logger from '../../logging/logger';
 import { type ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { BaseService } from '../../services/BaseService';
@@ -43,11 +45,20 @@ type ChurnScoreServiceArguments = {
     projectModel: ProjectModel;
     projectService: ProjectService;
     schedulerClient: SchedulerClient;
+    slackClient: SlackClient;
     churnScoreConfigModel: ChurnScoreConfigModel;
     churnScoreFactorModel: ChurnScoreFactorModel;
     churnScoreModel: ChurnScoreModel;
     churnScoreRunModel: ChurnScoreRunModel;
 };
+
+/**
+ * Max age (in days) of the churn marts' latest event before a recompute is
+ * skipped. ChurnScore is a 90-day rolling metric, so a 1-2 day lag is
+ * immaterial; this guard only protects against an empty or clearly-broken
+ * (e.g. dbt failed) mart, never overwriting good scores with garbage.
+ */
+const MART_STALE_MAX_AGE_DAYS = 2;
 
 type ChurnScoreAccountEventUsageRow = {
     event_date: Date | string;
@@ -75,6 +86,8 @@ export class ChurnScoreService extends BaseService {
 
     private readonly schedulerClient: SchedulerClient;
 
+    private readonly slackClient: SlackClient;
+
     private readonly churnScoreConfigModel: ChurnScoreConfigModel;
 
     private readonly churnScoreFactorModel: ChurnScoreFactorModel;
@@ -88,6 +101,7 @@ export class ChurnScoreService extends BaseService {
         projectModel,
         projectService,
         schedulerClient,
+        slackClient,
         churnScoreConfigModel,
         churnScoreFactorModel,
         churnScoreModel,
@@ -98,6 +112,7 @@ export class ChurnScoreService extends BaseService {
         this.projectModel = projectModel;
         this.projectService = projectService;
         this.schedulerClient = schedulerClient;
+        this.slackClient = slackClient;
         this.churnScoreConfigModel = churnScoreConfigModel;
         this.churnScoreFactorModel = churnScoreFactorModel;
         this.churnScoreModel = churnScoreModel;
@@ -576,7 +591,10 @@ export class ChurnScoreService extends BaseService {
         }
     }
 
-    async executeRecompute(runUuid: string): Promise<void> {
+    async executeRecompute(
+        runUuid: string,
+        organizationUuid: string | null = null,
+    ): Promise<void> {
         const run = await this.churnScoreRunModel.getByUuid(runUuid);
         if (!run) {
             throw new NotFoundError(
@@ -600,6 +618,25 @@ export class ChurnScoreService extends BaseService {
                 configUuid: config.configUuid,
             });
             ChurnScoreService.assertFactorWeightsTotal(factors);
+
+            // Freshness gate: never overwrite good scores from an empty/stale
+            // mart (e.g. dbt failed). Skip + alert, preserve prior scores.
+            const freshness = await this.checkMartFreshness(run.projectUuid);
+            if (!freshness.fresh) {
+                await this.churnScoreRunModel.markSkipped({
+                    runUuid,
+                    reason: freshness.reason,
+                });
+                await this.notifyRecomputeSkipped({
+                    organizationUuid,
+                    projectUuid: run.projectUuid,
+                    reason: freshness.reason,
+                    maxEventDate: freshness.maxEventDate,
+                    runUuid,
+                });
+                return;
+            }
+
             const warehouseRows = await this.getWarehouseAggregationRows({
                 projectUuid: run.projectUuid,
                 config,
@@ -619,6 +656,7 @@ export class ChurnScoreService extends BaseService {
                     factors,
                     row,
                     thresholds: config.riskBandThresholds,
+                    scoreFunction: config.scoreFunction,
                 });
                 return {
                     projectUuid: run.projectUuid,
@@ -633,6 +671,7 @@ export class ChurnScoreService extends BaseService {
                     maxPoints: result.maxPoints,
                     scorePercent: result.scorePercent,
                     normalizedScore: result.normalizedScore,
+                    churnScore: result.churnScore,
                     riskBand: result.riskBand,
                     factorScores: result.factorScores,
                     runUuid,
@@ -775,7 +814,7 @@ export class ChurnScoreService extends BaseService {
                 name: Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME,
                 version: 1,
                 lookbackDays: Protopie.DEFAULT_CHURN_SCORE_LOOKBACK_DAYS,
-                scoreFunction: 'linear',
+                scoreFunction: Protopie.DEFAULT_CHURN_SCORE_FUNCTION,
                 riskBandThresholds:
                     Protopie.DEFAULT_CHURN_SCORE_RISK_BAND_THRESHOLDS,
                 userUuid: null,
@@ -845,7 +884,7 @@ export class ChurnScoreService extends BaseService {
                     event_count,
                     first_seen_at,
                     last_seen_at
-                FROM ${schema}.protopie_account_event_usage_90d
+                FROM ${schema}.protopie_account_event_usage
                 WHERE account_url = $1
                   AND event_date >= $2::date
                   AND event_date <= $3::date
@@ -950,6 +989,124 @@ export class ChurnScoreService extends BaseService {
         } finally {
             await sshTunnel.disconnect();
         }
+    }
+
+    private async checkMartFreshness(projectUuid: string): Promise<{
+        fresh: boolean;
+        reason: string;
+        maxEventDate: string | null;
+    }> {
+        const credentials =
+            await this.projectModel.getWarehouseCredentialsForProject(
+                projectUuid,
+            );
+        const schema = ChurnScoreService.getWarehouseSchema(credentials);
+        const sql = `
+            SELECT
+                MAX(event_date) AS max_event_date,
+                COUNT(*) AS row_count
+            FROM ${schema}.protopie_account_event_usage
+        `;
+        const { warehouseClient, sshTunnel } =
+            await this.projectService._getWarehouseClient(
+                projectUuid,
+                credentials,
+            );
+
+        try {
+            const results = await warehouseClient.runQuery(
+                sql,
+                {
+                    project_uuid: projectUuid,
+                    query_context: QueryExecutionContext.API,
+                },
+                credentials.dataTimezone,
+                [],
+            );
+            const row = (results.rows[0] ?? {}) as {
+                max_event_date?: Date | string | null;
+                row_count?: number | string;
+            };
+            const rowCount = ChurnScoreService.numberValue(row.row_count);
+            const maxEventDate = row.max_event_date
+                ? ChurnScoreService.toDateString(row.max_event_date)
+                : null;
+
+            if (rowCount === 0 || !maxEventDate) {
+                return {
+                    fresh: false,
+                    reason: 'Churn mart protopie_account_event_usage is empty.',
+                    maxEventDate: null,
+                };
+            }
+
+            const ageDays = ChurnScoreService.daysAgo(maxEventDate);
+            if (ageDays > MART_STALE_MAX_AGE_DAYS) {
+                return {
+                    fresh: false,
+                    reason: `Churn mart is stale: last event ${maxEventDate} (${ageDays} days old, threshold ${MART_STALE_MAX_AGE_DAYS}).`,
+                    maxEventDate,
+                };
+            }
+
+            return { fresh: true, reason: '', maxEventDate };
+        } finally {
+            await sshTunnel.disconnect();
+        }
+    }
+
+    private async notifyRecomputeSkipped({
+        organizationUuid,
+        projectUuid,
+        reason,
+        maxEventDate,
+        runUuid,
+    }: {
+        organizationUuid: string | null;
+        projectUuid: string;
+        reason: string;
+        maxEventDate: string | null;
+        runUuid: string;
+    }): Promise<void> {
+        const scoredForDate = new Date().toISOString().slice(0, 10);
+        const text = [
+            ':warning: *Churn score recompute skipped*',
+            `• Project: ${projectUuid}`,
+            `• Date: ${scoredForDate}`,
+            `• Reason: ${reason}`,
+            `• Mart last event: ${maxEventDate ?? 'n/a'}`,
+            '• Previous scores preserved (not overwritten).',
+            `• Run: ${runUuid}`,
+        ].join('\n');
+
+        if (!organizationUuid) {
+            Logger.warn(
+                `Churn recompute skipped for project ${projectUuid} (no organizationUuid for Slack alert): ${reason}`,
+            );
+            return;
+        }
+
+        try {
+            await this.slackClient.postMessageToNotificationChannel({
+                organizationUuid,
+                text,
+            });
+        } catch (error) {
+            // An alert failure must never crash the recompute worker.
+            Logger.warn(
+                `Failed to send churn recompute skip alert to Slack: ${getErrorMessage(
+                    error,
+                )}`,
+            );
+        }
+    }
+
+    private static daysAgo(dateString: string): number {
+        const then = new Date(`${dateString}T00:00:00.000Z`).getTime();
+        const today = new Date(
+            `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`,
+        ).getTime();
+        return Math.floor((today - then) / (24 * 60 * 60 * 1000));
     }
 
     private static resolveEventUsageDateRange({
@@ -1202,6 +1359,7 @@ export class ChurnScoreService extends BaseService {
             aggregation: factor.aggregation,
             eventGroup: factor.eventGroup,
             stepThresholds: factor.stepThresholds ?? null,
+            windowDays: factor.windowDays ?? null,
             sortOrder: factor.sortOrder,
         };
     }

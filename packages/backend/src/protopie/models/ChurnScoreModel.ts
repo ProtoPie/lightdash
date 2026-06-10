@@ -16,6 +16,7 @@ type DbChurnScore = {
     max_points: string | number;
     score_percent: string | number;
     normalized_score: string | number;
+    churn_score: string | number;
     risk_band: Protopie.ChurnScoreRiskBand;
     factor_scores: Protopie.ChurnScoreFactorScores;
     computed_at: Date;
@@ -106,6 +107,7 @@ export class ChurnScoreModel {
                     max_points: row.maxPoints,
                     score_percent: row.scorePercent,
                     normalized_score: row.normalizedScore,
+                    churn_score: row.churnScore,
                     risk_band: row.riskBand,
                     factor_scores: row.factorScores,
                     run_uuid: row.runUuid,
@@ -127,6 +129,7 @@ export class ChurnScoreModel {
                 normalized_score: this.database.raw(
                     'excluded.normalized_score',
                 ),
+                churn_score: this.database.raw('excluded.churn_score'),
                 risk_band: this.database.raw('excluded.risk_band'),
                 factor_scores: this.database.raw('excluded.factor_scores'),
                 run_uuid: this.database.raw('excluded.run_uuid'),
@@ -262,6 +265,7 @@ export class ChurnScoreModel {
             maxPoints: Number(row.max_points),
             scorePercent: Number(row.score_percent),
             normalizedScore: Number(row.normalized_score),
+            churnScore: Number(row.churn_score),
             riskBand: row.risk_band,
             factorScores: row.factor_scores,
             computedAt: row.computed_at,
