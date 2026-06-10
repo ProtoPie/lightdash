@@ -119,6 +119,7 @@ const toFactorInput = (
     aggregation: factor.aggregation,
     eventGroup: factor.eventGroup,
     stepThresholds: factor.stepThresholds ?? null,
+    windowDays: factor.windowDays ?? null,
     sortOrder: factor.sortOrder,
 });
 
@@ -297,6 +298,7 @@ const ProtopieChurnScoreRubricPage = () => {
                         events: [],
                     },
                     stepThresholds: null,
+                    windowDays: null,
                     sortOrder:
                         Math.max(
                             0,
