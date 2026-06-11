@@ -474,10 +474,10 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                             <Table.Thead>
                                 <Table.Tr>
                                     <Table.Th>Event name</Table.Th>
-                                    <Table.Th>Instances</Table.Th>
-                                    <Table.Th>Share</Table.Th>
-                                    <Table.Th>Active users</Table.Th>
-                                    <Table.Th>Active days</Table.Th>
+                                    <Table.Th>Event count</Table.Th>
+                                    <Table.Th>% of events</Table.Th>
+                                    <Table.Th>Unique users</Table.Th>
+                                    <Table.Th>Days active</Table.Th>
                                     <Table.Th>Last seen</Table.Th>
                                 </Table.Tr>
                             </Table.Thead>
