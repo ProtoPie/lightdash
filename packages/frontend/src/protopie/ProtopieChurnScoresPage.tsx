@@ -31,10 +31,10 @@ const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
 
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = ['25', '50', '100', '200'];
-const DEFAULT_SORT_VALUE = 'score_asc';
+const DEFAULT_SORT_VALUE = 'score_desc';
 const SORT_OPTIONS = [
-    { value: 'score_asc', label: 'Score: low to high' },
-    { value: 'score_desc', label: 'Score: high to low' },
+    { value: 'score_desc', label: 'Churn score: high to low' },
+    { value: 'score_asc', label: 'Churn score: low to high' },
     { value: 'risk_desc', label: 'Risk: high to low' },
     { value: 'risk_asc', label: 'Risk: low to high' },
     { value: 'namespace_asc', label: 'Namespace: A to Z' },
@@ -219,9 +219,9 @@ const ProtopieChurnScoresPage = () => {
                             <Table.Thead>
                                 <Table.Tr>
                                     <Table.Th>Account</Table.Th>
-                                    <Table.Th>Score</Table.Th>
+                                    <Table.Th>Churn score</Table.Th>
                                     <Table.Th>Risk</Table.Th>
-                                    <Table.Th>Raw points</Table.Th>
+                                    <Table.Th>Health points</Table.Th>
                                     <Table.Th>Computed</Table.Th>
                                 </Table.Tr>
                             </Table.Thead>
@@ -254,9 +254,7 @@ const ProtopieChurnScoresPage = () => {
                                                 to={detailTo}
                                                 fw={600}
                                             >
-                                                {score.normalizedScore.toFixed(
-                                                    2,
-                                                )}
+                                                {score.churnScore.toFixed(2)}
                                             </Anchor>
                                         </Table.Td>
                                         <Table.Td>

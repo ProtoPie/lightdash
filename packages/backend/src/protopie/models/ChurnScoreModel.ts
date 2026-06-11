@@ -73,7 +73,8 @@ export class ChurnScoreModel {
         const { sortBy, sortDirection } = ChurnScoreModel.getSort(filters);
 
         if (sortBy === 'score') {
-            void query.orderBy('normalized_score', sortDirection);
+            // 'score' now means churn score (100 - health); higher = more at risk.
+            void query.orderBy('churn_score', sortDirection);
         } else if (sortBy === 'risk') {
             void query.orderByRaw(
                 `CASE risk_band WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END ${sortDirection}`,
