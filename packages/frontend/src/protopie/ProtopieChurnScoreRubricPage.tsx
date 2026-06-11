@@ -205,9 +205,12 @@ const ProtopieChurnScoreRubricPage = () => {
         const allConfigs = fallback
             ? [
                   ...configs,
-                  ...(configs.some(
-                      (config) => config.configUuid === fallback.configUuid,
-                  )
+                  // Dedupe by name, not configUuid: the Select option value is
+                  // the rubric name, and right after "save as new version" the
+                  // two queries can briefly hold different versions (different
+                  // UUIDs) of the same rubric, which would produce duplicate
+                  // option values and crash the Mantine Select.
+                  ...(configs.some((config) => config.name === fallback.name)
                       ? []
                       : [fallback]),
               ]
