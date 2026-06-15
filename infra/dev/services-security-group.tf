@@ -62,6 +62,22 @@ resource "aws_security_group" "database_sg" {
     cidr_blocks = values(data.aws_subnet.public_subnets)[*].cidr_block
   }
 
+  ingress {
+    description = "Seoul HQ"
+    protocol    = "tcp"
+    from_port   = local.envs["PGPORT"]
+    to_port     = local.envs["PGPORT"]
+    cidr_blocks = ["218.48.79.82/32"]
+  }
+
+  ingress {
+    description = "sol local"
+    protocol    = "tcp"
+    from_port   = local.envs["PGPORT"]
+    to_port     = local.envs["PGPORT"]
+    cidr_blocks = ["58.230.166.64/32"]
+  }
+
   egress {
     protocol    = "-1"
     from_port   = 0
