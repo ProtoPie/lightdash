@@ -25,6 +25,7 @@ PLATFORM ?= linux/amd64
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 DEV_IMAGE_TAG ?= dev-$(GIT_SHA)
 DEV_LATEST_TAG ?= dev-latest
+PROD_IMAGE_TAG ?= prod-$(GIT_SHA)
 # Set SKIP_PREFLIGHT=1 to skip the backend typecheck (e.g. clean checkout w/o node_modules).
 SKIP_PREFLIGHT ?=
 
@@ -32,6 +33,11 @@ SKIP_PREFLIGHT ?=
 DEV_ECS_CLUSTER ?= lightdash-cluster-dev
 DEV_ECS_SERVICE ?= lightdash-service-dev
 DEV_LOG_GROUP ?= /ecs/lightdash-log-groups-dev
+
+# PROD ECS coordinates (used by logs-prod).
+PROD_ECS_CLUSTER ?= lightdash-cluster
+PROD_ECS_SERVICE ?= lightdash-service
+PROD_LOG_GROUP ?= /ecs/lightdash-log-groups
 
 # Optional Sentry build args. Leave empty for normal builds.
 SENTRY_BUILD_ARGS = \
@@ -46,6 +52,7 @@ SENTRY_BUILD_ARGS = \
 INFRA_ROOT ?= $(CURDIR)/infra
 ECR_INFRA_DIR ?= $(INFRA_ROOT)/ecr
 DEV_INFRA_DIR ?= $(INFRA_ROOT)/dev
+PROD_INFRA_DIR ?= $(INFRA_ROOT)/prod
 TERRAFORM ?= terraform
 
 REQUIRED_RUNTIME_ENV = \
@@ -193,12 +200,36 @@ build-prod: preflight docker-mem-check ecr-login ## Build and push a prod-tagged
 	@echo "Pushed $(IMAGE_REPO):prod-$(GIT_SHA)"
 
 .PHONY: deploy-prod
-deploy-prod: ## DISABLED — prod cutover is not supported from this repo yet.
-	@echo "ERROR: 'make deploy-prod' is intentionally disabled." >&2
-	@echo "Production still runs the upstream lightdash/lightdash image. Cutting prod over to" >&2
-	@echo "the custom ECR image requires a reconciled infra/prod and explicit human approval." >&2
-	@echo "Deploy dev with 'make deploy-dev'. Do not deploy prod from these targets." >&2
-	@exit 1
+plan-prod: ## Terraform plan for prod only (no apply). Pass PROD_IMAGE_TAG to plan a specific image.
+	@test -d "$(PROD_INFRA_DIR)" || (echo "Missing PROD_INFRA_DIR=$(PROD_INFRA_DIR)" && exit 1)
+	cd "$(PROD_INFRA_DIR)" && $(TERRAFORM) init -upgrade=false
+	cd "$(PROD_INFRA_DIR)" && $(TERRAFORM) plan \
+		-var "lightdash_image_repo=$(IMAGE_REPO)" \
+		-var "lightdash_oci_tag=$(PROD_IMAGE_TAG)"
+
+deploy-prod: ## PROD cutover. Build+push prod image, show plan, require CONFIRM=PROD before apply.
+	@echo "⚠️  PROD deploy. This cuts production over to $(IMAGE_REPO):$(PROD_IMAGE_TAG)." >&2
+	@echo "    Ensure a fresh prod RDS snapshot exists before proceeding." >&2
+	@test -d "$(PROD_INFRA_DIR)" || (echo "Missing PROD_INFRA_DIR=$(PROD_INFRA_DIR)" && exit 1)
+	$(MAKE) build-prod
+	cd "$(PROD_INFRA_DIR)" && $(TERRAFORM) init -upgrade=false
+	cd "$(PROD_INFRA_DIR)" && $(TERRAFORM) plan \
+		-var "lightdash_image_repo=$(IMAGE_REPO)" \
+		-var "lightdash_oci_tag=$(PROD_IMAGE_TAG)"
+	@if [ "$(CONFIRM)" = "PROD" ]; then \
+		echo "CONFIRM=PROD — applying production."; \
+	else \
+		read -r -p "Apply the plan above to PRODUCTION? Type 'PROD' to continue: " ans; \
+		[ "$$ans" = "PROD" ] || (echo "Aborted." && exit 1); \
+	fi
+	cd "$(PROD_INFRA_DIR)" && $(TERRAFORM) apply -auto-approve \
+		-var "lightdash_image_repo=$(IMAGE_REPO)" \
+		-var "lightdash_oci_tag=$(PROD_IMAGE_TAG)"
+
+logs-prod: ## Tail recent prod CloudWatch logs. Override SINCE (default 10m).
+	aws logs tail "$(PROD_LOG_GROUP)" \
+		--profile "$(ECR_AWS_PROFILE)" --region "$(AWS_REGION)" \
+		--since "$(or $(SINCE),10m)" --follow
 
 .PHONY: print-runtime-env-dev
 print-runtime-env-dev: ## Print runtime env expected by the dev ECS task/container.

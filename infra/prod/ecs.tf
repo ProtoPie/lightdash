@@ -39,6 +39,11 @@ variable "lightdash_oci_tag" {
   default     = "latest"
 }
 
+variable "lightdash_image_repo" {
+  description = "ECR repo for the ProtoPie-customized Lightdash image (prod cutover from upstream stock image)"
+  default     = "750128304405.dkr.ecr.us-west-2.amazonaws.com/protopie/lightdash"
+}
+
 #### resources
 resource "aws_ecs_cluster" "lightdash_cluster" {
   name = "lightdash-cluster"
@@ -92,7 +97,7 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
   container_definitions = jsonencode([{
 
     name      = "lightdash"
-    image     = "lightdash/lightdash:${var.lightdash_oci_tag}"
+    image     = "${var.lightdash_image_repo}:${var.lightdash_oci_tag}"
     cpu       = var.lightdash_container_cpu
     memory    = var.lightdash_container_memory
     essential = true
