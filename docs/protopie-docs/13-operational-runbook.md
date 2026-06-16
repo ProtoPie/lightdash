@@ -75,7 +75,7 @@ ORDER BY scored_for_date DESC LIMIT 1;
 
 -- 2. Check the inputs — does mart_account_usage_90d say what you expect?
 -- Run from a Lightdash SQL runner or psql against Redshift:
-SELECT * FROM warehouse_staging.mart_account_usage_90d
+SELECT * FROM warehouse_dev.mart_account_usage_90d  -- dev; use warehouse_prod in prod
 WHERE team_id = '<team_id>';
 
 -- 3. Is there an active override?

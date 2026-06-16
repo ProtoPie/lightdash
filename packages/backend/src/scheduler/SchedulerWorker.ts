@@ -1144,6 +1144,7 @@ export class SchedulerWorker extends SchedulerTask {
                         async () => {
                             await this.protopieChurnScoreService.executeRecompute(
                                 payload.runUuid,
+                                payload.organizationUuid,
                             );
                         },
                     ),

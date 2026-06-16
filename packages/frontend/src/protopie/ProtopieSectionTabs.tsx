@@ -8,11 +8,9 @@ const ProtopieSectionTabs: FC = () => {
     const navigate = useNavigate();
     const location = useLocation();
 
-    const value = location.pathname.includes('/protopie/churn/scores-v2')
-        ? 'scores-v2'
-        : location.pathname.includes('/protopie/churn/scores')
-          ? 'scores-v1'
-          : 'rubric';
+    const value = location.pathname.includes('/protopie/churn/scores')
+        ? 'scores'
+        : 'rubric';
 
     return (
         <Tabs
@@ -24,22 +22,16 @@ const ProtopieSectionTabs: FC = () => {
                         `/projects/${projectUuid}/protopie/churn/rubric`,
                     );
                 }
-                if (nextValue === 'scores-v1') {
+                if (nextValue === 'scores') {
                     void navigate(
                         `/projects/${projectUuid}/protopie/churn/scores`,
-                    );
-                }
-                if (nextValue === 'scores-v2') {
-                    void navigate(
-                        `/projects/${projectUuid}/protopie/churn/scores-v2`,
                     );
                 }
             }}
         >
             <Tabs.List>
                 <Tabs.Tab value="rubric">Rubric</Tabs.Tab>
-                <Tabs.Tab value="scores-v1">Scores v1</Tabs.Tab>
-                <Tabs.Tab value="scores-v2">Scores v2</Tabs.Tab>
+                <Tabs.Tab value="scores">Scores</Tabs.Tab>
             </Tabs.List>
         </Tabs>
     );

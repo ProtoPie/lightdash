@@ -101,7 +101,7 @@ When a row is soft-deleted (`deleted_at` set):
 
 Dev, staging, and prod:
 - Have separate Postgres databases (existing Lightdash convention).
-- Have separate Redshift schemas (`warehouse_staging` vs `warehouse`).
+- Have separate Redshift schemas (`warehouse_dev` vs `warehouse_prod`, both in the `prod` database).
 - Form schemas and migrations are deployed in the same order to all three.
 - MCP org-opt-in setting (`protopie_organization_settings.mcp_write_tools_enabled`) is per-org per-environment — turning it on in dev does NOT turn it on in prod.
 

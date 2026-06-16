@@ -2,6 +2,20 @@ import { ParameterError, type Protopie } from '@lightdash/common';
 
 const IDENTIFIER_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/**
+ * ChurnZero-faithful source relations (materialized in the data-modeling repo).
+ *
+ * - EVENT_USAGE_MART: per-account-per-event-per-day usage, ≥120d, with
+ *   Studio events attributed by user_id and Cloud events by Page-URL host,
+ *   plus the synthetic `editor_activated` event dated at user_created_at.
+ *   Columns consumed: account_url, event_name, event_date (date), user_id,
+ *   event_count (instance count).
+ * - CONTACTS_MART: one row per account = the CONTACTS roster denominator.
+ *   Columns consumed: account_url, namespace, total_contacts (U).
+ */
+const EVENT_USAGE_MART = 'protopie_account_event_usage';
+const CONTACTS_MART = 'protopie_account_contacts';
+
 const validateIdentifier = (value: string, label: string): void => {
     if (!IDENTIFIER_REGEX.test(value)) {
         throw new ParameterError(`Invalid ${label}: ${value}`);
@@ -45,9 +59,29 @@ const buildEventPredicate = ({
         return `$${values.length}`;
     });
 
-    return `ea.event_name IN (${placeholders.join(', ')})`;
+    return `eu.event_name IN (${placeholders.join(', ')})`;
 };
 
+const resolveWindowDays = (
+    factor: Protopie.ChurnScoreFactor,
+    lookbackDays: number,
+): number => {
+    const windowDays = factor.windowDays ?? lookbackDays;
+    if (!Number.isInteger(windowDays) || windowDays <= 0) {
+        throw new ParameterError(
+            `windowDays must be a positive integer for ${factor.factorKey}.`,
+        );
+    }
+    return windowDays;
+};
+
+/**
+ * Builds the per-account churn aggregation against the CZ-faithful marts.
+ * Account key = `account_url`. Denominator (`total_users`) = CONTACTS roster
+ * (`total_contacts`). Every account in the roster is scored, even with zero
+ * events (LEFT JOIN → NULL metrics → treated as 0 by scoreAccount). Each factor
+ * applies its own lookback window.
+ */
 export const buildAggregationQuery = ({
     schema,
     lookbackDays,
@@ -64,81 +98,66 @@ export const buildAggregationQuery = ({
     }
 
     const values: string[] = [];
-    const metricExpressions: string[] = [
-        "COUNT(DISTINCT DATE_TRUNC('day', ea.event_time)) AS active_days",
-    ];
+    const metrics: { expr: string; alias: string }[] = [];
+    let maxWindowDays = lookbackDays;
 
     factors.forEach((factor) => {
         validateChurnScoreFactorInput(factor);
+        const windowDays = resolveWindowDays(factor, lookbackDays);
+        maxWindowDays = Math.max(maxWindowDays, windowDays);
+        const windowPredicate = `eu.event_date >= CURRENT_DATE - ${windowDays}`;
 
         if (factor.aggregation === 'active_days') {
+            metrics.push({
+                alias: 'active_days',
+                expr: `COUNT(DISTINCT CASE WHEN ${windowPredicate} THEN eu.event_date END)`,
+            });
             return;
         }
 
-        const predicate = buildEventPredicate({ factor, values });
+        const eventPredicate = buildEventPredicate({ factor, values });
+        const predicate = `${eventPredicate} AND ${windowPredicate}`;
+
         if (factor.aggregation === 'pct_users_with_event') {
-            metricExpressions.push(
-                `COUNT(DISTINCT CASE WHEN ${predicate} THEN ea.user_id END) AS ${factor.factorKey}_users`,
-            );
+            metrics.push({
+                alias: `${factor.factorKey}_users`,
+                expr: `COUNT(DISTINCT CASE WHEN ${predicate} THEN eu.user_id END)`,
+            });
             return;
         }
 
-        if (factor.aggregation === 'event_count') {
-            metricExpressions.push(
-                `COUNT(DISTINCT CASE WHEN ${predicate} THEN ea.event_id END) AS ${factor.factorKey}_event_count`,
-            );
-            return;
-        }
-
-        if (factor.aggregation === 'event_count_per_user') {
-            metricExpressions.push(
-                `COUNT(DISTINCT CASE WHEN ${predicate} THEN ea.event_id END) AS ${factor.factorKey}_event_count`,
-            );
-        }
+        // event_count and event_count_per_user both need raw instance totals.
+        metrics.push({
+            alias: `${factor.factorKey}_event_count`,
+            expr: `SUM(CASE WHEN ${predicate} THEN eu.event_count ELSE 0 END)`,
+        });
     });
 
+    const innerSelect = metrics
+        .map((metric) => `${metric.expr} AS ${metric.alias}`)
+        .join(',\n                ');
+    const outerSelect = metrics
+        .map((metric) => `e.${metric.alias}`)
+        .join(',\n            ');
+
     const sql = `
-        WITH event_attribution AS (
-            SELECT DISTINCT
-                e.event_id,
-                e.event_time,
-                e.event_name,
-                e.user_id,
-                ep.team_id
-            FROM ${schema}.dim_product_all_events e
-            LEFT JOIN ${schema}.dim_product_all_event_properties ep
-                ON e.event_id = ep.event_id
-            WHERE ep.team_id IS NOT NULL
-              AND e.event_time >= CURRENT_DATE - ${lookbackDays}
-        ),
-        enterprise_teams AS (
+        WITH event_agg AS (
             SELECT
-                t.team_id,
-                MAX(t.namespace) AS namespace,
-                MAX(t.url) AS cloud_url
-            FROM ${schema}.dim_team_summary t
-            WHERE t.team_id IS NOT NULL
-              AND EXISTS (
-                  SELECT 1
-                  FROM ${schema}.dim_enterprise_summary es
-                  WHERE es.namespace = t.namespace
-              )
-            GROUP BY t.team_id
-        ),
-        per_account AS (
-            SELECT
-                et.namespace AS account_key,
-                et.namespace,
-                MAX(et.cloud_url) AS cloud_url,
-                COUNT(DISTINCT ea.user_id) AS total_users,
-                ${metricExpressions.join(',\n                ')}
-            FROM enterprise_teams et
-            LEFT JOIN event_attribution ea
-                ON ea.team_id = et.team_id
-            GROUP BY et.namespace
+                eu.account_url,
+                ${innerSelect}
+            FROM ${schema}.${EVENT_USAGE_MART} eu
+            WHERE eu.event_date >= CURRENT_DATE - ${maxWindowDays}
+            GROUP BY eu.account_url
         )
-        SELECT *
-        FROM per_account
+        SELECT
+            c.account_url AS account_key,
+            c.namespace AS namespace,
+            c.account_url AS cloud_url,
+            c.total_contacts AS total_users,
+            ${outerSelect}
+        FROM ${schema}.${CONTACTS_MART} c
+        LEFT JOIN event_agg e
+            ON e.account_url = c.account_url
     `;
 
     return { sql, values };

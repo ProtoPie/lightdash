@@ -9,8 +9,10 @@
 | Repo path | `/Users/mamur/Documents/projects/data-modeling` |
 | dbt project name (in `dbt_project.yml`) | `my_new_project` *(placeholder name; do not rely on it)* |
 | Warehouse | **Amazon Redshift** (`prod` database) |
-| Target schema (dev) | `warehouse_staging` |
-| Target schema (prod) | `warehouse` |
+| Cluster host | `redshift-cluster-prod.c3hmdinkbcu9.us-west-2.redshift.amazonaws.com` |
+| Database | `prod` (single DB; dev and prod share it, separated only by schema) |
+| Target schema (dev) | `warehouse_dev` (`REDSHIFT_DEV_SCHEMA`) |
+| Target schema (prod) | `warehouse_prod` (`REDSHIFT_PROD_SCHEMA`) |
 | Threads | 4 |
 | dbt version | dbt + Redshift adapter (see `packages.yml` for utilities) |
 | Packages | `dbt-labs/dbt_utils` 1.3.0, `entechlog/dbt_snow_mask` 0.2.6, `dbt-labs/codegen` 0.13.0 |
@@ -213,7 +215,7 @@ The Lightdash app Postgres tables (`protopie_form_submissions`, `protopie_churn_
 - `protopie_churn_score`, `protopie_churn_score_runs` → 6× daily (the nightly recompute writes once at ~02:00 UTC, plus catch any ad-hoc admin recomputes).
 - `protopie_churn_score_configs`, `protopie_churn_score_factors`, `protopie_account_overrides`, `protopie_form_definitions` → daily (low change rate).
 
-**Schema mapping.** All Postgres tables land in a Redshift schema named `protopie_app_raw`. The dbt staging models (in `models/staging/protopie_app/`) read from `source('protopie_app_raw', '<table>')` and create views in `warehouse_staging.stg_protopie_app__*`.
+**Schema mapping.** All Postgres tables land in a Redshift schema named `protopie_app_raw`. The dbt staging models (in `models/staging/protopie_app/`) read from `source('protopie_app_raw', '<table>')` and create views in `warehouse_dev.stg_protopie_app__*` (dev; `warehouse_prod.*` in prod).
 
 **Backfill.** Initial backfill = one DAG run with `--full-refresh=true`. Future backfills = re-run the DAG for the affected date range. Idempotent: each load uses `TRUNCATE + INSERT` because table sizes are small (well under 1M rows per Protopie table — even after 5 years of sales activity).
 

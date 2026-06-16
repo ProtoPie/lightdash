@@ -1,13 +1,57 @@
-import { type ChurnScoreFactorInput } from './types';
+import { type ChurnScoreFactorInput, type ChurnScoreFunction } from './types';
 
 export const DEFAULT_CHURN_SCORE_CONFIG_NAME = 'Default Churn Score';
 
 export const DEFAULT_CHURN_SCORE_LOOKBACK_DAYS = 90;
 
+/**
+ * Scoring function for the default rubric. ChurnZero parity uses integer
+ * step buckets ("Allocated points"), not linear partial credit.
+ */
+export const DEFAULT_CHURN_SCORE_FUNCTION: ChurnScoreFunction = 'stepwise';
+
+/**
+ * Per-factor lookback for `% activated/logged-in`. ChurnZero scores this
+ * factor over 120 days (all other factors use 90).
+ */
+export const ACTIVATED_FACTOR_WINDOW_DAYS = 120;
+
+/**
+ * Risk-band cutoffs on the engagement-health fraction (scorePercent, 0-1).
+ * Higher health → lower churn risk, so `scorePercent >= low` is 'low' risk.
+ */
 export const DEFAULT_CHURN_SCORE_RISK_BAND_THRESHOLDS = {
     low: 0.75,
     medium: 0.5,
 } as const;
+
+/**
+ * Standard ChurnZero "% of users" bucket (used by most percentage factors):
+ * 51+%→100%, 26-50%→66%, 1-25%→33%, 0→0. `points` are the integer "Allocated
+ * points" CZ displays/awards. ChurnZero rounds UP (ceil): e.g. 33% of 10 = 3.3
+ * is awarded as 4, 66% of 5 = 3.3 as 4 — matching the rubric screenshots.
+ */
+const pctRanges = (max: number) => ({
+    ranges: [
+        { bottom: 51, top: null, points: max },
+        { bottom: 26, top: 50, points: Math.ceil(max * 0.66) },
+        { bottom: 1, top: 25, points: Math.ceil(max * 0.33) },
+        { bottom: 0, top: 0, points: 0 },
+    ],
+});
+
+/**
+ * Standard ChurnZero "per user" bucket (count per user):
+ * 21+→100%, 11-20→66%, 1-10→33%, 0→0 (ceil rounding, as above).
+ */
+const perUserRanges = (max: number) => ({
+    ranges: [
+        { bottom: 21, top: null, points: max },
+        { bottom: 11, top: 20, points: Math.ceil(max * 0.66) },
+        { bottom: 1, top: 10, points: Math.ceil(max * 0.33) },
+        { bottom: 0, top: 0, points: 0 },
+    ],
+});
 
 export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
     {
@@ -26,7 +70,17 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
                 'Cloud - Page - Entered',
             ],
         },
-        stepThresholds: null,
+        // ChurnZero "% users Launch/Entered/Started" uses 31% (not 33%) for the
+        // 1-25 bucket on this 5-point factor.
+        stepThresholds: {
+            ranges: [
+                { bottom: 51, top: null, points: 5 },
+                { bottom: 26, top: 50, points: 4 },
+                { bottom: 1, top: 25, points: 2 },
+                { bottom: 0, top: 0, points: 0 },
+            ],
+        },
+        windowDays: 90,
         sortOrder: 10,
     },
     {
@@ -45,7 +99,8 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
                 'Cloud - Page - Entered',
             ],
         },
-        stepThresholds: null,
+        stepThresholds: perUserRanges(5),
+        windowDays: 90,
         sortOrder: 20,
     },
     {
@@ -59,7 +114,16 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
             operator: 'or',
             events: ['Studio - Login - Completed', 'editor_activated'],
         },
-        stepThresholds: null,
+        // ChurnZero "% activated/logged-in" uses a 2-step bucket over 120 days:
+        // 51+%→100%, 1-50%→50%.
+        stepThresholds: {
+            ranges: [
+                { bottom: 51, top: null, points: 10 },
+                { bottom: 1, top: 50, points: 5 },
+                { bottom: 0, top: 0, points: 0 },
+            ],
+        },
+        windowDays: ACTIVATED_FACTOR_WINDOW_DAYS,
         sortOrder: 30,
     },
     {
@@ -79,7 +143,8 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
                 'Studio - Preview - Opened',
             ],
         },
-        stepThresholds: null,
+        stepThresholds: perUserRanges(10),
+        windowDays: 90,
         sortOrder: 40,
     },
     {
@@ -99,7 +164,8 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
                 'Studio - Preview - Opened',
             ],
         },
-        stepThresholds: null,
+        stepThresholds: pctRanges(10),
+        windowDays: 90,
         sortOrder: 50,
     },
     {
@@ -116,7 +182,8 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
                 'Studio - AI Panel - Panel Toggled',
             ],
         },
-        stepThresholds: null,
+        stepThresholds: pctRanges(10),
+        windowDays: 90,
         sortOrder: 60,
     },
     {
@@ -133,7 +200,8 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
                 'Studio - Trigger Interaction - Added',
             ],
         },
-        stepThresholds: null,
+        stepThresholds: pctRanges(15),
+        windowDays: 90,
         sortOrder: 70,
     },
     {
@@ -150,7 +218,8 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
                 'Studio - Trigger Interaction - Added',
             ],
         },
-        stepThresholds: null,
+        stepThresholds: perUserRanges(15),
+        windowDays: 90,
         sortOrder: 80,
     },
     {
@@ -160,11 +229,21 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
         goalValue: 5,
         goalUnit: 'count',
         aggregation: 'event_count',
+        // No Amplitude source for CZ in-app messages → empty group → always 0,
+        // matching ChurnZero (which also shows 0/10 for these accounts). Kept in
+        // the 100-point denominator for parity.
         eventGroup: {
             operator: 'or',
             events: [],
         },
-        stepThresholds: null,
+        stepThresholds: {
+            ranges: [
+                { bottom: 5, top: null, points: 10 },
+                { bottom: 1, top: 4, points: 5 },
+                { bottom: 0, top: 0, points: 0 },
+            ],
+        },
+        windowDays: 90,
         sortOrder: 90,
     },
     {
@@ -178,7 +257,17 @@ export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
             operator: 'or',
             events: [],
         },
-        stepThresholds: null,
+        // ChurnZero "Active Days": 11+→100%, 6-10→66%, 1-5→33%. Goal is 10 but
+        // full points require 11+.
+        stepThresholds: {
+            ranges: [
+                { bottom: 11, top: null, points: 10 },
+                { bottom: 6, top: 10, points: 7 },
+                { bottom: 1, top: 5, points: 4 },
+                { bottom: 0, top: 0, points: 0 },
+            ],
+        },
+        windowDays: 90,
         sortOrder: 100,
     },
 ];

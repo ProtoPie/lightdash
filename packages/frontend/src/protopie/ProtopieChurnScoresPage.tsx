@@ -31,10 +31,10 @@ const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
 
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = ['25', '50', '100', '200'];
-const DEFAULT_SORT_VALUE = 'score_asc';
+const DEFAULT_SORT_VALUE = 'score_desc';
 const SORT_OPTIONS = [
-    { value: 'score_asc', label: 'Score: low to high' },
-    { value: 'score_desc', label: 'Score: high to low' },
+    { value: 'score_desc', label: 'Churn score: high to low' },
+    { value: 'score_asc', label: 'Churn score: low to high' },
     { value: 'risk_desc', label: 'Risk: high to low' },
     { value: 'risk_asc', label: 'Risk: low to high' },
     { value: 'namespace_asc', label: 'Namespace: A to Z' },
@@ -143,7 +143,7 @@ const ProtopieChurnScoresPage = () => {
             <Stack className={classes.section} gap="xs">
                 <Group justify="space-between" align="flex-start">
                     <Stack gap={4}>
-                        <Title order={3}>Churn score v1</Title>
+                        <Title order={3}>Churn score</Title>
                         <Text c="dimmed" size="sm">
                             Latest enterprise-team scores for the active Notion
                             rubric.
@@ -155,7 +155,7 @@ const ProtopieChurnScoresPage = () => {
                 <ProtopieSectionTabs />
             </Stack>
 
-            <ProtopieChurnScoreMethodCards variant="v1" />
+            <ProtopieChurnScoreMethodCards />
 
             <Card withBorder className={classes.formPanel}>
                 <Stack gap="md">
@@ -219,20 +219,29 @@ const ProtopieChurnScoresPage = () => {
                             <Table.Thead>
                                 <Table.Tr>
                                     <Table.Th>Account</Table.Th>
-                                    <Table.Th>Score</Table.Th>
+                                    <Table.Th>Churn score</Table.Th>
                                     <Table.Th>Risk</Table.Th>
-                                    <Table.Th>Raw points</Table.Th>
+                                    <Table.Th>Health points</Table.Th>
                                     <Table.Th>Computed</Table.Th>
                                 </Table.Tr>
                             </Table.Thead>
                             <Table.Tbody>
-                                {rows.map((score) => (
+                                {rows.map((score) => {
+                                    const detailTo = `/projects/${projectUuid}/protopie/churn/scores/${encodeURIComponent(
+                                        score.accountKey,
+                                    )}?configUuid=${score.configUuid}`;
+                                    return (
                                     <Table.Tr key={score.scoreUuid}>
                                         <Table.Td>
-                                            <Text size="sm" fw={600}>
+                                            <Anchor
+                                                component={Link}
+                                                to={detailTo}
+                                                size="sm"
+                                                fw={600}
+                                            >
                                                 {score.namespace ??
                                                     score.accountKey}
-                                            </Text>
+                                            </Anchor>
                                             {score.cloudUrl && (
                                                 <Text size="xs" c="dimmed">
                                                     {score.cloudUrl}
@@ -242,14 +251,10 @@ const ProtopieChurnScoresPage = () => {
                                         <Table.Td>
                                             <Anchor
                                                 component={Link}
-                                                to={`/projects/${projectUuid}/protopie/churn/scores/${encodeURIComponent(
-                                                    score.accountKey,
-                                                )}?configUuid=${score.configUuid}`}
+                                                to={detailTo}
                                                 fw={600}
                                             >
-                                                {score.normalizedScore.toFixed(
-                                                    2,
-                                                )}
+                                                {score.churnScore.toFixed(2)}
                                             </Anchor>
                                         </Table.Td>
                                         <Table.Td>
@@ -278,7 +283,8 @@ const ProtopieChurnScoresPage = () => {
                                             </Text>
                                         </Table.Td>
                                     </Table.Tr>
-                                ))}
+                                    );
+                                })}
                             </Table.Tbody>
                         </Table>
                     </Table.ScrollContainer>

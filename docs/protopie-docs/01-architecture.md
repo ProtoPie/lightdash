@@ -186,7 +186,7 @@ It is a separate git repository. The two repos are coupled at the Lightdash UI l
 Key facts about that repo (see [11-dbt-integration.md](./11-dbt-integration.md) for full details):
 
 - **Warehouse:** Amazon Redshift (`prod` database).
-- **Target schemas:** `warehouse_staging` (dev) / `warehouse` (prod).
+- **Target schemas:** `warehouse_dev` (dev) / `warehouse_prod` (prod), both in the `prod` database.
 - **Existing structure:** 74 staging models, 31 marts split across `billing`, `cloud`, `learnworld`, `credit`, `ai_assistant` domains. Time-grain subdirs (`daily/`, `weekly/`, `monthly/`).
 - **Lightdash integration:** mart models tagged `lightdash` and carry `meta` config (joins, dimensions, metrics) inline. Content-as-code YAML lives in the same repo under `lightdash/charts/` and `lightdash/dashboards/`.
 - **All materializations are `table`** (no views, no incremental yet — except the Amplitude staging model which is incremental).

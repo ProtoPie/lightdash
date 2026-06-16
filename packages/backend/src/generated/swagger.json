@@ -353,8 +353,7 @@
             },
             "ChurnScoreFunction": {
                 "type": "string",
-                "enum": ["linear"],
-                "nullable": false
+                "enum": ["linear", "stepwise"]
             },
             "ChurnScoreRiskBandThresholds": {
                 "properties": {
@@ -476,16 +475,54 @@
                 "required": ["events", "operator"],
                 "type": "object"
             },
+            "ChurnScoreStepRange": {
+                "properties": {
+                    "points": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "top": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "bottom": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": ["points", "top", "bottom"],
+                "type": "object",
+                "description": "One bucket in a ChurnZero-style step allocation. `bottom` is the inclusive\nlower edge the raw value is compared against (truncate semantics — no\nround-up); `top` is the inclusive upper edge for display/validation only;\n`points` is the integer allocated points awarded when the raw value lands in\nthis bucket. Evaluation picks the range with the greatest `bottom <= raw`."
+            },
+            "ChurnScoreStepThresholds": {
+                "properties": {
+                    "ranges": {
+                        "items": {
+                            "$ref": "#/components/schemas/ChurnScoreStepRange"
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": ["ranges"],
+                "type": "object"
+            },
             "ChurnScoreFactor": {
                 "properties": {
                     "sortOrder": {
                         "type": "number",
                         "format": "double"
                     },
+                    "windowDays": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true,
+                        "description": "Per-factor lookback window in days. Null falls back to the config-level\nlookbackDays. ChurnZero parity: most factors 90, `% activated` 120."
+                    },
                     "stepThresholds": {
                         "allOf": [
                             {
-                                "$ref": "#/components/schemas/Record_string.unknown_"
+                                "$ref": "#/components/schemas/ChurnScoreStepThresholds"
                             }
                         ],
                         "nullable": true
@@ -522,6 +559,8 @@
                 },
                 "required": [
                     "sortOrder",
+                    "windowDays",
+                    "stepThresholds",
                     "eventGroup",
                     "aggregation",
                     "goalUnit",
@@ -615,10 +654,16 @@
                     "stepThresholds": {
                         "allOf": [
                             {
-                                "$ref": "#/components/schemas/Record_string.unknown_"
+                                "$ref": "#/components/schemas/ChurnScoreStepThresholds"
                             }
                         ],
                         "nullable": true
+                    },
+                    "windowDays": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true,
+                        "description": "Per-factor lookback window in days. Null falls back to the config-level\nlookbackDays. ChurnZero parity: most factors 90, `% activated` 120."
                     },
                     "sortOrder": {
                         "type": "number",
@@ -633,6 +678,8 @@
                     "goalUnit",
                     "aggregation",
                     "eventGroup",
+                    "stepThresholds",
+                    "windowDays",
                     "sortOrder"
                 ],
                 "type": "object",
@@ -729,7 +776,7 @@
             },
             "ChurnScoreRunStatus": {
                 "type": "string",
-                "enum": ["queued", "running", "completed", "failed"]
+                "enum": ["queued", "running", "completed", "failed", "skipped"]
             },
             "ChurnScoreRun": {
                 "properties": {
@@ -875,9 +922,15 @@
                     "riskBand": {
                         "$ref": "#/components/schemas/ChurnScoreRiskBand"
                     },
+                    "churnScore": {
+                        "type": "number",
+                        "format": "double",
+                        "description": "Churn risk, 0-100 (= 100 - normalizedScore, the ChurnZero \"ChurnScore\"). Higher = more at risk."
+                    },
                     "normalizedScore": {
                         "type": "number",
-                        "format": "double"
+                        "format": "double",
+                        "description": "Engagement health, 0-100 (= ChurnZero \"Total\"). Higher = healthier."
                     },
                     "scorePercent": {
                         "type": "number",
@@ -928,6 +981,7 @@
                     "computedAt",
                     "factorScores",
                     "riskBand",
+                    "churnScore",
                     "normalizedScore",
                     "scorePercent",
                     "maxPoints",
@@ -964,46 +1018,99 @@
             "ApiChurnScoresResponse": {
                 "$ref": "#/components/schemas/ApiSuccess_ChurnScore-Array_"
             },
-            "ApiChurnScoreFactorDetail": {
-                "allOf": [
-                    {
-                        "$ref": "#/components/schemas/ChurnScoreFactor"
-                    },
-                    {
-                        "properties": {
-                            "score": {
-                                "allOf": [
-                                    {
-                                        "$ref": "#/components/schemas/ChurnScoreFactorScore"
-                                    },
-                                    {
-                                        "properties": {
-                                            "achievementPercent": {
-                                                "type": "number",
-                                                "format": "double"
-                                            }
-                                        },
-                                        "required": ["achievementPercent"],
-                                        "type": "object"
-                                    }
-                                ]
-                            }
-                        },
-                        "required": ["score"],
-                        "type": "object"
-                    }
-                ]
+            "ChurnScoreSortBy": {
+                "type": "string",
+                "enum": ["score", "risk", "namespace", "computed_at"]
             },
-            "ApiChurnScoreAccountEventSummary": {
+            "ChurnScoreSortDirection": {
+                "type": "string",
+                "enum": ["asc", "desc"]
+            },
+            "ApiChurnScoreFactorDetail": {
                 "properties": {
-                    "eventName": {
-                        "type": "string"
+                    "score": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/ChurnScoreFactorScore"
+                            },
+                            {
+                                "properties": {
+                                    "achievementPercent": {
+                                        "type": "number",
+                                        "format": "double"
+                                    }
+                                },
+                                "required": ["achievementPercent"],
+                                "type": "object"
+                            }
+                        ]
                     },
-                    "eventCount": {
+                    "sortOrder": {
                         "type": "number",
                         "format": "double"
                     },
-                    "activeUsers": {
+                    "stepThresholds": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Record_string.unknown_"
+                            }
+                        ],
+                        "nullable": true
+                    },
+                    "eventGroup": {
+                        "$ref": "#/components/schemas/ChurnScoreEventGroup"
+                    },
+                    "aggregation": {
+                        "$ref": "#/components/schemas/ChurnScoreAggregation"
+                    },
+                    "goalUnit": {
+                        "$ref": "#/components/schemas/ChurnScoreGoalUnit"
+                    },
+                    "goalValue": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "maxPoints": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "factorKey": {
+                        "type": "string"
+                    },
+                    "configUuid": {
+                        "type": "string"
+                    },
+                    "factorUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "score",
+                    "sortOrder",
+                    "eventGroup",
+                    "aggregation",
+                    "goalUnit",
+                    "goalValue",
+                    "maxPoints",
+                    "label",
+                    "factorKey"
+                ],
+                "type": "object"
+            },
+            "ApiChurnScoreAccountEventSummary": {
+                "properties": {
+                    "lastSeenAt": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "firstSeenAt": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "shareOfEvents": {
                         "type": "number",
                         "format": "double"
                     },
@@ -1011,74 +1118,59 @@
                         "type": "number",
                         "format": "double"
                     },
-                    "shareOfEvents": {
+                    "activeUsers": {
                         "type": "number",
                         "format": "double"
-                    },
-                    "firstSeenAt": {
-                        "type": "string",
-                        "nullable": true
-                    },
-                    "lastSeenAt": {
-                        "type": "string",
-                        "nullable": true
-                    }
-                },
-                "required": [
-                    "eventName",
-                    "eventCount",
-                    "activeUsers",
-                    "activeDays",
-                    "shareOfEvents",
-                    "firstSeenAt",
-                    "lastSeenAt"
-                ],
-                "type": "object"
-            },
-            "ApiChurnScoreAccountEventDailyCount": {
-                "properties": {
-                    "eventDate": {
-                        "type": "string"
-                    },
-                    "eventName": {
-                        "type": "string"
                     },
                     "eventCount": {
                         "type": "number",
                         "format": "double"
                     },
-                    "activeUsers": {
-                        "type": "number",
-                        "format": "double"
+                    "eventName": {
+                        "type": "string"
                     }
                 },
                 "required": [
-                    "eventDate",
-                    "eventName",
+                    "lastSeenAt",
+                    "firstSeenAt",
+                    "shareOfEvents",
+                    "activeDays",
+                    "activeUsers",
                     "eventCount",
-                    "activeUsers"
+                    "eventName"
+                ],
+                "type": "object"
+            },
+            "ApiChurnScoreAccountEventDailyCount": {
+                "properties": {
+                    "activeUsers": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "eventCount": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "eventName": {
+                        "type": "string"
+                    },
+                    "eventDate": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "activeUsers",
+                    "eventCount",
+                    "eventName",
+                    "eventDate"
                 ],
                 "type": "object"
             },
             "ApiChurnScoreAccountEventUsage": {
                 "properties": {
-                    "lookbackDays": {
-                        "type": "number",
-                        "format": "double"
-                    },
-                    "dateFrom": {
-                        "type": "string"
-                    },
-                    "dateTo": {
-                        "type": "string"
-                    },
-                    "totalEvents": {
-                        "type": "number",
-                        "format": "double"
-                    },
-                    "selectedEventNames": {
+                    "daily": {
                         "items": {
-                            "type": "string"
+                            "$ref": "#/components/schemas/ApiChurnScoreAccountEventDailyCount"
                         },
                         "type": "array"
                     },
@@ -1088,49 +1180,65 @@
                         },
                         "type": "array"
                     },
-                    "daily": {
+                    "selectedEventNames": {
                         "items": {
-                            "$ref": "#/components/schemas/ApiChurnScoreAccountEventDailyCount"
+                            "type": "string"
                         },
                         "type": "array"
+                    },
+                    "totalEvents": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "dateTo": {
+                        "type": "string"
+                    },
+                    "dateFrom": {
+                        "type": "string"
+                    },
+                    "lookbackDays": {
+                        "type": "number",
+                        "format": "double"
                     }
                 },
                 "required": [
-                    "lookbackDays",
-                    "dateFrom",
-                    "dateTo",
-                    "totalEvents",
-                    "selectedEventNames",
+                    "daily",
                     "events",
-                    "daily"
+                    "selectedEventNames",
+                    "totalEvents",
+                    "dateTo",
+                    "dateFrom",
+                    "lookbackDays"
                 ],
                 "type": "object"
             },
-            "ApiChurnScoreAccountDetails": {
-                "properties": {
-                    "score": {
-                        "$ref": "#/components/schemas/ChurnScore"
-                    },
-                    "config": {
-                        "$ref": "#/components/schemas/ChurnScoreConfig"
-                    },
-                    "factors": {
-                        "items": {
-                            "$ref": "#/components/schemas/ApiChurnScoreFactorDetail"
-                        },
-                        "type": "array"
-                    },
-                    "eventUsage": {
-                        "$ref": "#/components/schemas/ApiChurnScoreAccountEventUsage"
-                    }
-                },
-                "required": ["score", "config", "factors", "eventUsage"],
-                "type": "object"
-            },
-            "ApiSuccess_ApiChurnScoreAccountDetails_": {
+            "ApiSuccess__score-ChurnScore--config-ChurnScoreConfig--factors-ApiChurnScoreFactorDetail-Array--eventUsage-ApiChurnScoreAccountEventUsage__": {
                 "properties": {
                     "results": {
-                        "$ref": "#/components/schemas/ApiChurnScoreAccountDetails"
+                        "properties": {
+                            "eventUsage": {
+                                "$ref": "#/components/schemas/ApiChurnScoreAccountEventUsage"
+                            },
+                            "factors": {
+                                "items": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreFactorDetail"
+                                },
+                                "type": "array"
+                            },
+                            "config": {
+                                "$ref": "#/components/schemas/ChurnScoreConfig"
+                            },
+                            "score": {
+                                "$ref": "#/components/schemas/ChurnScore"
+                            }
+                        },
+                        "required": [
+                            "eventUsage",
+                            "factors",
+                            "config",
+                            "score"
+                        ],
+                        "type": "object"
                     },
                     "status": {
                         "type": "string",
@@ -1142,7 +1250,7 @@
                 "type": "object"
             },
             "ApiChurnScoreAccountDetailsResponse": {
-                "$ref": "#/components/schemas/ApiSuccess_ApiChurnScoreAccountDetails_"
+                "$ref": "#/components/schemas/ApiSuccess__score-ChurnScore--config-ChurnScoreConfig--factors-ApiChurnScoreFactorDetail-Array--eventUsage-ApiChurnScoreAccountEventUsage__"
             },
             "ApiSuccessEmpty": {
                 "properties": {
@@ -12067,12 +12175,12 @@
                                                             "topMatchingFields": {
                                                                 "items": {
                                                                     "properties": {
-                                                                        "searchRank": {
+                                                                        "chartUsage": {
                                                                             "type": "number",
                                                                             "format": "double",
                                                                             "nullable": true
                                                                         },
-                                                                        "chartUsage": {
+                                                                        "searchRank": {
                                                                             "type": "number",
                                                                             "format": "double",
                                                                             "nullable": true
@@ -12103,16 +12211,16 @@
                                                             "exploreSearchResults": {
                                                                 "items": {
                                                                     "properties": {
-                                                                        "searchRank": {
-                                                                            "type": "number",
-                                                                            "format": "double",
-                                                                            "nullable": true
-                                                                        },
                                                                         "joinedTables": {
                                                                             "items": {
                                                                                 "type": "string"
                                                                             },
                                                                             "type": "array",
+                                                                            "nullable": true
+                                                                        },
+                                                                        "searchRank": {
+                                                                            "type": "number",
+                                                                            "format": "double",
                                                                             "nullable": true
                                                                         },
                                                                         "label": {
@@ -12187,12 +12295,12 @@
                                                                         "results": {
                                                                             "items": {
                                                                                 "properties": {
-                                                                                    "searchRank": {
+                                                                                    "chartUsage": {
                                                                                         "type": "number",
                                                                                         "format": "double",
                                                                                         "nullable": true
                                                                                     },
-                                                                                    "chartUsage": {
+                                                                                    "searchRank": {
                                                                                         "type": "number",
                                                                                         "format": "double",
                                                                                         "nullable": true
@@ -24281,22 +24389,22 @@
                     }
                 ]
             },
-            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
+            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--description_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined__._recurseIntoArrays-true__": {
                 "properties": {},
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
-            "PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
+            "PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--description_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined___._recurseIntoArrays-true__": {
                 "properties": {
                     "chart": {
-                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
+                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--description_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined__._recurseIntoArrays-true__"
                     }
                 },
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
             "PartialDeep_ChartAsCodeLanguageMap._recurseIntoArrays-true__": {
-                "$ref": "#/components/schemas/PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
+                "$ref": "#/components/schemas/PartialObjectDeep__chart_58___91_x-string_93__58__name_63_-string-or-undefined--description_63_-string-or-undefined--chartConfig_63__58__type-ChartType.CARTESIAN--config_63__58__eChartsConfig_58__xAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--yAxis_63__58__name_63_-string-or-undefined_-Array-or-undefined--series_63__58__name_63_-string-or-undefined--markLine_63__58__data_58__name_63_-string-or-undefined_-Array_-or-undefined_-Array-or-undefined__-or-undefined_-or-_type-ChartType.PIE--config_63__58__groupLabelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.FUNNEL--config_63__58__labelOverrides_63_-Record_string.string_-or-undefined_-or-undefined_-or-_type-ChartType.BIG_NUMBER--config_63__58__label_63_-string-or-undefined--comparisonLabel_63_-string-or-undefined--comparisonField_63_-string-or-undefined_-or-undefined_-or-_type-ChartType.TABLE--config_63__58__columns_63_-Record_string._name-string__-or-undefined_-or-undefined_-or-_type-ChartType.CUSTOM--config_63__58__spec_63_-Record_string.unknown_-or-undefined_-or-undefined_-or-undefined___._recurseIntoArrays-true__",
                 "description": "Create a type from another type with all keys and nested keys set to optional.\n\nUse-cases:\n- Merging a default settings/config object with another object, the second object would be a deep partial of the default object.\n- Mocking and testing complex entities, where populating an entire object with its keys would be redundant in terms of the mock or test."
             },
             "ContentAsCodeType.SPACE": {
@@ -24651,22 +24759,22 @@
                     }
                 ]
             },
-            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__": {
+            "PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--description_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined__._recurseIntoArrays-true__": {
                 "properties": {},
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
-            "PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__": {
+            "PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--description_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined___._recurseIntoArrays-true__": {
                 "properties": {
                     "dashboard": {
-                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined__._recurseIntoArrays-true__"
+                        "$ref": "#/components/schemas/PartialObjectDeep___91_x-string_93__58__name_63_-string-or-undefined--description_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined__._recurseIntoArrays-true__"
                     }
                 },
                 "type": "object",
                 "description": "Same as `PartialDeep`, but accepts only `object`s as inputs. Internal helper for `PartialDeep`."
             },
             "PartialDeep_DashboardAsCodeLanguageMap._recurseIntoArrays-true__": {
-                "$ref": "#/components/schemas/PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__content-string--title-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined--description_63_-string-or-undefined___._recurseIntoArrays-true__",
+                "$ref": "#/components/schemas/PartialObjectDeep__dashboard_58___91_x-string_93__58__name_63_-string-or-undefined--description_63_-string-or-undefined--tiles_63__58__40__type-DashboardTileTypes.SAVED_CHART-or-DashboardTileTypes.SQL_CHART--properties_58__title-string--chartName-string__-or-_type-DashboardTileTypes.MARKDOWN--properties_58__title-string--content-string__-or-_type-DashboardTileTypes.LOOM--properties_58__title-string__-or-_type-DashboardTileTypes.HEADING--properties_58__text-string___41_-Array-or-undefined___._recurseIntoArrays-true__",
                 "description": "Create a type from another type with all keys and nested keys set to optional.\n\nUse-cases:\n- Merging a default settings/config object with another object, the second object would be a deep partial of the default object.\n- Mocking and testing complex entities, where populating an entire object with its keys would be redundant in terms of the mock or test."
             },
             "ApiDashboardAsCodeListResponse": {
@@ -33971,13 +34079,7 @@
                         "name": "sortBy",
                         "required": false,
                         "schema": {
-                            "type": "string",
-                            "enum": [
-                                "score",
-                                "risk",
-                                "namespace",
-                                "computed_at"
-                            ]
+                            "$ref": "#/components/schemas/ChurnScoreSortBy"
                         }
                     },
                     {
@@ -33985,8 +34087,7 @@
                         "name": "sortDirection",
                         "required": false,
                         "schema": {
-                            "type": "string",
-                            "enum": ["asc", "desc"]
+                            "$ref": "#/components/schemas/ChurnScoreSortDirection"
                         }
                     },
                     {
@@ -36531,6 +36632,22 @@
                         "schema": {
                             "format": "double",
                             "type": "number"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "dateFrom",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "dateTo",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     {

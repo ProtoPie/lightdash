@@ -260,10 +260,20 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                 <ProtopieSectionTabs />
             </Stack>
 
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+            <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="md">
                 <Card withBorder className={classes.formPanel}>
                     <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-                        Score
+                        Churn score
+                    </Text>
+                    <Title order={2}>{score.churnScore.toFixed(2)}</Title>
+                    <Text size="sm" c="dimmed">
+                        100 − health ({score.normalizedScore.toFixed(2)}) ·
+                        higher = more at risk
+                    </Text>
+                </Card>
+                <Card withBorder className={classes.formPanel}>
+                    <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                        Health score
                     </Text>
                     <Title order={2}>{score.normalizedScore.toFixed(2)}</Title>
                     <Text size="sm" c="dimmed">
@@ -310,7 +320,8 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                             <Title order={4}>Factor results</Title>
                             <Text size="sm" c="dimmed">
                                 Actual values are measured from Redshift. Each
-                                factor earns min(actual / goal, 1) * weight.
+                                factor&apos;s value is scored against the rubric
+                                to earn points; the health score is their sum.
                             </Text>
                         </Stack>
                         <Badge variant="light">{factors.length}</Badge>
@@ -463,10 +474,10 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                             <Table.Thead>
                                 <Table.Tr>
                                     <Table.Th>Event name</Table.Th>
-                                    <Table.Th>Instances</Table.Th>
-                                    <Table.Th>Share</Table.Th>
-                                    <Table.Th>Active users</Table.Th>
-                                    <Table.Th>Active days</Table.Th>
+                                    <Table.Th>Event count</Table.Th>
+                                    <Table.Th>% of events</Table.Th>
+                                    <Table.Th>Unique users</Table.Th>
+                                    <Table.Th>Days active</Table.Th>
                                     <Table.Th>Last seen</Table.Th>
                                 </Table.Tr>
                             </Table.Thead>

@@ -126,6 +126,23 @@ export class ChurnScoreRunModel {
             });
     }
 
+    async markSkipped({
+        runUuid,
+        reason,
+    }: {
+        runUuid: string;
+        reason: string;
+    }): Promise<void> {
+        await this.database<DbChurnScoreRun>(ProtopieTableName.ChurnScoreRuns)
+            .where('run_uuid', runUuid)
+            .update({
+                status: 'skipped',
+                finished_at: this.database.fn.now(),
+                accounts_scored: 0,
+                error_message: reason,
+            });
+    }
+
     async markFailed({
         runUuid,
         errorMessage,

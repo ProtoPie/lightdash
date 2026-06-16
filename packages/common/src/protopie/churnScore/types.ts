@@ -10,11 +10,16 @@ export type ChurnScoreAggregation =
     | 'event_count_per_user'
     | 'active_days';
 
-export type ChurnScoreFunction = 'linear';
+export type ChurnScoreFunction = 'linear' | 'stepwise';
 
 export type ChurnScoreConfigStatus = 'draft' | 'active' | 'archived';
 
-export type ChurnScoreRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type ChurnScoreRunStatus =
+    | 'queued'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'skipped';
 
 export type ChurnScoreRunTrigger = 'scheduler' | 'manual' | 'mcp';
 
@@ -27,6 +32,23 @@ export type ChurnScoreSortDirection = 'asc' | 'desc';
 export type ChurnScoreEventGroup = {
     operator: 'or';
     events: string[];
+};
+
+/**
+ * One bucket in a ChurnZero-style step allocation. `bottom` is the inclusive
+ * lower edge the raw value is compared against (truncate semantics — no
+ * round-up); `top` is the inclusive upper edge for display/validation only;
+ * `points` is the integer allocated points awarded when the raw value lands in
+ * this bucket. Evaluation picks the range with the greatest `bottom <= raw`.
+ */
+export type ChurnScoreStepRange = {
+    bottom: number;
+    top: number | null;
+    points: number;
+};
+
+export type ChurnScoreStepThresholds = {
+    ranges: ChurnScoreStepRange[];
 };
 
 export type ChurnScoreRiskBandThresholds = {
@@ -44,7 +66,12 @@ export type ChurnScoreFactor = {
     goalUnit: ChurnScoreGoalUnit;
     aggregation: ChurnScoreAggregation;
     eventGroup: ChurnScoreEventGroup;
-    stepThresholds?: Record<string, unknown> | null;
+    stepThresholds: ChurnScoreStepThresholds | null;
+    /**
+     * Per-factor lookback window in days. Null falls back to the config-level
+     * lookbackDays. ChurnZero parity: most factors 90, `% activated` 120.
+     */
+    windowDays: number | null;
     sortOrder: number;
 };
 
@@ -104,7 +131,10 @@ export type ChurnScore = {
     totalPoints: number;
     maxPoints: number;
     scorePercent: number;
+    /** Engagement health, 0-100 (= ChurnZero "Total"). Higher = healthier. */
     normalizedScore: number;
+    /** Churn risk, 0-100 (= 100 - normalizedScore, the ChurnZero "ChurnScore"). Higher = more at risk. */
+    churnScore: number;
     riskBand: ChurnScoreRiskBand;
     factorScores: ChurnScoreFactorScores;
     computedAt: Date;
