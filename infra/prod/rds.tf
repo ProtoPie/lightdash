@@ -1,3 +1,10 @@
+# RDS master password is sourced from SSM Parameter Store (single source of truth).
+# Param must exist BEFORE terraform plan/apply runs.
+data "aws_ssm_parameter" "pgpassword" {
+  name            = "/lightdash/${local.env_name}/PGPASSWORD"
+  with_decryption = true
+}
+
 module "lightdash_db" {
   tags = merge(
     local.common_tags,
@@ -5,7 +12,8 @@ module "lightdash_db" {
       Product = "lightdash-db"
     }
   )
-  source = "terraform-aws-modules/rds/aws"
+  source  = "terraform-aws-modules/rds/aws"
+  version = "~> 6.10"
 
   identifier = "lightdash-db"
 
@@ -14,13 +22,14 @@ module "lightdash_db" {
   family               = "postgres15" # DB parameter group
   major_engine_version = "15"         # DB option group
   instance_class       = "db.t3.micro"
+  publicly_accessible  = true
 
   allocated_storage     = 20
   max_allocated_storage = 100
 
   db_name  = "lightdash"
   username = local.envs["PGUSER"]
-  password = local.envs["PGPASSWORD"]
+  password = data.aws_ssm_parameter.pgpassword.value
   # create_random_password = false
   manage_master_user_password = false
   port                        = local.envs["PGPORT"]

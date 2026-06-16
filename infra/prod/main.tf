@@ -1,4 +1,10 @@
 terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 6.28.0"
+    }
+  }
   backend "s3" {
     bucket       = "xid-prod-terraform"
     key          = "lightdash-prod"
@@ -14,12 +20,20 @@ provider "aws" {
 }
 
 locals {
+  env_name = "prod"
+
   common_tags = tomap({
     "maintainer" = "mamur@protopie.io",
     "terraform"  = "https://github.com/ProtoPie/lightdash"
   })
 
   envs = { for tuple in regexall("(.*?)=(.*)", file(".env")) : tuple[0] => sensitive(tuple[1]) }
+}
+
+# Resolve the AWS-managed SSM KMS key by alias so the IAM policy below uses the
+# real key ARN. kms:Decrypt API calls evaluate against key ARN, not alias ARN.
+data "aws_kms_key" "ssm" {
+  key_id = "alias/aws/ssm"
 }
 
 data "aws_region" "current" {}
@@ -155,4 +169,31 @@ resource "aws_iam_policy" "s3_access" {
 resource "aws_iam_role_policy_attachment" "ecs_task_execution_s3_access" {
   role       = aws_iam_role.ecs_task_execution.name
   policy_arn = aws_iam_policy.s3_access.arn
+}
+
+# SSM Parameter Store access for ECS task secrets injection.
+# Scoped to /lightdash/<env>/* parameters and the default aws/ssm KMS key.
+resource "aws_iam_policy" "ssm_secrets_access" {
+  name_prefix = "ssm_secrets_access_${local.env_name}_"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameters"]
+        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/lightdash/${local.env_name}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = data.aws_kms_key.ssm.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_ssm_secrets" {
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = aws_iam_policy.ssm_secrets_access.arn
 }

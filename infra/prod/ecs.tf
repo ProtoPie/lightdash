@@ -1,22 +1,42 @@
 
 variable "lightdash_cpu" {
-  description = "Fargate instance CPU units to provision (1 vCPU = 1024 CPU units)"
-  default     = 512
+  description = "Total Fargate task CPU units, shared by lightdash + browserless containers (1 vCPU = 1024 CPU units)"
+  default     = 2048
 }
 
 variable "lightdash_memory" {
-  description = "Fargate instance memory to provision (in MiB)"
+  description = "Total Fargate task memory in MiB, shared by lightdash + browserless containers"
+  default     = 4096
+}
+
+variable "lightdash_container_cpu" {
+  description = "CPU units allocated to the lightdash container"
   default     = 1024
+}
+
+variable "lightdash_container_memory" {
+  description = "Memory (MiB) allocated to the lightdash container"
+  default     = 2560
+}
+
+variable "browserless_image" {
+  description = "Browserless Chromium image used for headless screenshots / PDF export"
+  default     = "ghcr.io/browserless/chromium:v2.24.3"
+}
+
+variable "browserless_container_cpu" {
+  description = "CPU units allocated to the browserless sidecar"
+  default     = 1024
+}
+
+variable "browserless_container_memory" {
+  description = "Memory (MiB) allocated to the browserless sidecar"
+  default     = 1536
 }
 
 variable "lightdash_oci_tag" {
   description = "container image tag"
-  default     = "prod-latest"
-}
-
-variable "lightdash_oci_image" {
-  description = "container image repository"
-  default     = "750128304405.dkr.ecr.us-west-2.amazonaws.com/protopie/lightdash"
+  default     = "latest"
 }
 
 #### resources
@@ -72,40 +92,21 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
   container_definitions = jsonencode([{
 
     name      = "lightdash"
-    image     = "${var.lightdash_oci_image}:${var.lightdash_oci_tag}"
-    cpu       = var.lightdash_cpu
-    memory    = var.lightdash_memory
+    image     = "lightdash/lightdash:${var.lightdash_oci_tag}"
+    cpu       = var.lightdash_container_cpu
+    memory    = var.lightdash_container_memory
     essential = true
+
+    dependsOn = [{
+      containerName = "browserless"
+      condition     = "START"
+    }]
 
     environment = [
 
       {
         "name"  = "NODE_ENV",
         "value" = local.envs["NODE_ENV"]
-      },
-      {
-        "name" : "MCP_ENABLED",
-        "value" : "true"
-      },
-      {
-        "name" : "PROTOPIE_DBT_GITHUB_OWNER",
-        "value" : lookup(local.envs, "PROTOPIE_DBT_GITHUB_OWNER", "ProtoPie")
-      },
-      {
-        "name" : "PROTOPIE_DBT_GITHUB_REPO",
-        "value" : lookup(local.envs, "PROTOPIE_DBT_GITHUB_REPO", "data-modeling")
-      },
-      {
-        "name" : "PROTOPIE_DBT_GITHUB_REF",
-        "value" : lookup(local.envs, "PROTOPIE_DBT_GITHUB_REF", "main")
-      },
-      {
-        "name" : "PROTOPIE_DBT_GITHUB_TOKEN",
-        "value" : lookup(local.envs, "PROTOPIE_DBT_GITHUB_TOKEN", "")
-      },
-      {
-        "name" : "PROTOPIE_DBT_ALLOWED_PATHS",
-        "value" : lookup(local.envs, "PROTOPIE_DBT_ALLOWED_PATHS", "models,marts,macros,seeds,snapshots,analyses,analysis,tests,dbt_project.yml,packages.yml,selectors.yml,exposures.yml,README.md")
       },
       {
         "name" : "SECURE_COOKIES",
@@ -139,16 +140,43 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
         "name" : "LIGHTDASH_MAX_PAYLOAD",
         "value" : local.envs["LIGHTDASH_MAX_PAYLOAD"]
       },
-
+      # Fixed topology: lightdash talks to the browserless sidecar over the
+      # awsvpc loopback (same Fargate task ENI). Do not read from .env — an
+      # operator pasting docker-compose values (e.g. "headless-browser") would
+      # break headless rendering.
       {
-        "name" : "PGCONNECTIONURI",
-        "value" : "postgresql://${local.envs["PGUSER"]}:${local.envs["PGPASSWORD"]}@${module.lightdash_db.db_instance_endpoint}/${local.envs["PGDATABASE"]}?sslmode=no-verify"
+        "name" : "HEADLESS_BROWSER_HOST",
+        "value" : "localhost"
+      },
+      {
+        "name" : "HEADLESS_BROWSER_PORT",
+        "value" : "3001"
       },
 
       {
-        "name" : "LIGHTDASH_SECRET",
-        "value" : local.envs["LIGHTDASH_SECRET"]
+        "name" : "PGHOST",
+        "value" : module.lightdash_db.db_instance_address
       },
+      {
+        "name" : "PGPORT",
+        "value" : tostring(module.lightdash_db.db_instance_port)
+      },
+      {
+        "name" : "PGUSER",
+        "value" : local.envs["PGUSER"]
+      },
+      {
+        "name" : "PGDATABASE",
+        "value" : local.envs["PGDATABASE"]
+      },
+      {
+        # Lightdash/knex SSL mode for Postgres connection. "no-verify" = require
+        # TLS but skip CA cert verification (RDS uses AWS-managed CA). Required
+        # while rds.force_ssl is in effect on the live DB.
+        "name" : "PGSSLMODE",
+        "value" : "no-verify"
+      },
+
       {
         "name" : "SITE_URL",
         "value" : local.envs["SITE_URL"]
@@ -170,10 +198,6 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
         "value" : local.envs["EMAIL_SMTP_USER"]
       },
       {
-        "name" : "EMAIL_SMTP_PASSWORD",
-        "value" : local.envs["EMAIL_SMTP_PASSWORD"]
-      },
-      {
         "name" : "EMAIL_SMTP_SENDER_EMAIL",
         "value" : local.envs["EMAIL_SMTP_SENDER_EMAIL"]
       },
@@ -182,28 +206,12 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
         "value" : local.envs["SLACK_CLIENT_ID"]
       },
       {
-        "name" : "SLACK_CLIENT_SECRET",
-        "value" : local.envs["SLACK_CLIENT_SECRET"]
-      },
-      {
-        "name" : "SLACK_SIGNING_SECRET",
-        "value" : local.envs["SLACK_SIGNING_SECRET"]
-      },
-      {
-        "name" : "SLACK_STATE_SECRET",
-        "value" : local.envs["SLACK_STATE_SECRET"]
-      },
-      {
         "name" : "AUTH_DISABLE_PASSWORD_AUTHENTICATION",
         "value" : local.envs["AUTH_DISABLE_PASSWORD_AUTHENTICATION"]
       },
       {
         "name" : "AUTH_OKTA_OAUTH_CLIENT_ID",
         "value" : local.envs["AUTH_OKTA_OAUTH_CLIENT_ID"]
-      },
-      {
-        "name" : "AUTH_OKTA_OAUTH_CLIENT_SECRET",
-        "value" : local.envs["AUTH_OKTA_OAUTH_CLIENT_SECRET"]
       },
       {
         "name" : "AUTH_OKTA_OAUTH_ISSUER",
@@ -240,6 +248,21 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
 
     ]
 
+    secrets = [
+      for k in [
+        "LIGHTDASH_SECRET",
+        "PGPASSWORD",
+        "EMAIL_SMTP_PASSWORD",
+        "AUTH_OKTA_OAUTH_CLIENT_SECRET",
+        "SLACK_CLIENT_SECRET",
+        "SLACK_SIGNING_SECRET",
+        "SLACK_STATE_SECRET",
+        ] : {
+        name      = k
+        valueFrom = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/lightdash/${local.env_name}/${k}"
+      }
+    ]
+
     portMappings = [{
       containerPort = 8080
       hostPort      = 8080
@@ -260,6 +283,43 @@ resource "aws_ecs_task_definition" "lightdash_task_definition" {
         "awslogs-stream-prefix" = "lightdash-ecs"
       }
     }
+    },
+    {
+      name      = "browserless"
+      image     = var.browserless_image
+      cpu       = var.browserless_container_cpu
+      memory    = var.browserless_container_memory
+      essential = true
+
+      portMappings = [{
+        containerPort = 3001
+        hostPort      = 3001
+        protocol      = "tcp"
+      }]
+
+      environment = [
+        {
+          "name" : "TIMEOUT",
+          "value" : "120000"
+        },
+        {
+          "name" : "CONCURRENT",
+          "value" : "5"
+        },
+        {
+          "name" : "PORT",
+          "value" : "3001"
+        },
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-region"        = data.aws_region.current.name
+          "awslogs-group"         = aws_cloudwatch_log_group.lightdash_ecs_log_group.name
+          "awslogs-stream-prefix" = "browserless"
+        }
+      }
     }
   ])
 }
