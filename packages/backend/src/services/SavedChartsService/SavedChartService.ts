@@ -43,6 +43,8 @@ import {
     SavedChartDAO,
     SchedulerAndTargets,
     SchedulerFormat,
+    SchedulerRun,
+    SchedulerRunStatus,
     SessionUser,
     TogglePinnedItemInfo,
     UnexpectedGoogleSheetsError,
@@ -549,6 +551,7 @@ export class SavedChartService
                 metrics: oldChartMetrics,
                 dimensions: oldChartDimensions,
                 customDimensions: oldCustomDimensions,
+                tableCalculations: oldTableCalculations,
             },
         } = await this.savedChartModel.get(savedChartUuid);
 
@@ -601,6 +604,36 @@ export class SavedChartService
         ) {
             throw new ForbiddenError(
                 'User cannot save queries with modified custom SQL dimensions',
+            );
+        }
+
+        const oldSqlTcsByName = new Map(
+            (oldTableCalculations ?? [])
+                .filter(isSqlTableCalculation)
+                .map((tc) => [tc.name, tc]),
+        );
+        const hasModifiedSqlTableCalculation = (
+            data.metricQuery.tableCalculations ?? []
+        )
+            .filter(isSqlTableCalculation)
+            .some((tc) => {
+                const saved = oldSqlTcsByName.get(tc.name);
+                return !saved || saved.sql !== tc.sql;
+            });
+
+        if (
+            hasModifiedSqlTableCalculation &&
+            auditedAbility.cannot(
+                'manage',
+                subject('CustomSqlTableCalculations', {
+                    organizationUuid,
+                    projectUuid,
+                    metadata: { savedChartUuid },
+                }),
+            )
+        ) {
+            throw new ForbiddenError(
+                'User cannot save queries with new or modified SQL table calculations',
             );
         }
 
@@ -1622,12 +1655,13 @@ export class SavedChartService
         filters?: {
             formats?: string[];
         },
+        includeLatestRun?: boolean,
     ): Promise<KnexPaginatedData<SchedulerAndTargets[]>> {
         const chart = await this.checkCreateScheduledDeliveryAccess(
             user,
             chartUuid,
         );
-        return this.schedulerModel.getSchedulers({
+        const schedulers = await this.schedulerModel.getSchedulers({
             projectUuid: chart.projectUuid,
             organizationUuid: chart.organizationUuid,
             paginateArgs,
@@ -1636,6 +1670,58 @@ export class SavedChartService
                 resourceType: 'chart',
                 resourceUuids: [chartUuid],
                 formats: filters?.formats,
+            },
+        });
+
+        if (!includeLatestRun) {
+            return schedulers;
+        }
+
+        return this.schedulerModel.attachLatestRunToSchedulers(schedulers);
+    }
+
+    async getSchedulerRuns(
+        user: SessionUser,
+        chartUuid: string,
+        schedulerUuid: string,
+        paginateArgs?: KnexPaginateArgs,
+        searchQuery?: string,
+        sort?: { column: string; direction: 'asc' | 'desc' },
+        filters?: {
+            statuses?: SchedulerRunStatus[];
+            destinations?: string[];
+        },
+    ): Promise<KnexPaginatedData<SchedulerRun[]>> {
+        const scheduler = await this.schedulerModel.getScheduler(schedulerUuid);
+        const chart = await this.savedChartModel.getSummary(chartUuid);
+        const auditedAbility = this.createAuditedAbility(user);
+        // Authorize before revealing whether the scheduler belongs to this
+        // chart, so unauthorized callers can't distinguish 404 (wrong chart)
+        // from 403 (right chart, no access).
+        if (
+            auditedAbility.cannot(
+                'manage',
+                subject('ScheduledDeliveries', {
+                    organizationUuid: chart.organizationUuid,
+                    projectUuid: chart.projectUuid,
+                    userUuid: scheduler.createdBy,
+                }),
+            )
+        ) {
+            throw new ForbiddenError();
+        }
+        if (scheduler.savedChartUuid !== chartUuid) {
+            throw new NotFoundError('Scheduler not found');
+        }
+        return this.schedulerModel.getProjectSchedulerRuns({
+            projectUuid: chart.projectUuid,
+            paginateArgs,
+            searchQuery,
+            sort,
+            filters: {
+                schedulerUuids: [schedulerUuid],
+                statuses: filters?.statuses,
+                destinations: filters?.destinations,
             },
         });
     }

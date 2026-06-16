@@ -133,6 +133,12 @@ export type BuildQueryProps = {
      * this explore for dimension field lookups instead of the zoomed explore.
      */
     originalExplore?: Explore;
+    /**
+     * FieldId of the date-zoom-rewritten dimension. When set, WHERE filter
+     * rules targeting this field are compiled against the zoom-rewritten SQL
+     * so the click-filter grain matches the zoom grain (PROD-880).
+     */
+    dateZoomFilterTargetFieldId?: string;
     /** Wrap DATE_TRUNC with timezone conversion. Gated behind EnableTimezoneSupport. */
     useTimezoneAwareDateTrunc?: boolean;
     /** Timezone the column data is in — source for the timezone-aware wrap.
@@ -198,9 +204,10 @@ export function getIntervalSyntax(
             // BigQuery always uses DATE_ADD/DATE_SUB
             intervalExpression = `DATE_${operation}(DATE(${columnWithInterval}), INTERVAL ${value} ${granularity})`;
             break;
-        case SupportedDbtAdapter.DATABRICKS: {
-            // Databricks uses interval arithmetic with quoted values
-            // Databricks doesn't support QUARTER interval, convert to months
+        case SupportedDbtAdapter.DATABRICKS:
+        case SupportedDbtAdapter.SPARK: {
+            // Databricks/Spark uses interval arithmetic with quoted values
+            // Doesn't support QUARTER interval, convert to months
             const [dbValue, dbGranularity] = normalizeIntervalGranularity(
                 value,
                 granularity,
@@ -313,11 +320,14 @@ export class MetricQueryBuilder {
         CompiledDimension
     > = {};
 
-    /** Query timezone when timezone-aware DATE_TRUNC is active, undefined otherwise. */
+    /** Query timezone when timezone-aware DATE_TRUNC is active, undefined otherwise.
+     *  The target-vs-source equality short-circuit lives in `getSqlForTruncatedDate`
+     *  (and its EXTRACT siblings) so any call site that passes a timezone gets the
+     *  same no-op treatment — see `needsTimezoneWrap` in `timeFrames.ts`. */
     private get timezoneForDateTrunc(): string | undefined {
-        if (!this.args.useTimezoneAwareDateTrunc) return undefined;
-        if (this.columnTimezone === this.args.timezone) return undefined;
-        return this.args.timezone;
+        return this.args.useTimezoneAwareDateTrunc
+            ? this.args.timezone
+            : undefined;
     }
 
     private get columnTimezone(): string {
@@ -831,7 +841,14 @@ export class MetricQueryBuilder {
                 adapterType,
                 startOfWeek,
             );
-            selects[id] = `  ${sql} AS ${quotedAlias}`;
+            const sqlWithUserAttributes = replaceUserAttributesAsStrings(
+                sql,
+                intrinsicUserAttributes,
+                userAttributes,
+                warehouseSqlBuilder,
+                { noWrap: true },
+            );
+            selects[id] = `  ${sqlWithUserAttributes} AS ${quotedAlias}`;
         });
 
         if (customBinDimensionSql?.selects) {
@@ -1134,8 +1151,15 @@ export class MetricQueryBuilder {
                     return;
                 }
                 // Add select
+                const sqlWithUserAttributes = replaceUserAttributesAsStrings(
+                    metric.compiledSql,
+                    this.args.intrinsicUserAttributes,
+                    this.args.userAttributes ?? {},
+                    warehouseSqlBuilder,
+                    { noWrap: true },
+                );
                 selects.add(
-                    `  ${metric.compiledSql} AS ${fieldQuoteChar}${alias}${fieldQuoteChar}`,
+                    `  ${sqlWithUserAttributes} AS ${fieldQuoteChar}${alias}${fieldQuoteChar}`,
                 );
                 // Add tables
                 (metric.tablesReferences || [metric.table]).forEach((table) =>
@@ -1404,8 +1428,17 @@ export class MetricQueryBuilder {
         }
 
         // Use the original (pre-date-zoom) explore for filter dimension lookups
-        // so that WHERE clauses compare against the raw column, not DATE_TRUNC'd expressions
-        const filterExplore = this.args.originalExplore ?? explore;
+        // so that WHERE clauses compare against the raw column, not DATE_TRUNC'd
+        // expressions. PROD-880: if caller opted in and this filter targets the
+        // zoom dimension, use the zoomed explore.
+        const isZoomedFilterField =
+            fieldType === FieldType.DIMENSION &&
+            this.args.dateZoomFilterTargetFieldId !== undefined &&
+            filterRuleWithParamReplacedValues.target.fieldId ===
+                this.args.dateZoomFilterTargetFieldId;
+        const filterExplore = isZoomedFilterField
+            ? explore
+            : (this.args.originalExplore ?? explore);
         const field =
             fieldType === FieldType.DIMENSION
                 ? [
@@ -1483,6 +1516,7 @@ export class MetricQueryBuilder {
                 this.args.explore.caseSensitive ?? true,
                 baseDimensionSql,
                 this.args.useTimezoneAwareDateTrunc,
+                this.columnTimezone,
             ),
         );
 
@@ -2654,11 +2688,18 @@ export class MetricQueryBuilder {
 
     /**
      * Builds CTE(s) for distinct metrics (sum_distinct, average_distinct) using ROW_NUMBER deduplication.
-     * Follows the same pattern as PoP CTEs: separate CTE per metric, joined on dimensions.
+     *
+     * Semantics (SPK-450):
+     *   1. Inner subquery picks one row per distinct_keys combination (PARTITION BY distinct_keys).
+     *   2. Outer CTE aggregates up to the grain of (distinct_keys ∩ selected dimensions).
+     *   3. JOIN to dd_base on the overlapping keys (INNER JOIN), or CROSS JOIN when there is no
+     *      overlap so a single scalar is repeated across every output row.
+     *
+     * Selected dimensions that are NOT part of distinct_keys never affect the dedup or the
+     * partitioning — they ride along on dd_base and receive the same value across all of their rows.
      */
     private buildDistinctMetricCtes({
         dimensionSelects,
-        dimensionGroupBy,
         dimensionFilters,
         sqlFrom,
         joinsSql,
@@ -2666,7 +2707,6 @@ export class MetricQueryBuilder {
         baseCteName,
     }: {
         dimensionSelects: Record<string, string>;
-        dimensionGroupBy: string | undefined;
         dimensionFilters: string | undefined;
         sqlFrom: string;
         joinsSql: string | undefined;
@@ -2690,30 +2730,29 @@ export class MetricQueryBuilder {
             },
         );
 
-        const dimensionAlias = Object.keys(dimensionSelects).map(
-            (alias) => `${fieldQuoteChar}${alias}${fieldQuoteChar}`,
-        );
-
-        // Recompute GROUP BY for the outer CTE using dimension count
-        const ddGroupBy =
-            dimensionAlias.length > 0
-                ? `GROUP BY ${dimensionAlias.map((_, i) => i + 1).join(',')}`
-                : undefined;
+        // Build a map: normalized dimension SQL expression -> dimension id.
+        // Used to detect which distinct_keys overlap with the selected dimensions.
+        const normalizeSql = (sql: string): string => {
+            let s = sql.trim();
+            while (s.startsWith('(') && s.endsWith(')')) {
+                s = s.slice(1, -1).trim();
+            }
+            return s;
+        };
+        const dimensionSqlToId = new Map<string, string>();
+        for (const [id, selectStr] of Object.entries(dimensionSelects)) {
+            const suffix = ` AS ${fieldQuoteChar}${id}${fieldQuoteChar}`;
+            const idx = selectStr.lastIndexOf(suffix);
+            const sqlExpr =
+                idx > -1
+                    ? selectStr.substring(0, idx).trim()
+                    : selectStr.trim();
+            dimensionSqlToId.set(normalizeSql(sqlExpr), id);
+        }
 
         const ctes: string[] = [];
         const ddJoins: string[] = [];
         const ddMetricSelects: string[] = [];
-
-        // Extract raw SQL expressions from dimension selects (strip " AS alias" suffix)
-        const dimensionExprs = Object.entries(dimensionSelects).map(
-            ([id, selectStr]) => {
-                const suffix = ` AS ${fieldQuoteChar}${id}${fieldQuoteChar}`;
-                const idx = selectStr.lastIndexOf(suffix);
-                return idx > -1
-                    ? selectStr.substring(0, idx).trim()
-                    : selectStr.trim();
-            },
-        );
 
         for (const metricId of ddMetricIds) {
             const metric = this.getMetricFromId(metricId);
@@ -2723,18 +2762,32 @@ export class MetricQueryBuilder {
             ) {
                 const ddCteName = `dd_${snakeCaseName(metricId)}`;
 
-                // Include selected dimensions in PARTITION BY so each
-                // (distinct_key, dimension) combination gets its own rn=1
-                const partitionExprs = [
-                    ...metric.compiledDistinctKeys,
-                    ...dimensionExprs,
-                ];
+                // For each distinct_key, find the matching selected dimension (if any).
+                // Joinable keys = distinct_keys that the user is also grouping by, and so
+                // need to flow through to the output as join columns.
+                const joinableKeys: Array<{
+                    keySql: string;
+                    dimId: string;
+                }> = [];
+                for (const keySql of metric.compiledDistinctKeys) {
+                    const matchedDimId = dimensionSqlToId.get(
+                        normalizeSql(keySql),
+                    );
+                    if (matchedDimId) {
+                        joinableKeys.push({ keySql, dimId: matchedDimId });
+                    }
+                }
 
-                // Inner subquery: raw data + ROW_NUMBER
+                // Inner subquery: project joinable keys (so the outer can group by them)
+                // plus the row-numbered metric value.
+                const innerKeySelects = joinableKeys.map(
+                    ({ keySql, dimId }) =>
+                        `  ${keySql} AS ${fieldQuoteChar}${dimId}${fieldQuoteChar}`,
+                );
                 const innerSelects = [
-                    ...Object.values(dimensionSelects),
+                    ...innerKeySelects,
                     `  ${metric.compiledValueSql} AS __dd_val`,
-                    `  ROW_NUMBER() OVER (PARTITION BY ${partitionExprs.join(', ')} ORDER BY ${metric.compiledValueSql}) AS __dd_rn`,
+                    `  ROW_NUMBER() OVER (PARTITION BY ${metric.compiledDistinctKeys.join(', ')} ORDER BY ${metric.compiledValueSql}) AS __dd_rn`,
                 ];
 
                 const innerSubquery = MetricQueryBuilder.assembleSqlParts([
@@ -2745,7 +2798,6 @@ export class MetricQueryBuilder {
                     dimensionFilters,
                 ]);
 
-                // Outer CTE: aggregate with CASE WHEN on ROW_NUMBER
                 let outerAgg: string;
                 if (metric.type === MetricType.AVERAGE_DISTINCT) {
                     const floatType = warehouseSqlBuilder.getFloatingType();
@@ -2753,20 +2805,33 @@ export class MetricQueryBuilder {
                 } else {
                     outerAgg = `SUM(CASE WHEN __dd_rn = 1 THEN __dd_val ELSE NULL END)`;
                 }
+
+                // Outer CTE: group by the joinable keys (or no group by for a scalar).
+                const outerKeyAliases = joinableKeys.map(
+                    ({ dimId }) => `${fieldQuoteChar}${dimId}${fieldQuoteChar}`,
+                );
                 const outerSelects = [
-                    ...dimensionAlias,
+                    ...outerKeyAliases.map((alias) => `  ${alias}`),
                     `  ${outerAgg} AS ${fieldQuoteChar}${metricId}${fieldQuoteChar}`,
                 ];
+                const outerGroupBy =
+                    joinableKeys.length > 0
+                        ? `GROUP BY ${joinableKeys.map((_, i) => i + 1).join(', ')}`
+                        : undefined;
 
-                const cteSql = `${ddCteName} AS (\nSELECT\n${outerSelects.join(',\n')}\nFROM (\n${innerSubquery}\n) __dd_sub\n${ddGroupBy ?? ''}\n)`;
+                const cteParts = [
+                    `SELECT\n${outerSelects.join(',\n')}`,
+                    `FROM (\n${innerSubquery}\n) __dd_sub`,
+                    outerGroupBy,
+                ];
+                const cteSql = `${ddCteName} AS (\n${MetricQueryBuilder.assembleSqlParts(cteParts)}\n)`;
                 ctes.push(cteSql);
 
-                // Build JOIN clause (same NULL-safe pattern as PoP)
-                if (dimensionAlias.length === 0) {
+                if (joinableKeys.length === 0) {
                     ddJoins.push(`CROSS JOIN ${ddCteName}`);
                 } else {
                     ddJoins.push(
-                        `INNER JOIN ${ddCteName} ON ${dimensionAlias
+                        `INNER JOIN ${ddCteName} ON ${outerKeyAliases
                             .map(
                                 (alias) =>
                                     `( ${baseCteName}.${alias} = ${ddCteName}.${alias} OR ( ${baseCteName}.${alias} IS NULL AND ${ddCteName}.${alias} IS NULL ) )`,
@@ -2775,7 +2840,6 @@ export class MetricQueryBuilder {
                     );
                 }
 
-                // Metric select for final query
                 ddMetricSelects.push(
                     `  ${ddCteName}.${fieldQuoteChar}${metricId}${fieldQuoteChar} AS ${fieldQuoteChar}${metricId}${fieldQuoteChar}`,
                 );
@@ -3176,33 +3240,29 @@ export class MetricQueryBuilder {
 
             if (hasRawDep) {
                 // Mixed metric: replace aggregate dep refs with CTE 1 column
-                // refs manually, then let compileMetricSql resolve raw refs
-                // and ${TABLE} refs against the base table (which is in scope
-                // in CTE 3).
-                let mixedSql = preSql;
-                for (const [depId, depMetric] of aggregateInnerDeps) {
-                    const escapedName = depMetric.name.replace(
-                        /[.*+?^${}()|[\]\\]/g,
-                        '\\$&',
-                    );
-                    const escapedTable = depMetric.table.replace(
-                        /[.*+?^${}()|[\]\\]/g,
-                        '\\$&',
-                    );
-                    const cteRef = `${naCteName}.${fieldQuoteChar}${depId}${fieldQuoteChar}`;
-                    mixedSql = mixedSql
-                        .replace(
-                            new RegExp(`\\$\\{${escapedName}\\}`, 'g'),
-                            cteRef,
-                        )
-                        .replace(
-                            new RegExp(
-                                `\\$\\{${escapedTable}\\.${escapedName}\\}`,
-                                'g',
-                            ),
-                            cteRef,
+                // refs, then let compileMetricSql resolve raw refs and
+                // ${TABLE} refs against the base table (which is in scope in
+                // CTE 3). Resolve each ${ref} via getParsedReference so the
+                // short form ${name} maps to the outer metric's own table —
+                // not to a same-named metric on a joined table (PROD-7503).
+                const mixedSql = preSql.replace(
+                    lightdashVariablePattern,
+                    (fullMatch, ref) => {
+                        if (ref === 'TABLE') return fullMatch;
+                        const { refTable, refName } = getParsedReference(
+                            ref,
+                            outerMetric.table,
                         );
-                }
+                        const refItemId = getItemId({
+                            table: refTable,
+                            name: refName,
+                        });
+                        if (aggregateInnerDeps.has(refItemId)) {
+                            return `${naCteName}.${fieldQuoteChar}${refItemId}${fieldQuoteChar}`;
+                        }
+                        return fullMatch;
+                    },
+                );
 
                 // Compile remaining refs (raw metric refs, ${TABLE}, dimensions)
                 // against the explore tables — they resolve to base table columns.
@@ -4127,7 +4187,6 @@ export class MetricQueryBuilder {
                 ddMetricSelects,
             } = this.buildDistinctMetricCtes({
                 dimensionSelects: dimensionsSQL.selects,
-                dimensionGroupBy: dimensionsSQL.groupBySQL,
                 dimensionFilters: dimensionsSQL.filtersSQL,
                 sqlFrom,
                 joinsSql: joins.joinSQL,

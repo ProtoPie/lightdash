@@ -1,11 +1,13 @@
 import { ChartKind, type AiAgentMessageAssistant } from '@lightdash/common';
-import { Anchor, Text } from '@mantine-8/core';
+import { Anchor, Button, Text } from '@mantine-8/core';
 import {
     IconArrowRight,
     IconChartBar,
     IconLayoutDashboard,
+    IconTerminal2,
 } from '@tabler/icons-react';
 import { type FC, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import MantineIcon from '../../../../../components/common/MantineIcon';
 import { getChartIcon } from '../../../../../components/common/ResourceIcon/utils';
 import { setArtifact } from '../../store/aiArtifactSlice';
@@ -15,6 +17,11 @@ import {
 } from '../../store/hooks';
 import styles from './ContentLink.module.css';
 
+export type SqlRunnerLinkState = {
+    sql: string;
+    limit?: number;
+};
+
 type ContentLinkProps = {
     contentType: string | undefined;
     props: Record<string, unknown>;
@@ -22,6 +29,7 @@ type ContentLinkProps = {
     message: AiAgentMessageAssistant;
     projectUuid: string;
     agentUuid: string;
+    sqlRunnerLinkState?: SqlRunnerLinkState | null;
 };
 
 export const ContentLink: FC<ContentLinkProps> = ({
@@ -31,6 +39,7 @@ export const ContentLink: FC<ContentLinkProps> = ({
     message,
     projectUuid,
     agentUuid,
+    sqlRunnerLinkState,
 }) => {
     const dispatch = useAiAgentStoreDispatch();
     const currentArtifact = useAiAgentStoreSelector(
@@ -42,11 +51,11 @@ export const ContentLink: FC<ContentLinkProps> = ({
             return (
                 <Anchor
                     {...props}
+                    data-content-link="true"
                     target="_blank"
-                    fz="sm"
+                    fz="xs"
                     fw={500}
-                    bg="ldGray.0"
-                    c="ldGray.7"
+                    c="ldGray.8"
                     td="none"
                     classNames={{
                         root: styles.contentLink,
@@ -54,23 +63,23 @@ export const ContentLink: FC<ContentLinkProps> = ({
                 >
                     <MantineIcon
                         icon={IconLayoutDashboard}
-                        size="md"
+                        size={13}
                         color="green.7"
                         fill="green.6"
                         fillOpacity={0.2}
-                        strokeWidth={1.9}
+                        stroke={1.5}
                     />
 
                     {/* margin is added by md package */}
-                    <Text fz="sm" fw={500} m={0}>
+                    <Text fz="xs" fw={500} m={0}>
                         {children}
                     </Text>
 
                     <MantineIcon
                         icon={IconArrowRight}
-                        color="ldGray.7"
-                        size="sm"
-                        strokeWidth={2.0}
+                        color="ldGray.6"
+                        size={11}
+                        stroke={1.5}
                     />
                 </Anchor>
             );
@@ -91,11 +100,11 @@ export const ContentLink: FC<ContentLinkProps> = ({
             return (
                 <Anchor
                     {...props}
+                    data-content-link="true"
                     target="_blank"
-                    fz="sm"
+                    fz="xs"
                     fw={500}
-                    bg="ldGray.0"
-                    c="ldGray.7"
+                    c="ldGray.8"
                     td="none"
                     classNames={{
                         root: styles.contentLink,
@@ -104,24 +113,24 @@ export const ContentLink: FC<ContentLinkProps> = ({
                     {chartTypeKind && (
                         <MantineIcon
                             icon={getChartIcon(chartTypeKind)}
-                            size="md"
+                            size={13}
                             color="blue.7"
                             fill="blue.4"
                             fillOpacity={0.2}
-                            strokeWidth={1.9}
+                            stroke={1.5}
                         />
                     )}
 
                     {/* margin is added by md package */}
-                    <Text fz="sm" fw={500} m={0}>
+                    <Text fz="xs" fw={500} m={0}>
                         {children}
                     </Text>
 
                     <MantineIcon
                         icon={IconArrowRight}
-                        color="ldGray.7"
-                        size="sm"
-                        strokeWidth={2.0}
+                        color="ldGray.6"
+                        size={11}
+                        stroke={1.5}
                     />
                 </Anchor>
             );
@@ -160,10 +169,9 @@ export const ContentLink: FC<ContentLinkProps> = ({
                 <Anchor
                     component="button"
                     type="button"
-                    fz="sm"
+                    fz="xs"
                     fw={500}
-                    bg="ldGray.0"
-                    c="ldGray.7"
+                    c="ldGray.8"
                     td="none"
                     classNames={{
                         root: styles.contentLink,
@@ -187,18 +195,49 @@ export const ContentLink: FC<ContentLinkProps> = ({
                 >
                     <MantineIcon
                         icon={artifactIcon}
-                        size="md"
+                        size={13}
                         color="indigo.6"
                         fill="indigo.1"
                         fillOpacity={0.2}
-                        strokeWidth={1.9}
+                        stroke={1.5}
                     />
 
                     {/* margin is added by md package */}
-                    <Text fz="sm" fw={500} m={0}>
+                    <Text fz="xs" fw={500} m={0}>
                         {children}
                     </Text>
                 </Anchor>
+            );
+        }
+
+        case 'sql-runner-link': {
+            const state =
+                sqlRunnerLinkState?.limit !== undefined
+                    ? {
+                          sql: sqlRunnerLinkState.sql,
+                          limit: sqlRunnerLinkState.limit,
+                      }
+                    : sqlRunnerLinkState
+                      ? { sql: sqlRunnerLinkState.sql }
+                      : undefined;
+
+            if (!state) return null;
+
+            return (
+                <Button
+                    component={Link}
+                    to={{
+                        pathname: `/projects/${projectUuid}/sql-runner`,
+                    }}
+                    state={state}
+                    data-content-link="true"
+                    size="compact-xs"
+                    variant="default"
+                    className={styles.sqlRunnerLinkButton}
+                    leftSection={<MantineIcon icon={IconTerminal2} size={13} />}
+                >
+                    {children}
+                </Button>
             );
         }
 

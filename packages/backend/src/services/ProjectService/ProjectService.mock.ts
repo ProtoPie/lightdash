@@ -51,6 +51,7 @@ export const user: SessionUser = {
     isTrackingAnonymized: false,
     isMarketingOptedIn: false,
     isSetupComplete: true,
+    timezone: null,
     userId: 0,
     role: OrganizationMemberRole.ADMIN,
     ability: new Ability<PossibleAbilities>([
@@ -336,9 +337,14 @@ export const projectWithSensitiveFields: Project = {
     },
     schedulerTimezone: 'UTC',
     queryTimezone: null,
+    useProjectTimezoneInFilters: false,
+    schedulerFailureNotifyRecipients: false,
+    schedulerFailureIncludeContact: false,
+    schedulerFailureContactOverride: null,
     createdByUserUuid: sessionAccount.user.id,
     hasDefaultUserSpaces: false,
     colorPaletteUuid: null,
+    expiresAt: null,
 };
 
 export const projectSummary: ProjectSummary = {
@@ -356,6 +362,7 @@ export const defaultProject: OrganizationProject = {
     createdAt: new Date('2024-01-01T00:00:00Z'),
     upstreamProjectUuid: null,
     warehouseType: WarehouseTypes.POSTGRES,
+    expiresAt: null,
 };
 
 export const spacesWithSavedCharts: Space[] = [

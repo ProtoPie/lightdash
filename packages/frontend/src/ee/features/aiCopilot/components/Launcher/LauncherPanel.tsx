@@ -1,8 +1,9 @@
 import { type AiAgentSummary } from '@lightdash/common';
 import { Center, Group, Loader, Stack, Text } from '@mantine-8/core';
-import { type CSSProperties, type FC } from 'react';
+import { useState, type CSSProperties, type FC } from 'react';
 import { LightdashUserAvatar } from '../../../../../components/Avatar';
 import useApp from '../../../../../providers/App/useApp';
+import { useAiAgentSqlModeAvailable } from '../../hooks/useAiAgentSqlModeAvailable';
 import { usePendingThreadRefetch } from '../../hooks/usePendingThreadRefetch';
 import { usePinnedContext } from '../../hooks/usePinnedContext';
 import {
@@ -11,6 +12,10 @@ import {
     useCreateAgentThreadMutation,
 } from '../../hooks/useProjectAiAgents';
 import { openPanel } from '../../store/aiAgentLauncherSlice';
+import {
+    selectThreadSqlMode,
+    setThreadSqlMode,
+} from '../../store/aiAgentThreadModeSlice';
 import {
     useAiAgentStoreDispatch,
     useAiAgentStoreSelector,
@@ -96,6 +101,9 @@ const NewThreadPanel: FC<{
 
     const { mutateAsync: createAgentThread, isLoading: isCreatingThread } =
         useCreateAgentThreadMutation(agent.uuid, projectUuid, {
+            // Launcher does its own routing via panels/dock — skip the default
+            // page navigation that other surfaces want.
+            skipNavigation: true,
             onCreated: (thread) => {
                 addDockItem({
                     threadId: thread.uuid,
@@ -108,15 +116,37 @@ const NewThreadPanel: FC<{
                         agentUuid: agent.uuid,
                     }),
                 );
+                // Seed the per-thread mode slice with the user's choice so
+                // subsequent prompts in this thread default to the same.
+                dispatchToStore(
+                    setThreadSqlMode({
+                        threadUuid: thread.uuid,
+                        enabled: sqlModeAvailable && sqlMode,
+                    }),
+                );
             },
         });
 
-    const handleSubmit = (prompt: string) => {
+    const sqlModeAvailable = useAiAgentSqlModeAvailable(projectUuid);
+    // New threads have no uuid yet — keep the toggle in local state and seed
+    // the per-thread slice entry once the thread is created.
+    const [sqlMode, setSqlMode] = useState(false);
+    const dispatchToStore = useAiAgentStoreDispatch();
+
+    const handleSubmit = ({
+        message,
+        toolHints,
+    }: {
+        message: string;
+        toolHints: string[];
+    }) => {
         void createAgentThread({
-            prompt,
+            prompt: message,
             context: contextInput.length > 0 ? contextInput : undefined,
             optimisticContext:
                 previewItems.length > 0 ? previewItems : undefined,
+            enableSqlMode: sqlModeAvailable && sqlMode,
+            toolHints,
         });
     };
 
@@ -177,6 +207,9 @@ const NewThreadPanel: FC<{
                     placeholder={`Ask ${agent.name} anything...`}
                     projectUuid={projectUuid}
                     agentUuid={agent.uuid}
+                    fullWidth
+                    sqlMode={sqlModeAvailable ? sqlMode : undefined}
+                    onSqlModeChange={sqlModeAvailable ? setSqlMode : undefined}
                 />
             </div>
         </div>
@@ -208,14 +241,29 @@ const ExistingThreadPanel: FC<{
         isLoading: isCreatingMessage,
     } = useCreateAgentThreadMessageMutation(projectUuid, agent.uuid, threadId);
 
+    const sqlModeAvailable = useAiAgentSqlModeAvailable(projectUuid);
+    const sqlMode = useAiAgentStoreSelector(selectThreadSqlMode(threadId));
+    const dispatchToStore = useAiAgentStoreDispatch();
+
     const isThreadFromCurrentUser = thread?.user.uuid === user?.data?.userUuid;
 
-    const handleSubmit = (prompt: string) => {
+    const handleSubmit = ({
+        message,
+        toolHints,
+    }: {
+        message: string;
+        toolHints: string[];
+    }) => {
         const firstAssistantMessage = thread?.messages?.find(
             (m) => m.role === 'assistant',
         );
         const modelConfig = firstAssistantMessage?.modelConfig ?? undefined;
-        void createAgentThreadMessage({ prompt, modelConfig });
+        void createAgentThreadMessage({
+            prompt: message,
+            modelConfig,
+            enableSqlMode: sqlModeAvailable && sqlMode,
+            toolHints,
+        });
     };
 
     const headerTitle =
@@ -268,6 +316,25 @@ const ExistingThreadPanel: FC<{
                         messageCount={thread.messages?.length || 0}
                         projectUuid={projectUuid}
                         agentUuid={agent.uuid}
+                        fullWidth
+                        threadUuid={threadId}
+                        latestAssistantMessageUuid={
+                            [...(thread.messages ?? [])]
+                                .reverse()
+                                .find((m) => m.role === 'assistant')?.uuid
+                        }
+                        sqlMode={sqlModeAvailable ? sqlMode : undefined}
+                        onSqlModeChange={
+                            sqlModeAvailable
+                                ? (enabled) =>
+                                      dispatchToStore(
+                                          setThreadSqlMode({
+                                              threadUuid: threadId,
+                                              enabled,
+                                          }),
+                                      )
+                                : undefined
+                        }
                     />
                 </AgentChatDisplay>
             </div>

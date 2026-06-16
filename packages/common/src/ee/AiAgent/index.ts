@@ -21,6 +21,7 @@ import {
     type AiPromptContextInput,
 } from './requestTypes';
 import { type AgentToolOutput } from './schemas';
+import { ToolNameSchema } from './schemas/visualizations';
 import { type AiMetricQuery, type AiResultType } from './types';
 
 export * from './adminTypes';
@@ -28,14 +29,78 @@ export * from './aiEvalAssessment';
 export * from './chartConfig/slack';
 export * from './chartConfig/web';
 export * from './constants';
+export * from './documentTypes';
 export * from './filterExploreByTags';
 export * from './followUpTools';
 export * from './requestTypes';
 export * from './schemas';
 export * from './schemas/agentReadiness';
+export * from './schemas/agentSuggestions';
 export * from './types';
 export * from './utils';
 export * from './validators';
+
+export type AiMcpServerAuthType = 'none' | 'bearer' | 'oauth';
+export type AiMcpCredentialScope = 'shared' | 'user';
+export type AiMcpServerConnectionStatus =
+    | 'not_connected'
+    | 'connecting'
+    | 'connected'
+    | 'error';
+
+export type AiMcpServer = {
+    uuid: string;
+    projectUuid: string;
+    name: string;
+    url: string;
+    iconUrl: string | null;
+    authType: AiMcpServerAuthType;
+    hasCredentials: boolean;
+    credentialScope: AiMcpCredentialScope | null;
+    connectionStatus: AiMcpServerConnectionStatus | null;
+    error: string | null;
+    connectedByUserUuid: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+};
+
+export type AiMcpServerTool = {
+    uuid: string;
+    mcpServerUuid: string;
+    toolName: string;
+    title: string | null;
+    description: string | null;
+    inputSchema: unknown;
+    annotations: unknown | null;
+    meta: unknown | null;
+    createdAt: Date;
+    updatedAt: Date;
+};
+
+export type AiMcpServerToolInput = Pick<
+    AiMcpServerTool,
+    | 'toolName'
+    | 'title'
+    | 'description'
+    | 'inputSchema'
+    | 'annotations'
+    | 'meta'
+>;
+
+export type AiAgentMcpServerTool = AiMcpServerTool & {
+    agentUuid: string;
+    enabled: boolean;
+};
+
+export type AiAgentMcpServerToolUpdate = Pick<
+    AiAgentMcpServerTool,
+    'toolName' | 'enabled'
+>;
+
+export type AiAgentIntegration = {
+    type: 'slack';
+    channelId: string;
+};
 
 export const baseAgentSchema = z.object({
     uuid: z.string(),
@@ -49,13 +114,10 @@ export const baseAgentSchema = z.object({
     tags: z.array(z.string()).nullable(),
 
     integrations: z.array(
-        // z.union([
-        // TODO: once we add more integrations, we should use union
         z.object({
             type: z.literal('slack'),
             channelId: z.string(),
         }),
-        // ]),
     ),
 
     createdAt: z.coerce.date(),
@@ -125,6 +187,14 @@ export type AiAgentSummary = Pick<
 export type AiAgentUser = {
     uuid: string;
     name: string;
+};
+
+export type AiThreadCompaction = {
+    uuid: string;
+    threadUuid: string;
+    compactedThroughPromptUuid: string;
+    triggeringPromptUuid: string;
+    createdAt: string;
 };
 
 export type AiAgentMessageUser<TUser extends AiAgentUser = AiAgentUser> = {
@@ -200,6 +270,7 @@ export type AiAgentThreadSummary<TUser extends AiAgentUser = AiAgentUser> = {
 export type AiAgentThread<TUser extends AiAgentUser = AiAgentUser> =
     AiAgentThreadSummary<TUser> & {
         messages: AiAgentMessage<TUser>[];
+        compactions: AiThreadCompaction[];
     };
 
 export type ApiAiAgentResponse = {
@@ -227,7 +298,9 @@ export type ApiCreateAiAgent = Pick<
     | 'enableDataAccess'
     | 'enableSelfImprovement'
     | 'version'
->;
+> & {
+    mcpServerUuids?: string[];
+};
 
 export type ApiUpdateAiAgent = Partial<
     Pick<
@@ -248,12 +321,36 @@ export type ApiUpdateAiAgent = Partial<
     >
 > & {
     uuid: string;
+    mcpServerUuids?: string[];
 };
 
 export type ApiCreateAiAgentResponse = {
     status: 'ok';
     results: AiAgent;
 };
+
+export type ApiCreateAiMcpServer = {
+    name: string;
+    url: string;
+    authType: AiMcpServerAuthType;
+    credentialScope?: AiMcpCredentialScope;
+    credentials?: {
+        bearerToken: string;
+    } | null;
+};
+
+export type ApiAiMcpServerListResponse = ApiSuccess<AiMcpServer[]>;
+export type ApiAiMcpServerResponse = ApiSuccess<AiMcpServer>;
+export type ApiAiMcpServerToolListResponse = ApiSuccess<AiMcpServerTool[]>;
+export type ApiAiAgentMcpServerToolListResponse = ApiSuccess<
+    AiAgentMcpServerTool[]
+>;
+export type ApiUpdateAiAgentMcpServerToolsRequest = {
+    toolSettings: AiAgentMcpServerToolUpdate[];
+};
+export type ApiStartAiMcpOAuthResponse = ApiSuccess<{
+    authorizationUrl: string;
+}>;
 
 export type ApiAiAgentThreadSummaryListResponse = {
     status: 'ok';
@@ -286,6 +383,32 @@ export type ApiAiAgentThreadMessageCreateRequest = {
         reasoning?: boolean;
     };
 };
+
+export type ApiAiAgentSqlApprovalRequest = {
+    decision: 'approved' | 'rejected';
+};
+
+export type ApiAiAgentThreadStreamRequest = {
+    /**
+     * Per-thread toggle that decides whether the agent gets access to the
+     * runSql / listWarehouseTables / describeWarehouseTable tools for this
+     * stream. Frontend tracks the toggle in its slice; passed in on every
+     * stream call. Falls back to `false` when omitted (e.g. older clients,
+     * API callers) so the safer "semantic layer only" mode is the default.
+     */
+    enableSqlMode?: boolean;
+    /**
+     * Tool names hinted by the user when they composed the message (via
+     * suggestion chips that carry a tool id). agentV2 appends a soft hint
+     * to the user message before sending it to the LLM. Transient — never
+     * persisted.
+     */
+    toolHints?: string[];
+};
+
+export type ApiAiAgentSqlApprovalResponse = ApiSuccess<{
+    decision: 'approved' | 'rejected';
+}>;
 
 export type ApiAiAgentThreadMessageCreateResponse = ApiSuccess<
     AiAgentMessageUser<AiAgentUser>
@@ -357,32 +480,76 @@ export type ApiUpdateUserAgentPreferences = AiAgentUserPreferences;
 
 export type ApiUpdateUserAgentPreferencesResponse = ApiSuccessEmpty;
 
-export type AiAgentToolCall = {
+// TSOA does not support template literal types in API response models.
+// Runtime validation still enforces the `mcp_` prefix via isAiAgentMcpToolName.
+export type AiAgentMcpToolName = string;
+export type AiAgentToolType = 'built-in' | 'mcp';
+export type AiAgentToolName = ToolName | AiAgentMcpToolName;
+
+export type AiAgentToolCallMcpServer = Pick<
+    AiMcpServer,
+    'uuid' | 'name' | 'iconUrl'
+>;
+
+export const isAiAgentMcpToolName = (
+    toolName: string,
+): toolName is AiAgentMcpToolName => toolName.startsWith('mcp_');
+
+export const isAiAgentToolName = (
+    toolName: string,
+): toolName is AiAgentToolName =>
+    ToolNameSchema.safeParse(toolName).success ||
+    isAiAgentMcpToolName(toolName);
+
+type AiAgentBaseToolCall = {
     uuid: string;
     promptUuid: string;
     toolCallId: string;
+    parentToolCallId: string | null;
     createdAt: Date;
-    // TODO: tsoa does not support zod infer schemas - https://github.com/lukeautry/tsoa/issues/1256
-    toolName: string; // ToolName zod enum
     toolArgs: object;
 };
 
-export type AiAgentToolResult = {
+export type AiAgentToolCall = AiAgentBaseToolCall &
+    (
+        | {
+              toolType: 'built-in';
+              // TODO: tsoa does not support zod infer schemas - https://github.com/lukeautry/tsoa/issues/1256
+              toolName: string;
+          }
+        | {
+              toolType: 'mcp';
+              toolName: AiAgentMcpToolName;
+              mcpServer: AiAgentToolCallMcpServer | null;
+          }
+    );
+
+type AiAgentBaseToolResult = {
     uuid: string;
     promptUuid: string;
     result: string;
     createdAt: Date;
     toolCallId: string;
-} & (
-    | {
-          toolName: 'proposeChange';
-          metadata: ToolProposeChangeOutput['metadata'];
-      }
-    | {
-          toolName: Exclude<ToolName, 'proposeChange'>;
-          metadata: AgentToolOutput['metadata'];
-      }
-);
+};
+
+export type AiAgentToolResult = AiAgentBaseToolResult &
+    (
+        | {
+              toolType: 'built-in';
+              toolName: 'proposeChange';
+              metadata: ToolProposeChangeOutput['metadata'];
+          }
+        | {
+              toolType: 'built-in';
+              toolName: Exclude<ToolName, 'proposeChange'>;
+              metadata: AgentToolOutput['metadata'];
+          }
+        | {
+              toolType: 'mcp';
+              toolName: AiAgentMcpToolName;
+              metadata: Record<string, unknown> | null;
+          }
+    );
 
 export type AiAgentReasoning = {
     uuid: string;

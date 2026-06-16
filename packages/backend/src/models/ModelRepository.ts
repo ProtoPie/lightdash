@@ -29,8 +29,10 @@ import { OAuth2Model } from './OAuth2Model';
 import { OnboardingModel } from './OnboardingModel/OnboardingModel';
 import { OpenIdIdentityModel } from './OpenIdIdentitiesModel';
 import { OrganizationAllowedEmailDomainsModel } from './OrganizationAllowedEmailDomainsModel';
+import { OrganizationDesignModel } from './OrganizationDesignModel';
 import { OrganizationMemberProfileModel } from './OrganizationMemberProfileModel';
 import { OrganizationModel } from './OrganizationModel';
+import { OrganizationSsoModel } from './OrganizationSsoModel';
 import { OrganizationWarehouseCredentialsModel } from './OrganizationWarehouseCredentialsModel';
 import { PasswordResetLinkModel } from './PasswordResetLinkModel';
 import { PersistentDownloadFileModel } from './PersistentDownloadFileModel';
@@ -88,8 +90,10 @@ export type ModelManifest = {
     onboardingModel: OnboardingModel;
     openIdIdentityModel: OpenIdIdentityModel;
     organizationAllowedEmailDomainsModel: OrganizationAllowedEmailDomainsModel;
+    organizationDesignModel: OrganizationDesignModel;
     organizationMemberProfileModel: OrganizationMemberProfileModel;
     organizationModel: OrganizationModel;
+    organizationSsoModel: OrganizationSsoModel;
     organizationWarehouseCredentialsModel: OrganizationWarehouseCredentialsModel;
     passwordResetLinkModel: PasswordResetLinkModel;
     personalAccessTokenModel: PersonalAccessTokenModel;
@@ -129,6 +133,7 @@ export type ModelManifest = {
     changesetModel: ChangesetModel;
     /** An implementation signature for these models are not available at this stage */
     aiAgentModel: unknown;
+    aiAgentDocumentModel: unknown;
     managedAgentModel: unknown;
     aiOrganizationSettingsModel: unknown;
     embedModel: unknown;
@@ -257,7 +262,6 @@ export class ModelRepository
             () =>
                 new DashboardModel({
                     database: this.database,
-                    lightdashConfig: this.lightdashConfig,
                     contentVerificationModel:
                         this.getContentVerificationModel(),
                 }),
@@ -418,11 +422,29 @@ export class ModelRepository
         );
     }
 
+    public getOrganizationDesignModel(): OrganizationDesignModel {
+        return this.getModel(
+            'organizationDesignModel',
+            () => new OrganizationDesignModel({ database: this.database }),
+        );
+    }
+
     public getOrganizationWarehouseCredentialsModel(): OrganizationWarehouseCredentialsModel {
         return this.getModel(
             'organizationWarehouseCredentialsModel',
             () =>
                 new OrganizationWarehouseCredentialsModel({
+                    database: this.database,
+                    encryptionUtil: this.utils.getEncryptionUtil(),
+                }),
+        );
+    }
+
+    public getOrganizationSsoModel(): OrganizationSsoModel {
+        return this.getModel(
+            'organizationSsoModel',
+            () =>
+                new OrganizationSsoModel({
                     database: this.database,
                     encryptionUtil: this.utils.getEncryptionUtil(),
                 }),
@@ -598,6 +620,7 @@ export class ModelRepository
                 new UserModel({
                     database: this.database,
                     lightdashConfig: this.lightdashConfig,
+                    featureFlagModel: this.getFeatureFlagModel(),
                 }),
         );
     }
@@ -648,7 +671,11 @@ export class ModelRepository
     public getSavedSqlModel(): SavedSqlModel {
         return this.getModel(
             'savedSqlModel',
-            () => new SavedSqlModel({ database: this.database }),
+            () =>
+                new SavedSqlModel({
+                    database: this.database,
+                    lightdashConfig: this.lightdashConfig,
+                }),
         );
     }
 
@@ -679,6 +706,10 @@ export class ModelRepository
 
     public getAiAgentModel<ModelImplT>(): ModelImplT {
         return this.getModel('aiAgentModel');
+    }
+
+    public getAiAgentDocumentModel<ModelImplT>(): ModelImplT {
+        return this.getModel('aiAgentDocumentModel');
     }
 
     public getAiOrganizationSettingsModel<ModelImplT>(): ModelImplT {

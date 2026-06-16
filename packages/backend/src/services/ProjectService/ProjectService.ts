@@ -63,6 +63,7 @@ import {
     findReplaceableCustomMetrics,
     ForbiddenError,
     formatRows,
+    getAccountUserTimezone,
     getAllDimensionsMap,
     getAvailableFilterFieldIds,
     getAvailableParametersFromTables,
@@ -102,6 +103,7 @@ import {
     JobType,
     LightdashError,
     LightdashProjectConfig,
+    LightdashUser,
     maybeOverrideDbtConnection,
     maybeOverrideWarehouseConnection,
     maybeReplaceFieldsInChartVersion,
@@ -156,6 +158,8 @@ import {
     UpdateMetadata,
     UpdateProject,
     UpdateProjectMember,
+    UpdateQueryTimezoneSettings,
+    UpdateSchedulerSettings,
     UpdateVirtualViewPayload,
     UserAccessControls,
     UserAttributeValueMap,
@@ -237,7 +241,6 @@ import { UserAttributesModel } from '../../models/UserAttributesModel';
 import { UserModel } from '../../models/UserModel';
 import { UserWarehouseCredentialsModel } from '../../models/UserWarehouseCredentials/UserWarehouseCredentialsModel';
 import { WarehouseAvailableTablesModel } from '../../models/WarehouseAvailableTablesModel/WarehouseAvailableTablesModel';
-import { isFeatureFlagEnabled } from '../../postHog';
 import { DbtBaseProjectAdapter } from '../../projectAdapters/dbtBaseProjectAdapter';
 import { projectAdapterFromConfig } from '../../projectAdapters/projectAdapter';
 import { compileMetricQuery } from '../../queryCompiler';
@@ -269,6 +272,14 @@ import {
 import { UserService } from '../UserService';
 import { getFieldValuesMetricQuery } from './fieldValuesQueryBuilder';
 import { getAvailableParameterDefinitions } from './parameters';
+
+type RefreshTokenRotationSource =
+    | { kind: 'project'; projectUuid: string }
+    | {
+          kind: 'organization';
+          organizationWarehouseCredentialsUuid: string;
+      }
+    | { kind: 'user'; userWarehouseCredentialsUuid: string };
 
 export type ProjectServiceArguments = {
     lightdashConfig: LightdashConfig;
@@ -729,6 +740,13 @@ export class ProjectService extends BaseService {
                 userUuid: userId || '',
             });
 
+        // Service accounts have no email and no row in the `emails` table —
+        // `getPrimaryEmailStatus` would 404. They also have no intrinsic
+        // email attributes to attach.
+        if (account?.isServiceAccount()) {
+            return { userAttributes, intrinsicUserAttributes: {} };
+        }
+
         const emailStatus = await this.emailModel.getPrimaryEmailStatus(userId);
         const intrinsicUserAttributes = emailStatus.isVerified
             ? getIntrinsicUserAttributes({ email })
@@ -768,7 +786,7 @@ export class ProjectService extends BaseService {
                 );
                 // If we try to generate access token from token instead of refreshToken
                 // it will throw an error: The request was invalid.
-                const accessToken =
+                const { accessToken, refreshToken: newRefreshToken } =
                     await UserService.generateSnowflakeAccessToken(
                         refreshToken,
                     );
@@ -776,6 +794,7 @@ export class ProjectService extends BaseService {
                     ...args,
                     authenticationType: SnowflakeAuthenticationType.SSO,
                     token: accessToken,
+                    refreshToken: newRefreshToken,
                 };
             } catch (e: unknown) {
                 if (e instanceof LightdashError) {
@@ -946,6 +965,108 @@ export class ProjectService extends BaseService {
         }
 
         return args;
+    }
+
+    private async refreshCredentialsAndPersistRotation<
+        T extends CreateWarehouseCredentials,
+    >(
+        args: T,
+        userUuid: string,
+        source: RefreshTokenRotationSource,
+    ): Promise<T> {
+        const oldRefreshToken = ProjectService.getCredentialsRefreshToken(args);
+
+        const refreshed = await this.refreshCredentials(args, userUuid);
+
+        const newRefreshToken =
+            ProjectService.getCredentialsRefreshToken(refreshed);
+
+        if (
+            oldRefreshToken &&
+            newRefreshToken &&
+            newRefreshToken !== oldRefreshToken
+        ) {
+            await this.persistRefreshTokenRotation({
+                source,
+                oldRefreshToken,
+                newRefreshToken,
+            });
+        }
+
+        return refreshed;
+    }
+
+    private static getCredentialsRefreshToken(
+        creds: CreateWarehouseCredentials,
+    ): string | undefined {
+        const candidate = (creds as Partial<{ refreshToken: string }>)
+            .refreshToken;
+        return typeof candidate === 'string' && candidate.length > 0
+            ? candidate
+            : undefined;
+    }
+
+    private static getRotationSourceUuid(
+        source: RefreshTokenRotationSource,
+    ): string {
+        switch (source.kind) {
+            case 'project':
+                return source.projectUuid;
+            case 'organization':
+                return source.organizationWarehouseCredentialsUuid;
+            case 'user':
+                return source.userWarehouseCredentialsUuid;
+            default:
+                return assertUnreachable(source, 'Unknown source kind');
+        }
+    }
+
+    private async persistRefreshTokenRotation({
+        source,
+        oldRefreshToken,
+        newRefreshToken,
+    }: {
+        source: RefreshTokenRotationSource;
+        oldRefreshToken: string;
+        newRefreshToken: string;
+    }): Promise<void> {
+        try {
+            switch (source.kind) {
+                case 'project':
+                    await this.projectModel.rotateRefreshToken(
+                        source.projectUuid,
+                        oldRefreshToken,
+                        newRefreshToken,
+                    );
+                    break;
+                case 'organization':
+                    await this.organizationWarehouseCredentialsModel.rotateRefreshToken(
+                        source.organizationWarehouseCredentialsUuid,
+                        oldRefreshToken,
+                        newRefreshToken,
+                    );
+                    break;
+                case 'user':
+                    await this.userWarehouseCredentialsModel.rotateRefreshToken(
+                        source.userWarehouseCredentialsUuid,
+                        oldRefreshToken,
+                        newRefreshToken,
+                    );
+                    break;
+                default:
+                    assertUnreachable(
+                        source,
+                        'Unknown OAuth refresh token rotation source',
+                    );
+            }
+        } catch (error) {
+            // Don't fail the in-flight query: the freshly minted access token is still usable.
+            this.logger.error('Failed to persist rotated OAuth refresh token', {
+                sourceKind: source.kind,
+                sourceUuid: ProjectService.getRotationSourceUuid(source),
+                error: getErrorMessage(error),
+            });
+        }
     }
 
     /*
@@ -1289,9 +1410,13 @@ export class ProjectService extends BaseService {
             this.logger.debug(
                 `Refreshing warehouse credentials from organization credentials`,
             );
-            credentials = await this.refreshCredentials(
+            credentials = await this.refreshCredentialsAndPersistRotation(
                 credentials, // This credentials are already loaded from organization
                 userId,
+                {
+                    kind: 'organization',
+                    organizationWarehouseCredentialsUuid,
+                },
             );
         }
 
@@ -1348,9 +1473,14 @@ export class ProjectService extends BaseService {
                 this.logger.debug(
                     `Using user warehouse credentials for user ${userId}`,
                 );
-                credentials = await this.refreshCredentials(
+                credentials = await this.refreshCredentialsAndPersistRotation(
                     credentials,
                     userId,
+                    {
+                        kind: 'user',
+                        userWarehouseCredentialsUuid:
+                            userWarehouseCredentials.uuid,
+                    },
                 );
                 userWarehouseCredentialsUuid = userWarehouseCredentials.uuid;
             } else if (credentials.requireUserCredentials) {
@@ -1365,9 +1495,10 @@ export class ProjectService extends BaseService {
                 this.logger.debug(
                     `Refreshing warehouse credentials for session user ${userId}`,
                 );
-                credentials = await this.refreshCredentials(
+                credentials = await this.refreshCredentialsAndPersistRotation(
                     credentials,
                     userId,
+                    { kind: 'project', projectUuid },
                 );
             }
         } else if (credentials.requireUserCredentials) {
@@ -1382,7 +1513,11 @@ export class ProjectService extends BaseService {
             this.logger.debug(
                 `Refreshing warehouse credentials for embed user ${userId}`,
             );
-            credentials = await this.refreshCredentials(credentials, userId);
+            credentials = await this.refreshCredentialsAndPersistRotation(
+                credentials,
+                userId,
+                { kind: 'project', projectUuid },
+            );
         }
 
         return {
@@ -1713,6 +1848,21 @@ export class ProjectService extends BaseService {
         const prevMetricsTreeNodes =
             await this.catalogModel.getAllMetricsTreeNodes(projectUuid);
 
+        // Best-effort: capture the explore names already in cache so we can
+        // emit an added/removed diff after the new explores are written
+        // (PROD-5931). Wrapped because this fetch must never interrupt the
+        // compile flow if the DB has a transient error.
+        let previousExploreNames: string[] | null = null;
+        try {
+            previousExploreNames =
+                await this.projectModel.getCachedExploreNames(projectUuid);
+        } catch (err) {
+            this.logger.warn('compile.completed previous-names fetch failed', {
+                projectUuid,
+                err: err instanceof Error ? err.message : String(err),
+            });
+        }
+
         const { cachedExploreUuids } =
             await this.projectModel.saveExploresToCache(projectUuid, explores);
         const { organizationUuid } =
@@ -1721,6 +1871,49 @@ export class ProjectService extends BaseService {
         this.logger.info(
             `Saved ${cachedExploreUuids.length} explores to cache for project ${projectUuid}`,
         );
+
+        // Wide observability event for explore lifecycle. Pair with the
+        // `dashboard.loaded` event to correlate "table removed at T1" with
+        // "dashboard loaded with stale reference at T2".
+        try {
+            const NAME_SAMPLE_CAP = 50;
+            const newNames = explores.map((explore) => explore.name);
+            const previousNameSet = new Set(previousExploreNames ?? []);
+            const newNameSet = new Set(newNames);
+            const removed = (previousExploreNames ?? []).filter(
+                (name) => !newNameSet.has(name),
+            );
+            const added = newNames.filter((name) => !previousNameSet.has(name));
+
+            this.logger.info('compile.completed', {
+                projectUuid,
+                organizationUuid,
+                jobUuid: jobUuid ?? null,
+                compilationSource,
+                requestMethod: requestMethod ?? null,
+                cliVersion: cliVersion ?? null,
+                // null distinguishes "fetch failed" from "no previous explores"
+                previousExploreCount: previousExploreNames?.length ?? null,
+                newExploreCount: newNames.length,
+                addedExploreCount:
+                    previousExploreNames === null ? null : added.length,
+                removedExploreCount:
+                    previousExploreNames === null ? null : removed.length,
+                addedExploreNames:
+                    previousExploreNames === null
+                        ? null
+                        : added.slice(0, NAME_SAMPLE_CAP),
+                removedExploreNames:
+                    previousExploreNames === null
+                        ? null
+                        : removed.slice(0, NAME_SAMPLE_CAP),
+            });
+        } catch (err) {
+            this.logger.warn('compile.completed log failed', {
+                projectUuid,
+                err: err instanceof Error ? err.message : String(err),
+            });
+        }
 
         const compilationReport = calculateCompilationReport({ explores });
         const project = await this.projectModel.get(projectUuid);
@@ -1897,6 +2090,10 @@ export class ProjectService extends BaseService {
                 user.userUuid,
                 user.organizationUuid,
                 createProject,
+                ProjectService.getPreviewExpiresAt(
+                    createProject.type,
+                    createProject.expiresInHours,
+                ),
             );
 
         // Do not give this user admin permissions on this new project,
@@ -2099,6 +2296,20 @@ export class ProjectService extends BaseService {
         return { jobUuid: job.jobUuid };
     }
 
+    static PREVIEW_PROJECT_TTL_DAYS = 30;
+
+    static getPreviewExpiresAt(
+        type: ProjectType,
+        expiresInHours?: number,
+    ): Date | null {
+        if (type !== ProjectType.PREVIEW) return null;
+        const now = new Date();
+        const ttlMs = expiresInHours
+            ? Number(expiresInHours) * 60 * 60 * 1000
+            : ProjectService.PREVIEW_PROJECT_TTL_DAYS * 24 * 60 * 60 * 1000;
+        return new Date(now.getTime() + ttlMs);
+    }
+
     static getAnalyticProperties(
         createProject: Pick<
             CreateProjectOptionalCredentials,
@@ -2190,6 +2401,10 @@ export class ProjectService extends BaseService {
                         user.userUuid,
                         user.organizationUuid,
                         createProject,
+                        ProjectService.getPreviewExpiresAt(
+                            createProject.type,
+                            createProject.expiresInHours,
+                        ),
                     );
                     // Give admin user permissions to user who created this project even if he is an admin
                     if (user.email) {
@@ -2445,6 +2660,7 @@ export class ProjectService extends BaseService {
         await this.projectModel.update(projectUuid, updatedProject);
 
         if (
+            savedProject.type !== ProjectType.PREVIEW &&
             hasConnectionChanges(
                 {
                     warehouseConnection: savedProject.warehouseConnection,
@@ -2565,6 +2781,7 @@ export class ProjectService extends BaseService {
         await this.projectModel.update(projectUuid, updatedProject);
 
         if (
+            savedProject.type !== ProjectType.PREVIEW &&
             hasConnectionChanges(
                 { warehouseConnection: savedProject.warehouseConnection },
                 { warehouseConnection: updatedProject.warehouseConnection },
@@ -2848,6 +3065,32 @@ export class ProjectService extends BaseService {
         });
     }
 
+    async deleteExpiredPreviewProjects(): Promise<number> {
+        const expiredProjects =
+            await this.projectModel.getExpiredPreviewProjects();
+
+        const results = await Promise.allSettled(
+            expiredProjects.map(({ projectUuid }) =>
+                this.projectModel.delete(projectUuid).then(() => {
+                    this.logger.info(
+                        `Deleted expired preview project: ${projectUuid}`,
+                    );
+                }),
+            ),
+        );
+
+        results.forEach((r, i) => {
+            if (r.status === 'rejected') {
+                this.logger.error(
+                    `Failed to delete expired preview project ${expiredProjects[i].projectUuid}`,
+                    { error: r.reason },
+                );
+            }
+        });
+
+        return results.filter((r) => r.status === 'fulfilled').length;
+    }
+
     private async buildAdapter(
         projectUuid: string,
         user: Pick<SessionUser, 'userUuid' | 'organizationUuid'>,
@@ -2873,10 +3116,18 @@ export class ProjectService extends BaseService {
             this.logger.debug(
                 `Refreshing snowflake warehouse credentials from refresh token on buildAdapter`,
             );
-            const accessToken = await UserService.generateSnowflakeAccessToken(
-                project.warehouseConnection.refreshToken,
-            );
+            const oldRefreshToken = project.warehouseConnection.refreshToken;
+            const { accessToken, refreshToken: newRefreshToken } =
+                await UserService.generateSnowflakeAccessToken(oldRefreshToken);
             project.warehouseConnection.token = accessToken;
+            project.warehouseConnection.refreshToken = newRefreshToken;
+            if (newRefreshToken !== oldRefreshToken) {
+                await this.persistRefreshTokenRotation({
+                    source: { kind: 'project', projectUuid },
+                    oldRefreshToken,
+                    newRefreshToken,
+                });
+            }
         }
 
         if (
@@ -3027,7 +3278,11 @@ export class ProjectService extends BaseService {
         warehouseSqlBuilder: WarehouseSqlBuilder,
         availableParameters: string[],
         dateZoom?: DateZoom,
-    ): { explore: Explore; dateZoomApplied: boolean } {
+    ): {
+        explore: Explore;
+        dateZoomApplied: boolean;
+        dateZoomTargetFieldId?: string;
+    } {
         if (dateZoom?.granularity) {
             const allDimensionsMap = getAllDimensionsMap(explore);
             const timeDimensionsMap = getTimeDimensionsMap(explore);
@@ -3087,6 +3342,7 @@ export class ProjectService extends BaseService {
                                 dimWithCustomOverride,
                             ),
                             dateZoomApplied: true,
+                            dateZoomTargetFieldId: timeOrDateDimension,
                         };
                     }
                     // Custom granularity not found — return unchanged explore
@@ -3107,6 +3363,7 @@ export class ProjectService extends BaseService {
                             dimWithGranularityOverride,
                         ),
                         dateZoomApplied: true,
+                        dateZoomTargetFieldId: timeOrDateDimension,
                     };
                 }
             }
@@ -3129,6 +3386,7 @@ export class ProjectService extends BaseService {
         continueOnError,
         useTimezoneAwareDateTrunc,
         columnTimezone,
+        applyDateZoomToFilters,
     }: {
         metricQuery: MetricQuery;
         explore: Explore;
@@ -3144,17 +3402,26 @@ export class ProjectService extends BaseService {
         continueOnError?: boolean;
         useTimezoneAwareDateTrunc?: boolean;
         columnTimezone?: string;
+        /**
+         * When true, WHERE filter rules targeting the date-zoom dimension are
+         * compiled against the zoom-rewritten SQL (e.g. DATE_TRUNC('MONTH', ...)).
+         * Only safe on the underlying-data path where filters are solely click-filters.
+         */
+        applyDateZoomToFilters?: boolean;
     }): Promise<CompiledQuery> {
         const availableParameters = Object.keys(availableParameterDefinitions);
 
-        const { explore: exploreWithOverride } =
-            ProjectService.updateExploreWithDateZoom(
-                explore,
-                metricQuery,
-                warehouseSqlBuilder,
-                availableParameters,
-                dateZoom,
-            );
+        const {
+            explore: exploreWithOverride,
+            dateZoomApplied,
+            dateZoomTargetFieldId,
+        } = ProjectService.updateExploreWithDateZoom(
+            explore,
+            metricQuery,
+            warehouseSqlBuilder,
+            availableParameters,
+            dateZoom,
+        );
 
         const compiledMetricQuery = compileMetricQuery({
             explore: exploreWithOverride,
@@ -3176,6 +3443,10 @@ export class ProjectService extends BaseService {
             pivotDimensions,
             continueOnError,
             originalExplore: dateZoom ? explore : undefined,
+            dateZoomFilterTargetFieldId:
+                applyDateZoomToFilters && dateZoomApplied
+                    ? dateZoomTargetFieldId
+                    : undefined,
             useTimezoneAwareDateTrunc,
             columnTimezone,
         });
@@ -3297,7 +3568,11 @@ export class ProjectService extends BaseService {
 
         const projectTimezone =
             await this.getQueryTimezoneForProject(projectUuid);
-        const timezone = resolveQueryTimezone(metricQuery, projectTimezone);
+        const timezone = resolveQueryTimezone(
+            metricQuery,
+            projectTimezone,
+            getAccountUserTimezone(account),
+        );
         const useTimezoneAwareDateTrunc = await this.isTimezoneSupportEnabled({
             userUuid: account.user.id,
             organizationUuid: account.organization.organizationUuid,
@@ -3966,6 +4241,7 @@ export class ProjectService extends BaseService {
                 const resolvedTimezone = resolveQueryTimezone(
                     metricQuery,
                     projectTimezone,
+                    getAccountUserTimezone(account),
                 );
                 const isTimezoneEnabled = await this.isTimezoneSupportEnabled({
                     userUuid: account.user.id,
@@ -4042,6 +4318,7 @@ export class ProjectService extends BaseService {
     async getResultsFromCacheOrWarehouse({
         projectUuid,
         userUuid,
+        user,
         context,
         warehouseClient,
         query,
@@ -4051,6 +4328,10 @@ export class ProjectService extends BaseService {
     }: {
         projectUuid: string;
         userUuid: string | null;
+        user: Pick<
+            LightdashUser,
+            'userUuid' | 'organizationUuid' | 'organizationName'
+        >;
         context: QueryExecutionContext;
         warehouseClient: WarehouseClient;
         query: AnyType;
@@ -4072,10 +4353,13 @@ export class ProjectService extends BaseService {
                 span.setAttribute('queryHash', queryHash);
                 span.setAttribute('cacheHit', false);
 
-                if (
-                    this.lightdashConfig.results.cacheEnabled &&
-                    !invalidateCache
-                ) {
+                const { enabled: resultsCacheEnabled } =
+                    await this.featureFlagModel.get({
+                        user,
+                        featureFlagId: FeatureFlags.ResultsCacheEnabled,
+                    });
+
+                if (resultsCacheEnabled && !invalidateCache) {
                     const cacheEntryMetadata = await this.s3CacheClient
                         .getResultsMetadata(queryHash)
                         .catch((e) => undefined); // ignore since error is tracked in fileStorageClient
@@ -4160,7 +4444,7 @@ export class ProjectService extends BaseService {
                     },
                 );
 
-                if (this.lightdashConfig.results.cacheEnabled) {
+                if (resultsCacheEnabled) {
                     this.logger.debug(
                         `Writing data to cache with key ${queryHash}`,
                     );
@@ -4290,6 +4574,7 @@ export class ProjectService extends BaseService {
                     const timezone = resolveQueryTimezone(
                         metricQueryWithLimit,
                         projectTimezone,
+                        getAccountUserTimezone(account),
                     );
                     const useTimezoneAwareDateTrunc =
                         await this.isTimezoneSupportEnabled({
@@ -4390,6 +4675,12 @@ export class ProjectService extends BaseService {
                         await this.getResultsFromCacheOrWarehouse({
                             projectUuid,
                             userUuid,
+                            user: {
+                                userUuid: account.user.id,
+                                organizationUuid:
+                                    account.organization.organizationUuid,
+                                organizationName: account.organization.name,
+                            },
                             context,
                             warehouseClient,
                             metricQuery: metricQueryWithLimit,
@@ -4806,6 +5097,7 @@ export class ProjectService extends BaseService {
         forceRefresh: boolean = false,
         parameters?: ParametersValuesMap,
         userAttributeOverrides?: UserAttributeValueMap, // EXPERIMENTAL: used to override user attributes for MCP
+        context: QueryExecutionContext = QueryExecutionContext.FILTER_AUTOCOMPLETE,
     ) {
         const { organizationUuid } =
             await this.projectModel.getSummary(projectUuid);
@@ -4867,7 +5159,11 @@ export class ProjectService extends BaseService {
 
         const projectTimezone =
             await this.getQueryTimezoneForProject(projectUuid);
-        const timezone = resolveQueryTimezone(metricQuery, projectTimezone);
+        const timezone = resolveQueryTimezone(
+            metricQuery,
+            projectTimezone,
+            user.timezone,
+        );
         const useTimezoneAwareDateTrunc =
             await this.isTimezoneSupportEnabled(user);
 
@@ -4918,7 +5214,7 @@ export class ProjectService extends BaseService {
             user_uuid: user.userUuid,
             project_uuid: projectUuid,
             explore_name: explore.name,
-            query_context: QueryExecutionContext.FILTER_AUTOCOMPLETE,
+            query_context: context,
         };
 
         const { rows } = await warehouseClient.runQuery(query, queryTags);
@@ -7530,10 +7826,36 @@ export class ProjectService extends BaseService {
         });
     }
 
-    async updateDefaultSchedulerTimezone(
+    /**
+     * Reads project-level scheduler settings for the background scheduler
+     * worker. Intentionally unauthenticated: the worker runs in a system
+     * context (no `SessionUser`) and only consumes project config flags +
+     * an admin-authored contact sentence — no sensitive data is exposed.
+     * Mutation paths (`updateSchedulerSettings`) keep the standard CASL
+     * `update Project` check.
+     */
+    async getSchedulerSettingsForWorker(projectUuid: string): Promise<{
+        schedulerTimezone: string;
+        schedulerFailureNotifyRecipients: boolean;
+        schedulerFailureIncludeContact: boolean;
+        schedulerFailureContactOverride: string | null;
+    }> {
+        const project = await this.projectModel.get(projectUuid);
+        return {
+            schedulerTimezone: project.schedulerTimezone,
+            schedulerFailureNotifyRecipients:
+                project.schedulerFailureNotifyRecipients,
+            schedulerFailureIncludeContact:
+                project.schedulerFailureIncludeContact,
+            schedulerFailureContactOverride:
+                project.schedulerFailureContactOverride,
+        };
+    }
+
+    async updateSchedulerSettings(
         user: SessionUser,
         projectUuid: string,
-        schedulerTimezone: string,
+        settings: UpdateSchedulerSettings,
     ) {
         const project = await this.projectModel.getSummary(projectUuid);
 
@@ -7542,21 +7864,22 @@ export class ProjectService extends BaseService {
             throw new ForbiddenError();
         }
 
-        const updatedProject =
-            await this.projectModel.updateDefaultSchedulerTimezone(
-                projectUuid,
-                schedulerTimezone,
-            );
+        const updatedProject = await this.projectModel.updateSchedulerSettings(
+            projectUuid,
+            settings,
+        );
 
-        this.analytics.track({
-            event: 'default_scheduler_timezone.updated',
-            userId: user.userUuid,
-            properties: {
-                projectId: projectUuid,
-                organizationUuid: project.organizationUuid,
-                timeZone: getTimezoneLabel(schedulerTimezone),
-            },
-        });
+        if (settings.schedulerTimezone !== undefined) {
+            this.analytics.track({
+                event: 'default_scheduler_timezone.updated',
+                userId: user.userUuid,
+                properties: {
+                    projectId: projectUuid,
+                    organizationUuid: project.organizationUuid,
+                    timeZone: getTimezoneLabel(settings.schedulerTimezone),
+                },
+            });
+        }
 
         return updatedProject;
     }
@@ -7564,7 +7887,7 @@ export class ProjectService extends BaseService {
     async updateQueryTimezone(
         user: SessionUser,
         projectUuid: string,
-        queryTimezone: string | null,
+        settings: UpdateQueryTimezoneSettings,
     ) {
         const project = await this.projectModel.getSummary(projectUuid);
 
@@ -7573,11 +7896,29 @@ export class ProjectService extends BaseService {
             throw new ForbiddenError();
         }
 
-        if (queryTimezone !== null && !isValidTimezone(queryTimezone)) {
+        const { queryTimezone, useProjectTimezoneInFilters } = settings;
+
+        if (
+            queryTimezone === undefined &&
+            useProjectTimezoneInFilters === undefined
+        ) {
+            throw new ParameterError(
+                'Must provide queryTimezone or useProjectTimezoneInFilters',
+            );
+        }
+
+        if (
+            queryTimezone !== null &&
+            queryTimezone !== undefined &&
+            !isValidTimezone(queryTimezone)
+        ) {
             throw new ParameterError(`Invalid timezone: "${queryTimezone}"`);
         }
 
-        await this.projectModel.updateQueryTimezone(projectUuid, queryTimezone);
+        const updatedProject = await this.projectModel.updateQueryTimezone(
+            projectUuid,
+            settings,
+        );
 
         this.analytics.track({
             event: 'query_timezone.updated',
@@ -7585,10 +7926,11 @@ export class ProjectService extends BaseService {
             properties: {
                 projectId: projectUuid,
                 organizationUuid: project.organizationUuid,
-                queryTimezone:
-                    queryTimezone !== null
-                        ? getTimezoneLabel(queryTimezone)
-                        : null,
+                queryTimezone: updatedProject.query_timezone
+                    ? getTimezoneLabel(updatedProject.query_timezone)
+                    : null,
+                useProjectTimezoneInFilters:
+                    updatedProject.use_project_timezone_in_filters,
             },
         });
     }
@@ -7752,6 +8094,38 @@ export class ProjectService extends BaseService {
             throw new ForbiddenError();
         }
         return this.projectModel.getTableGroups(projectUuid);
+    }
+
+    async replaceProjectTableGroups({
+        user,
+        projectUuid,
+        tableGroups,
+    }: {
+        user: SessionUser;
+        projectUuid: string;
+        tableGroups: Record<string, GroupType>;
+    }) {
+        const { organizationUuid, type, createdByUserUuid } =
+            await this.projectModel.getWithSensitiveFields(projectUuid);
+
+        const auditedAbility = this.createAuditedAbility(user);
+        if (
+            auditedAbility.cannot(
+                'update',
+                subject('Project', {
+                    projectUuid,
+                    organizationUuid,
+                    type,
+                    createdByUserUuid,
+                }),
+            )
+        ) {
+            throw new ForbiddenError(
+                `User does not have permission to update project table groups`,
+            );
+        }
+
+        await this.projectModel.setTableGroups(projectUuid, tableGroups);
     }
 
     async replaceProjectParameters({

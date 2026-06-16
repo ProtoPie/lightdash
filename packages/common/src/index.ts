@@ -49,6 +49,7 @@ export {
     JWT_HEADER_NAME,
 } from './authorization/index';
 export * from './authorization/jwtAbility';
+export { projectMemberAbilities } from './authorization/projectMemberAbility';
 export * from './authorization/parseAccount';
 export * from './authorization/roleToScopeMapping';
 export * from './authorization/scopeAbilityBuilder';
@@ -132,7 +133,9 @@ export * from './types/notifications';
 export * from './types/oauth';
 export * from './types/openIdIdentity';
 export * from './types/organization';
+export * from './types/organizationAccess';
 export * from './types/organizationMemberProfile';
+export * from './types/organizationSso';
 export * from './types/organizationWarehouseCredentials';
 export * from './types/paginateResults';
 export * from './types/parameters';
@@ -207,6 +210,7 @@ export * from './utils/item';
 export * from './utils/loadLightdashProjectConfig';
 export * from './utils/lightdashSqlVariables';
 export * from './utils/metricsExplorer';
+export * from './utils/normalizeCellRawForFilter';
 export * from './utils/oauth';
 export * from './utils/organization';
 export * from './utils/projectMemberRole';

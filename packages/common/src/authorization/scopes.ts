@@ -572,6 +572,13 @@ const scopes: Scope[] = [
         getConditions: addDefaultUuidCondition,
     },
     {
+        name: 'manage:CustomSqlTableCalculations',
+        description: 'Create and edit SQL table calculations',
+        isEnterprise: false,
+        group: ScopeGroup.DATA,
+        getConditions: addDefaultUuidCondition,
+    },
+    {
         name: 'create:VirtualView',
         description: 'Create virtual views',
         isEnterprise: false,
@@ -639,6 +646,20 @@ const scopes: Scope[] = [
     {
         name: 'manage:AiAgent',
         description: 'Configure AI agent settings',
+        isEnterprise: true,
+        group: ScopeGroup.AI,
+        getConditions: addDefaultUuidCondition,
+    },
+    {
+        name: 'view:AiAgentDocument',
+        description: 'View AI agent documents',
+        isEnterprise: true,
+        group: ScopeGroup.AI,
+        getConditions: addDefaultUuidCondition,
+    },
+    {
+        name: 'manage:AiAgentDocument',
+        description: 'Upload and manage AI agent documents',
         isEnterprise: true,
         group: ScopeGroup.AI,
         getConditions: addDefaultUuidCondition,
@@ -742,6 +763,24 @@ const scopes: Scope[] = [
                 createdByUserUuid: context.userUuid || false,
             },
         ],
+    },
+
+    // Organization Design Assets (shared CSS/fonts/images/instructions
+    // injected into every data app generated in the org). Org-scoped
+    // resource — view is available to all members, manage to org admins.
+    {
+        name: 'view:OrganizationDesign',
+        description: 'View organization design assets',
+        isEnterprise: false,
+        group: ScopeGroup.AI,
+        getConditions: addDefaultUuidCondition,
+    },
+    {
+        name: 'manage:OrganizationDesign',
+        description: 'Create, edit, and delete organization design assets',
+        isEnterprise: false,
+        group: ScopeGroup.AI,
+        getConditions: addDefaultUuidCondition,
     },
 
     // Spotlight Scopes

@@ -1,6 +1,5 @@
 import './sentry'; // Sentry has to be initialized before anything else
 import {
-    Account,
     AnyType,
     ApiError,
     getErrorMessage,
@@ -9,9 +8,6 @@ import {
     LightdashVersionHeader,
     MissingConfigError,
     OauthAuthenticationError,
-    Project,
-    ServiceAccount,
-    SessionUser,
     UnexpectedServerError,
 } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
@@ -61,11 +57,11 @@ import Logger from './logging/logger';
 import {
     expressWinstonMiddleware,
     expressWinstonPreResponseMiddleware,
+    requestExecutionContextMiddleware,
 } from './logging/winston';
 import { sessionAccountMiddleware } from './middlewares/accountMiddleware';
 import { jwtAuthMiddleware } from './middlewares/jwtAuthMiddleware';
 import { ModelProviderMap, ModelRepository } from './models/ModelRepository';
-import { postHogClient } from './postHog';
 import PrometheusMetrics from './prometheus/PrometheusMetrics';
 import { getProtopieServices } from './protopie/services';
 import { apiV1Router } from './routers/apiV1Router';
@@ -75,6 +71,8 @@ import {
     oauthProtectedResourceHandler,
 } from './routers/oauthRouter';
 import { SchedulerWorker } from './scheduler/SchedulerWorker';
+import { SchedulerWorkerHealth } from './scheduler/SchedulerWorkerHealth';
+import { createOrganizationNameResolver } from './sentry/organizationNameResolver';
 import { InstanceConfigurationService } from './services/InstanceConfigurationService/InstanceConfigurationService';
 import {
     OperationContext,
@@ -84,29 +82,9 @@ import {
 import { UtilProviderMap, UtilRepository } from './utils/UtilRepository';
 import { VERSION } from './version';
 
-// We need to override this interface to have our user typing
-declare global {
-    namespace Express {
-        /**
-         * There's potentially a good case for NOT including this under the top-level of the Request,
-         * but instead under `locals` - I've yet to see a good reasoning on -why-, so for now I'm
-         * opting for the keystrokes saved through omitting `.locals`.
-         */
-        interface Request {
-            services: ServiceRepository;
-            serviceAccount?: Pick<ServiceAccount, 'organizationUuid'>;
-            // The project associated with this request
-            project?: Pick<Project, 'projectUuid'>;
-            /**
-             * @deprecated Clients should be used inside services. This will be removed soon.
-             */
-            clients: ClientRepository;
-            account?: Account;
-        }
-
-        interface User extends SessionUser {}
-    }
-}
+// Express Request/User type augmentations live in src/@types/express.d.ts
+// so they're picked up as ambient declarations regardless of which file is
+// the compilation entry point (e.g. knex seed/migrate via ts-node).
 
 const schedulerWorkerFactory = (context: {
     lightdashConfig: LightdashConfig;
@@ -115,6 +93,8 @@ const schedulerWorkerFactory = (context: {
     models: ModelRepository;
     clients: ClientRepository;
     utils: UtilRepository;
+    // Optional only so the EE factory override (which reads context.workerHealth) typechecks against this shape.
+    workerHealth?: SchedulerWorkerHealth;
 }) =>
     new SchedulerWorker({
         lightdashConfig: context.lightdashConfig,
@@ -148,6 +128,9 @@ const schedulerWorkerFactory = (context: {
         protopieChurnScoreService: getProtopieServices(
             context.serviceRepository,
         ).churnScoreService,
+        resolveOrganizationName: createOrganizationNameResolver(
+            context.models.getOrganizationModel(),
+        ),
     });
 
 export type AppArguments = {
@@ -319,6 +302,35 @@ export default class App {
     }
 
     private async initExpress(expressApp: Express) {
+        // Short-circuit CORS preflights for data-app iframe asset fetches.
+        //
+        // The data-app preview iframe uses `sandbox="allow-scripts allow-modals"`
+        // (no `allow-same-origin`), so subresource fetches originate from the
+        // opaque origin `null`. The global `cors()` middleware below ends those
+        // preflights with 204 but, because `null` doesn't match the configured
+        // allow-list, omits `Access-Control-Allow-Origin` — which blocks the
+        // subsequent asset GET and renders the iframe (and any scheduled
+        // screenshot of it) as a blank page. The appPreviewRouter has its own
+        // permissive CORS handler for these URLs, but it never runs because
+        // `cors()` short-circuits the preflight first. Handling OPTIONS here
+        // restores the intended behaviour without widening CORS for any other
+        // route. The matching GET handler remains auth-gated by `requireToken`.
+        if (this.lightdashConfig.appRuntime.s3) {
+            expressApp.options(
+                '/api/apps/:appUuid/versions/:version/t/:token/assets/:filename',
+                (_req, res) => {
+                    res.setHeader('Access-Control-Allow-Origin', '*');
+                    res.setHeader(
+                        'Access-Control-Allow-Methods',
+                        'GET, OPTIONS',
+                    );
+                    res.setHeader('Access-Control-Allow-Headers', '*');
+                    res.setHeader('Access-Control-Max-Age', '86400');
+                    res.status(204).end();
+                },
+            );
+        }
+
         // Cross-Origin Resource Sharing policy (CORS)
         // WARNING: this middleware should be mounted before the helmet middleware
         // (ideally at the top of the middleware stack)
@@ -368,6 +380,12 @@ export default class App {
             middleware(expressApp),
         );
 
+        if (this.lightdashConfig.prometheus.extendedMetricsEnabled) {
+            expressApp.use(
+                this.prometheusMetrics.httpServerRequestMetricsMiddleware(),
+            );
+        }
+
         expressApp.use(
             express.json({ limit: this.lightdashConfig.maxPayloadSize }),
         );
@@ -407,7 +425,6 @@ export default class App {
             'wss://*.pusher.com', // used by pylon
             'https://*.headwayapp.co',
             'https://headway-widget.net',
-            'https://*.posthog.com',
             'https://*.intercom.com',
             'https://*.intercom.io',
             'wss://*.intercom.io',
@@ -489,6 +506,13 @@ export default class App {
 
         expressApp.use(helmet(helmetConfig));
 
+        // Allow MCP-related icons to be embedded cross-origin so MCP hosts
+        // (e.g. claude.ai) can display them in connector listings.
+        expressApp.use(
+            ['/logo-icon.svg', '/favicon-32x32.png', '/apple-touch-icon.png'],
+            helmet.crossOriginResourcePolicy({ policy: 'cross-origin' }),
+        );
+
         const helmetConfigForEmbeds = produce(helmetConfig, (draft) => {
             // eslint-disable-next-line no-param-reassign
             draft.contentSecurityPolicy.directives['frame-ancestors'] = [
@@ -519,11 +543,27 @@ export default class App {
         // APPS_RUNTIME_ENABLED env var or the enable-data-apps feature flag.
         if (this.lightdashConfig.appRuntime.s3) {
             const analyticsModel = this.models.getAnalyticsModel();
+            // Frame-ancestors for the data-app preview iframe. Mirrors the
+            // `/embed/*` policy ('self' https://*) plus any explicit
+            // domains from `LIGHTDASH_IFRAME_EMBEDDING_DOMAINS` so SDK-
+            // hosted dashboards can render data-app tiles from customer
+            // origins (and local dev http origins like localhost:5173).
+            // Applied uniformly to session- and embed-minted tokens — the
+            // iframe's own CSP (`connect-src 'none'`, `script-src 'self'`)
+            // is the real protection; frame-ancestors is clickjacking
+            // defense-in-depth.
+            const previewFrameAncestors = [
+                "'self'",
+                'https://*',
+                ...this.lightdashConfig.security.contentSecurityPolicy
+                    .frameAncestors,
+            ];
             expressApp.use(
                 '/api/apps',
                 createAppPreviewRouter(
                     this.lightdashConfig.appRuntime,
                     this.lightdashConfig.lightdashSecret,
+                    previewFrameAncestors,
                     (p) => {
                         void analyticsModel.addAppViewEvent(
                             p.appUuid,
@@ -602,6 +642,9 @@ export default class App {
         // We'll also be able to add the user to Sentry for embedded users.
         expressApp.use(jwtAuthMiddleware);
         expressApp.use(sessionAccountMiddleware);
+        // Must run after auth so req.user is populated. Stamps every downstream
+        // log line with organization_uuid + organization_name via ExecutionContext.
+        expressApp.use(requestExecutionContextMiddleware);
 
         expressApp.use((req, res, next) => {
             if (req.user) {
@@ -611,6 +654,18 @@ export default class App {
                     email: req.user.email,
                     username: req.user.email,
                 });
+                if (req.user.organizationUuid) {
+                    Sentry.setTag(
+                        'organization.uuid',
+                        req.user.organizationUuid,
+                    );
+                }
+                if (req.user.organizationName) {
+                    Sentry.setTag(
+                        'organization.name',
+                        req.user.organizationName,
+                    );
+                }
             }
             next();
         });
@@ -914,14 +969,6 @@ export default class App {
                 Logger.info('Stopped scheduler worker');
             } catch (e) {
                 Logger.error('Error stopping scheduler worker', e);
-            }
-        }
-        if (postHogClient) {
-            try {
-                await postHogClient.shutdown();
-                Logger.info('Stopped PostHog Client');
-            } catch (e) {
-                Logger.error('Error stopping PostHog Client', e);
             }
         }
     }

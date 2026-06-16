@@ -20,7 +20,7 @@ export type SpaceSearchResult = Pick<Space, 'uuid' | 'name' | 'uuid'> &
     RankedItem;
 export type DashboardSearchResult = Pick<
     Dashboard,
-    'uuid' | 'name' | 'description' | 'spaceUuid' | 'projectUuid'
+    'uuid' | 'name' | 'description' | 'spaceUuid' | 'projectUuid' | 'slug'
 > & {
     validationErrors: {
         validationUuid: ValidationErrorDashboardResponse['validationUuid'];
@@ -46,13 +46,14 @@ export type DashboardSearchResult = Pick<
         description?: string;
         chartType: ChartKind;
         viewsCount: number;
+        verification: ContentVerificationInfo | null;
     }[];
     verification: ContentVerificationInfo | null;
 } & RankedItem;
 
 export type SavedChartSearchResult = Pick<
     SavedChart,
-    'uuid' | 'name' | 'description' | 'spaceUuid' | 'projectUuid'
+    'uuid' | 'name' | 'description' | 'spaceUuid' | 'projectUuid' | 'slug'
 > & {
     chartType: ChartKind;
     validationErrors: {
@@ -104,26 +105,25 @@ export type SqlChartSearchResult = Pick<
 
 export type AllChartsSearchResult = Pick<
     SavedChartSearchResult,
-    'uuid' | 'name' | 'description' | 'spaceUuid' | 'projectUuid'
-> &
-    Partial<Pick<SqlChartSearchResult, 'slug'>> & {
-        chartType: ChartKind;
-        chartSource: 'saved' | 'sql';
-        viewsCount: number;
-        firstViewedAt: string | null;
-        lastModified: string | null;
-        createdBy: {
-            firstName: string;
-            lastName: string;
-            userUuid: string;
-        } | null;
-        lastUpdatedBy: {
-            firstName: string;
-            lastName: string;
-            userUuid: string;
-        } | null;
-        verification: ContentVerificationInfo | null;
-    } & RankedItem;
+    'uuid' | 'name' | 'description' | 'spaceUuid' | 'projectUuid' | 'slug'
+> & {
+    chartType: ChartKind;
+    chartSource: 'saved' | 'sql';
+    viewsCount: number;
+    firstViewedAt: string | null;
+    lastModified: string | null;
+    createdBy: {
+        firstName: string;
+        lastName: string;
+        userUuid: string;
+    } | null;
+    lastUpdatedBy: {
+        firstName: string;
+        lastName: string;
+        userUuid: string;
+    } | null;
+    verification: ContentVerificationInfo | null;
+} & RankedItem;
 
 export type TableSearchResult = Pick<
     Table,
@@ -167,6 +167,21 @@ export type FieldSearchResult = Pick<
     regexMatchCount: number;
 };
 
+export type DataAppSearchResult = {
+    uuid: string;
+    name: string;
+    description: string;
+    // Personal apps live outside any space, so spaceUuid is nullable.
+    spaceUuid: string | null;
+    projectUuid: string;
+    viewsCount: number;
+    createdBy: {
+        firstName: string;
+        lastName: string;
+        userUuid: string;
+    } | null;
+} & RankedItem;
+
 type PageResult = {
     uuid: string;
     name: string;
@@ -189,7 +204,8 @@ export type SearchResult =
     | TableErrorSearchResult
     | TableSearchResult
     | FieldSearchResult
-    | PageResult;
+    | PageResult
+    | DataAppSearchResult;
 
 export const isExploreSearchResult = (
     value: SearchResult,
@@ -227,6 +243,7 @@ export type SearchResults = {
     fields: FieldSearchResult[];
     pages: PageResult[];
     dashboardTabs: DashboardTabResult[];
+    dataApps: DataAppSearchResult[];
 };
 
 export const getSearchResultId = (meta: SearchResult | undefined) => {
@@ -251,6 +268,7 @@ export enum SearchItemType {
     TABLE = 'table',
     FIELD = 'field',
     PAGE = 'page',
+    DATA_APP = 'data_app',
 }
 
 export function getSearchItemTypeFromResultKey(
@@ -273,6 +291,8 @@ export function getSearchItemTypeFromResultKey(
             return SearchItemType.SQL_CHART;
         case 'dashboardTabs':
             return SearchItemType.DASHBOARD_TAB;
+        case 'dataApps':
+            return SearchItemType.DATA_APP;
         default:
             return assertUnreachable(
                 searchResultKey,

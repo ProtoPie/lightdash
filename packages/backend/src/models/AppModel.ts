@@ -14,10 +14,17 @@ import {
     type DbApp,
     type DbAppVersion,
 } from '../database/entities/apps';
+import {
+    DashboardsTableName,
+    DashboardTileDataAppsTableName,
+    DashboardTilesTableName,
+    DashboardVersionsTableName,
+} from '../database/entities/dashboards';
 import { OrganizationTableName } from '../database/entities/organizations';
 import { PinnedAppTableName } from '../database/entities/pinnedList';
 import { ProjectTableName } from '../database/entities/projects';
 import { SpaceTableName } from '../database/entities/spaces';
+import { UserTableName } from '../database/entities/users';
 import KnexPaginate from '../database/pagination';
 
 type AppModelArguments = {
@@ -41,6 +48,7 @@ export class AppModel {
                     | 'description'
                     | 'template'
                     | 'space_uuid'
+                    | 'design_uuid'
                 >
             >,
         version: Pick<DbAppVersion, 'version' | 'prompt'>,
@@ -177,6 +185,36 @@ export class AppModel {
         return row;
     }
 
+    async findAppByUuid(appId: string): Promise<
+        | (DbApp & {
+              organization_uuid: string;
+          })
+        | undefined
+    > {
+        return this.database(AppsTableName)
+            .innerJoin(
+                ProjectTableName,
+                `${ProjectTableName}.project_uuid`,
+                `${AppsTableName}.project_uuid`,
+            )
+            .innerJoin(
+                OrganizationTableName,
+                `${OrganizationTableName}.organization_id`,
+                `${ProjectTableName}.organization_id`,
+            )
+            .where(`${AppsTableName}.app_id`, appId)
+            .whereNull(`${AppsTableName}.deleted_at`)
+            .select<
+                (DbApp & {
+                    organization_uuid: string;
+                })[]
+            >(
+                `${AppsTableName}.*`,
+                `${OrganizationTableName}.organization_uuid`,
+            )
+            .first();
+    }
+
     async findApp(
         appId: string,
         projectUuid: string,
@@ -297,7 +335,10 @@ export class AppModel {
         template: DbApp['template'];
         pinnedListUuid: string | null;
         pinnedListOrder: number | null;
-        versions: DbAppVersion[];
+        versions: (DbAppVersion & {
+            created_by_user_first_name: string | null;
+            created_by_user_last_name: string | null;
+        })[];
         hasMore: boolean;
     }> {
         const limit = opts.limit ?? 20;
@@ -317,6 +358,16 @@ export class AppModel {
                 `${AppsTableName}.app_id`,
                 `${AppVersionsTableName}.app_id`,
             )
+            // LEFT JOIN: surfaces the version author's display name to the
+            // chat UI. We don't filter `is_internal` / `is_active` because
+            // service accounts cannot create app versions today; if a row's
+            // user is hard-deleted the join misses and the service layer
+            // collapses `createdByUser` to null.
+            .leftJoin(
+                UserTableName,
+                `${UserTableName}.user_uuid`,
+                `${AppVersionsTableName}.created_by_user_uuid`,
+            )
             .leftJoin(
                 PinnedAppTableName,
                 `${PinnedAppTableName}.app_uuid`,
@@ -335,6 +386,8 @@ export class AppModel {
                 `${OrganizationTableName}.organization_uuid`,
                 `${PinnedAppTableName}.pinned_list_uuid`,
                 `${PinnedAppTableName}.order as pinned_list_order`,
+                `${UserTableName}.first_name as created_by_user_first_name`,
+                `${UserTableName}.last_name as created_by_user_last_name`,
             )
             .orderBy(`${AppVersionsTableName}.version`, 'desc')
             .limit(limit + 1);
@@ -356,6 +409,8 @@ export class AppModel {
             organization_uuid: string;
             pinned_list_uuid: string | null;
             pinned_list_order: number | null;
+            created_by_user_first_name: string | null;
+            created_by_user_last_name: string | null;
         })[] = await query;
 
         // Left join: if app doesn't exist, zero rows → 404
@@ -388,6 +443,8 @@ export class AppModel {
                 organization_uuid: string;
                 pinned_list_uuid: string | null;
                 pinned_list_order: number | null;
+                created_by_user_first_name: string | null;
+                created_by_user_last_name: string | null;
             } => r.version !== null,
         );
         const hasMore = versions.length > limit;
@@ -652,6 +709,74 @@ export class AppModel {
         await this.database(AppsTableName)
             .where({ app_id: appId })
             .update({ sandbox_id: sandboxId });
+    }
+
+    /**
+     * Returns the UUIDs of dashboards in `projectUuid` whose latest version
+     * contains a tile referencing `appUuid`. Old versions are intentionally
+     * ignored: if a dashboard once contained the app but no longer does,
+     * embedding that dashboard must not implicitly authorize the app.
+     */
+    async findDashboardsContainingApp(
+        appUuid: string,
+        projectUuid: string,
+    ): Promise<string[]> {
+        const latestVersionsCte = 'latest_dashboard_versions';
+        const rows = await this.database
+            .with(latestVersionsCte, (qb) => {
+                void qb
+                    .select({
+                        dashboard_uuid: `${DashboardsTableName}.dashboard_uuid`,
+                        dashboard_version_id: this.database.raw(
+                            `MAX(${DashboardVersionsTableName}.dashboard_version_id)`,
+                        ),
+                    })
+                    .from(DashboardsTableName)
+                    .innerJoin(SpaceTableName, function joinSpaces() {
+                        this.on(
+                            `${DashboardsTableName}.space_id`,
+                            '=',
+                            `${SpaceTableName}.space_id`,
+                        ).andOnNull(`${SpaceTableName}.deleted_at`);
+                    })
+                    .innerJoin(
+                        ProjectTableName,
+                        `${SpaceTableName}.project_id`,
+                        `${ProjectTableName}.project_id`,
+                    )
+                    .innerJoin(
+                        DashboardVersionsTableName,
+                        `${DashboardsTableName}.dashboard_id`,
+                        `${DashboardVersionsTableName}.dashboard_id`,
+                    )
+                    .where(`${ProjectTableName}.project_uuid`, projectUuid)
+                    .whereNull(`${DashboardsTableName}.deleted_at`)
+                    .groupBy(`${DashboardsTableName}.dashboard_uuid`);
+            })
+            .select<{ dashboard_uuid: string }[]>(
+                `${latestVersionsCte}.dashboard_uuid`,
+            )
+            .distinct()
+            .from(latestVersionsCte)
+            .innerJoin(
+                DashboardTilesTableName,
+                `${DashboardTilesTableName}.dashboard_version_id`,
+                `${latestVersionsCte}.dashboard_version_id`,
+            )
+            .innerJoin(DashboardTileDataAppsTableName, function joinTiles() {
+                this.on(
+                    `${DashboardTileDataAppsTableName}.dashboard_tile_uuid`,
+                    '=',
+                    `${DashboardTilesTableName}.dashboard_tile_uuid`,
+                ).andOn(
+                    `${DashboardTileDataAppsTableName}.dashboard_version_id`,
+                    '=',
+                    `${DashboardTilesTableName}.dashboard_version_id`,
+                );
+            })
+            .where(`${DashboardTileDataAppsTableName}.app_uuid`, appUuid);
+
+        return rows.map((r) => r.dashboard_uuid);
     }
 
     /**

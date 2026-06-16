@@ -5,9 +5,11 @@ import {
     type ToolFindDashboardsOutput,
     type ToolFindExploresOutput,
     type ToolFindFieldsOutput,
+    type ToolGetKnowledgeDocumentContentOutput,
     type ToolImproveContextOutput,
     type ToolProposeChangeOutput,
     type ToolRunQueryOutput,
+    type ToolRunSqlOutput,
     type ToolSearchFieldValuesOutput,
     type ToolTableVizOutput,
     type ToolTimeSeriesOutput,
@@ -29,9 +31,11 @@ export type AgentToolOutput =
     | ToolFindDashboardsOutput
     | ToolFindExploresOutput
     | ToolFindFieldsOutput
+    | ToolGetKnowledgeDocumentContentOutput
     | ToolImproveContextOutput
     | ToolProposeChangeOutput
     | ToolRunQueryOutput
+    | ToolRunSqlOutput
     | ToolSearchFieldValuesOutput
     | ToolTableVizOutput
     | ToolTimeSeriesOutput

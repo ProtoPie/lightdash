@@ -23,11 +23,13 @@ export type DbApp = {
     space_uuid: string | null;
     sandbox_id: string | null;
     template: Exclude<DataAppTemplate, 'custom'> | null;
+    design_uuid: string | null;
     created_at: Date;
     created_by_user_uuid: string;
     deleted_at: Date | null;
     deleted_by_user_uuid: string | null;
     views_count: number;
+    search_vector: string;
 };
 
 export type AppsTable = Knex.CompositeTableType<
@@ -42,6 +44,7 @@ export type AppsTable = Knex.CompositeTableType<
                 | 'space_uuid'
                 | 'sandbox_id'
                 | 'template'
+                | 'design_uuid'
             >
         >,
     Partial<

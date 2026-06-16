@@ -1,6 +1,7 @@
 import { Ability } from '@casl/ability';
 import {
     defineUserAbility,
+    FeatureFlags,
     FilterOperator,
     ForbiddenError,
     MetricType,
@@ -154,6 +155,7 @@ const projectModel = {
     })),
     findExploreByTableName: jest.fn(async () => validExplore),
     getAllExploresFromCache: jest.fn(async () => ({})),
+    getCachedExploreNames: jest.fn(async () => []),
     saveExploresToCache: jest.fn(async () => ({ cachedExploreUuids: [] })),
     updateDefaultUserSpaces: jest.fn(async () => undefined),
 };
@@ -183,6 +185,12 @@ const spaceModel = {
 
 const userAttributesModel = {
     getAttributeValuesForOrgMember: jest.fn(async () => ({})),
+};
+
+const emailModel = {
+    getPrimaryEmailStatus: jest.fn(async (_userUuid: string) => ({
+        isVerified: true,
+    })),
 };
 
 const schedulerClient = {
@@ -231,11 +239,7 @@ const getMockedProjectService = (
             findForProjectWithSecrets: jest.fn(async () => undefined),
         } as unknown as UserWarehouseCredentialsModel,
         warehouseAvailableTablesModel: {} as WarehouseAvailableTablesModel,
-        emailModel: {
-            getPrimaryEmailStatus: (userUuid: string) => ({
-                isVerified: true,
-            }),
-        } as unknown as EmailModel,
+        emailModel: emailModel as unknown as EmailModel,
         schedulerClient: schedulerClient as unknown as SchedulerClient,
         downloadFileModel: {} as unknown as DownloadFileModel,
         fileStorageClient: {} as FileStorageClient,
@@ -246,10 +250,20 @@ const getMockedProjectService = (
         encryptionUtil: {} as EncryptionUtil,
         userModel: {} as UserModel,
         featureFlagModel: {
-            get: jest.fn(async () => ({
-                id: '',
-                enabled: false,
-            })),
+            // Mirror production behaviour: ResultsCacheEnabled resolves from
+            // the env-derived lightdashConfig.results.cacheEnabled when there
+            // is no DB row.
+            get: jest.fn(
+                async ({ featureFlagId }: { featureFlagId: string }) => {
+                    if (featureFlagId === FeatureFlags.ResultsCacheEnabled) {
+                        return {
+                            id: featureFlagId,
+                            enabled: lightdashConfig.results.cacheEnabled,
+                        };
+                    }
+                    return { id: featureFlagId, enabled: false };
+                },
+            ),
         } as unknown as FeatureFlagModel,
         projectParametersModel: {
             find: jest.fn(async () => []),
@@ -436,7 +450,10 @@ describe('ProjectService', () => {
             jest.spyOn(
                 UserService,
                 'generateSnowflakeAccessToken',
-            ).mockResolvedValue('mocked-access-token');
+            ).mockResolvedValue({
+                accessToken: 'mocked-access-token',
+                refreshToken: 'mocked-refresh-token',
+            });
 
             // Project credentials with Snowflake SSO that has a refreshToken
             // The project's refreshToken should be cleared and NOT used
@@ -512,7 +529,10 @@ describe('ProjectService', () => {
             jest.spyOn(
                 UserService,
                 'generateSnowflakeAccessToken',
-            ).mockResolvedValue('mocked-access-token');
+            ).mockResolvedValue({
+                accessToken: 'mocked-access-token',
+                refreshToken: 'mocked-refresh-token',
+            });
 
             // Project credentials with Snowflake SSO
             const projectSnowflakeCredentials = {
@@ -580,7 +600,10 @@ describe('ProjectService', () => {
             jest.spyOn(
                 UserService,
                 'generateSnowflakeAccessToken',
-            ).mockResolvedValue('mocked-access-token');
+            ).mockResolvedValue({
+                accessToken: 'mocked-access-token',
+                refreshToken: 'mocked-refresh-token',
+            });
 
             // Mock project credentials with Snowflake SSO - requireUserCredentials is false
             // so the project's credentials should be used directly
@@ -634,6 +657,324 @@ describe('ProjectService', () => {
 
             // User credentials should NOT have been fetched
             expect(findForProjectWithSecretsMock).not.toHaveBeenCalled();
+        });
+
+        test('should persist rotated Snowflake refresh token to user_warehouse_credentials when Snowflake rotates it', async () => {
+            // clear in memory cache so new mock is applied
+            service.warehouseClients = {};
+
+            jest.spyOn(
+                UserService,
+                'generateSnowflakeAccessToken',
+            ).mockResolvedValue({
+                accessToken: 'mocked-access-token',
+                refreshToken: 'rotated-refresh-token',
+            });
+
+            const projectSnowflakeCredentials = {
+                type: WarehouseTypes.SNOWFLAKE,
+                account: 'test-account',
+                warehouse: 'test-warehouse',
+                database: 'test-db',
+                schema: 'test-schema',
+                authenticationType: 'sso',
+                refreshToken: 'project-refresh-token',
+                requireUserCredentials: true,
+            };
+            (
+                projectModel.getWarehouseCredentialsForProject as jest.Mock
+            ).mockImplementation(async () => projectSnowflakeCredentials);
+
+            const userCredentials = {
+                uuid: 'user-creds-uuid',
+                credentials: {
+                    type: WarehouseTypes.SNOWFLAKE,
+                    authenticationType: 'sso',
+                    refreshToken: 'user-refresh-token',
+                },
+            };
+
+            const findForProjectWithSecretsMock = jest.fn(
+                async () => userCredentials,
+            );
+            const rotateRefreshTokenMock = jest.fn(async () => true);
+            (
+                service as unknown as {
+                    userWarehouseCredentialsModel: {
+                        findForProjectWithSecrets: jest.Mock;
+                        rotateRefreshToken: jest.Mock;
+                    };
+                }
+            ).userWarehouseCredentialsModel.findForProjectWithSecrets =
+                findForProjectWithSecretsMock;
+            (
+                service as unknown as {
+                    userWarehouseCredentialsModel: {
+                        findForProjectWithSecrets: jest.Mock;
+                        rotateRefreshToken: jest.Mock;
+                    };
+                }
+            ).userWarehouseCredentialsModel.rotateRefreshToken =
+                rotateRefreshTokenMock;
+
+            (
+                projectModel.getWarehouseClientFromCredentials as jest.Mock
+            ).mockImplementation((creds: Record<string, unknown>) => ({
+                ...warehouseClientMock,
+                credentials: creds,
+                runQuery: jest.fn(async () => resultsWith1Row),
+            }));
+
+            await service.runExploreQuery(
+                sessionAccount,
+                metricQueryMock,
+                projectUuid,
+                'valid_explore',
+                null,
+            );
+
+            expect(rotateRefreshTokenMock).toHaveBeenCalledTimes(1);
+            expect(rotateRefreshTokenMock).toHaveBeenCalledWith(
+                'user-creds-uuid',
+                'user-refresh-token',
+                'rotated-refresh-token',
+            );
+        });
+
+        test('should not call rotateRefreshToken when Snowflake returns the same refresh token', async () => {
+            // clear in memory cache so new mock is applied
+            service.warehouseClients = {};
+
+            jest.spyOn(
+                UserService,
+                'generateSnowflakeAccessToken',
+            ).mockResolvedValue({
+                accessToken: 'mocked-access-token',
+                refreshToken: 'user-refresh-token',
+            });
+
+            const projectSnowflakeCredentials = {
+                type: WarehouseTypes.SNOWFLAKE,
+                account: 'test-account',
+                warehouse: 'test-warehouse',
+                database: 'test-db',
+                schema: 'test-schema',
+                authenticationType: 'sso',
+                refreshToken: 'project-refresh-token',
+                requireUserCredentials: true,
+            };
+            (
+                projectModel.getWarehouseCredentialsForProject as jest.Mock
+            ).mockImplementation(async () => projectSnowflakeCredentials);
+
+            const userCredentials = {
+                uuid: 'user-creds-uuid',
+                credentials: {
+                    type: WarehouseTypes.SNOWFLAKE,
+                    authenticationType: 'sso',
+                    refreshToken: 'user-refresh-token',
+                },
+            };
+
+            const findForProjectWithSecretsMock = jest.fn(
+                async () => userCredentials,
+            );
+            const rotateRefreshTokenMock = jest.fn(async () => true);
+            (
+                service as unknown as {
+                    userWarehouseCredentialsModel: {
+                        findForProjectWithSecrets: jest.Mock;
+                        rotateRefreshToken: jest.Mock;
+                    };
+                }
+            ).userWarehouseCredentialsModel.findForProjectWithSecrets =
+                findForProjectWithSecretsMock;
+            (
+                service as unknown as {
+                    userWarehouseCredentialsModel: {
+                        findForProjectWithSecrets: jest.Mock;
+                        rotateRefreshToken: jest.Mock;
+                    };
+                }
+            ).userWarehouseCredentialsModel.rotateRefreshToken =
+                rotateRefreshTokenMock;
+
+            (
+                projectModel.getWarehouseClientFromCredentials as jest.Mock
+            ).mockImplementation((creds: Record<string, unknown>) => ({
+                ...warehouseClientMock,
+                credentials: creds,
+                runQuery: jest.fn(async () => resultsWith1Row),
+            }));
+
+            await service.runExploreQuery(
+                sessionAccount,
+                metricQueryMock,
+                projectUuid,
+                'valid_explore',
+                null,
+            );
+
+            expect(rotateRefreshTokenMock).not.toHaveBeenCalled();
+        });
+
+        test('should persist rotated Databricks OAuth U2M refresh token to user_warehouse_credentials when Databricks rotates it', async () => {
+            // clear in memory cache so new mock is applied
+            service.warehouseClients = {};
+
+            const { refreshDatabricksOAuthToken } = jest.requireMock(
+                '@lightdash/warehouses',
+            );
+            (refreshDatabricksOAuthToken as jest.Mock).mockResolvedValue({
+                accessToken: 'fresh-u2m-access-token',
+                refreshToken: 'rotated-u2m-refresh-token',
+            });
+
+            const projectDatabricksCredentials = {
+                type: WarehouseTypes.DATABRICKS,
+                authenticationType: 'oauth_u2m',
+                serverHostName: 'test.databricks.com',
+                httpPath: '/sql/test',
+                database: 'test_db',
+                requireUserCredentials: true,
+            };
+            (
+                projectModel.getWarehouseCredentialsForProject as jest.Mock
+            ).mockImplementation(async () => projectDatabricksCredentials);
+
+            const userCredentials = {
+                uuid: 'user-creds-uuid',
+                credentials: {
+                    type: WarehouseTypes.DATABRICKS,
+                    authenticationType: 'oauth_u2m',
+                    serverHostName: 'test.databricks.com',
+                    refreshToken: 'user-u2m-refresh-token',
+                    oauthClientId: 'user-client-id',
+                },
+            };
+
+            const findForProjectWithSecretsMock = jest.fn(
+                async () => userCredentials,
+            );
+            const rotateRefreshTokenMock = jest.fn(async () => true);
+            (
+                service as unknown as {
+                    userWarehouseCredentialsModel: {
+                        findForProjectWithSecrets: jest.Mock;
+                        rotateRefreshToken: jest.Mock;
+                    };
+                }
+            ).userWarehouseCredentialsModel.findForProjectWithSecrets =
+                findForProjectWithSecretsMock;
+            (
+                service as unknown as {
+                    userWarehouseCredentialsModel: {
+                        findForProjectWithSecrets: jest.Mock;
+                        rotateRefreshToken: jest.Mock;
+                    };
+                }
+            ).userWarehouseCredentialsModel.rotateRefreshToken =
+                rotateRefreshTokenMock;
+
+            (
+                projectModel.getWarehouseClientFromCredentials as jest.Mock
+            ).mockImplementation((creds: Record<string, unknown>) => ({
+                ...warehouseClientMock,
+                credentials: creds,
+                runQuery: jest.fn(async () => resultsWith1Row),
+            }));
+
+            await service.runExploreQuery(
+                sessionAccount,
+                metricQueryMock,
+                projectUuid,
+                'valid_explore',
+                null,
+            );
+
+            expect(rotateRefreshTokenMock).toHaveBeenCalledTimes(1);
+            expect(rotateRefreshTokenMock).toHaveBeenCalledWith(
+                'user-creds-uuid',
+                'user-u2m-refresh-token',
+                'rotated-u2m-refresh-token',
+            );
+        });
+
+        test('should not call rotateRefreshToken when Databricks returns the same refresh token', async () => {
+            // clear in memory cache so new mock is applied
+            service.warehouseClients = {};
+
+            const { refreshDatabricksOAuthToken } = jest.requireMock(
+                '@lightdash/warehouses',
+            );
+            (refreshDatabricksOAuthToken as jest.Mock).mockResolvedValue({
+                accessToken: 'fresh-u2m-access-token',
+                refreshToken: 'user-u2m-refresh-token',
+            });
+
+            const projectDatabricksCredentials = {
+                type: WarehouseTypes.DATABRICKS,
+                authenticationType: 'oauth_u2m',
+                serverHostName: 'test.databricks.com',
+                httpPath: '/sql/test',
+                database: 'test_db',
+                requireUserCredentials: true,
+            };
+            (
+                projectModel.getWarehouseCredentialsForProject as jest.Mock
+            ).mockImplementation(async () => projectDatabricksCredentials);
+
+            const userCredentials = {
+                uuid: 'user-creds-uuid',
+                credentials: {
+                    type: WarehouseTypes.DATABRICKS,
+                    authenticationType: 'oauth_u2m',
+                    serverHostName: 'test.databricks.com',
+                    refreshToken: 'user-u2m-refresh-token',
+                    oauthClientId: 'user-client-id',
+                },
+            };
+
+            const findForProjectWithSecretsMock = jest.fn(
+                async () => userCredentials,
+            );
+            const rotateRefreshTokenMock = jest.fn(async () => true);
+            (
+                service as unknown as {
+                    userWarehouseCredentialsModel: {
+                        findForProjectWithSecrets: jest.Mock;
+                        rotateRefreshToken: jest.Mock;
+                    };
+                }
+            ).userWarehouseCredentialsModel.findForProjectWithSecrets =
+                findForProjectWithSecretsMock;
+            (
+                service as unknown as {
+                    userWarehouseCredentialsModel: {
+                        findForProjectWithSecrets: jest.Mock;
+                        rotateRefreshToken: jest.Mock;
+                    };
+                }
+            ).userWarehouseCredentialsModel.rotateRefreshToken =
+                rotateRefreshTokenMock;
+
+            (
+                projectModel.getWarehouseClientFromCredentials as jest.Mock
+            ).mockImplementation((creds: Record<string, unknown>) => ({
+                ...warehouseClientMock,
+                credentials: creds,
+                runQuery: jest.fn(async () => resultsWith1Row),
+            }));
+
+            await service.runExploreQuery(
+                sessionAccount,
+                metricQueryMock,
+                projectUuid,
+                'valid_explore',
+                null,
+            );
+
+            expect(rotateRefreshTokenMock).not.toHaveBeenCalled();
         });
     });
 
@@ -1821,6 +2162,49 @@ describe('ProjectService', () => {
                     exploreName,
                 ),
             ).rejects.toThrow(ForbiddenError);
+        });
+    });
+
+    describe('getUserAttributes', () => {
+        // jest.clearAllMocks() in the outer afterEach does not drain
+        // mockImplementationOnce queues — reset the email mock per test so
+        // queued rejections don't leak between cases.
+        beforeEach(() => {
+            emailModel.getPrimaryEmailStatus.mockReset();
+            emailModel.getPrimaryEmailStatus.mockResolvedValue({
+                isVerified: true,
+            });
+        });
+
+        test('skips email lookup for service accounts and returns empty intrinsic attributes', async () => {
+            // Real service-account principals have no row in `emails`, so
+            // getPrimaryEmailStatus throws NotFoundError. Simulate that to
+            // prove the bypass runs before the lookup.
+            emailModel.getPrimaryEmailStatus.mockImplementation(() => {
+                throw new NotFoundError(
+                    "Cannot find matching verification status for user's email",
+                );
+            });
+
+            const serviceAccount = buildAccount({
+                accountType: 'service-account',
+            });
+
+            const result = await service.getUserAttributes({
+                account: serviceAccount,
+            });
+
+            expect(result.intrinsicUserAttributes).toEqual({});
+            expect(emailModel.getPrimaryEmailStatus).not.toHaveBeenCalled();
+        });
+
+        test('still attaches intrinsic email attributes for session users', async () => {
+            const result = await service.getUserAttributes({ account });
+
+            expect(emailModel.getPrimaryEmailStatus).toHaveBeenCalledWith(
+                account.user.id,
+            );
+            expect(result.intrinsicUserAttributes).not.toEqual({});
         });
     });
 });

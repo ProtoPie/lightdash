@@ -1,6 +1,8 @@
 import {
     AdditionalMetric,
     AgentToolOutput,
+    AiAgentDocumentContent,
+    AiAgentDocumentSummary,
     AiArtifact,
     AiMetricQueryWithFilters,
     AiWebAppPrompt,
@@ -8,7 +10,9 @@ import {
     AnyType,
     CacheMetadata,
     CatalogField,
+    ChartAsCode,
     CreateChangeParams,
+    DashboardAsCode,
     DashboardSearchResult,
     Explore,
     ExploreCompiler,
@@ -21,12 +25,15 @@ import {
     ToolFindFieldsArgs,
     UpdateSlackResponse,
     UpdateWebAppResponse,
+    WarehouseTablesCatalog,
 } from '@lightdash/common';
 import {
+    AiAgentFindContentCoverageEvent,
     AiAgentResponseStreamed,
     AiAgentToolCallEvent,
 } from '../../../../analytics/LightdashAnalytics';
 import { PostSlackFile } from '../../../../clients/Slack/SlackClient';
+import { AiAgentSkill } from '../skills/types';
 
 type Pagination = KnexPaginateArgs & {
     totalPageCount: number;
@@ -55,6 +62,7 @@ export type FindExploresFn = (args: {
         searchRank?: number;
         description?: string;
         chartUsage?: number;
+        verifiedChartUsage?: number;
     }>;
 }>;
 
@@ -92,6 +100,35 @@ export type GetDashboardChartsFn = (args: {
     };
 }>;
 
+export type ReadContentFn = (args: {
+    slug: string;
+    type: 'dashboard' | 'chart';
+}) => Promise<
+    | {
+          type: 'dashboard';
+          content: DashboardAsCode;
+      }
+    | {
+          type: 'chart';
+          content: ChartAsCode;
+      }
+>;
+
+export type EditContentFn = (args: {
+    slug: string;
+    type: 'dashboard' | 'chart';
+    patch: unknown;
+}) => Promise<
+    | {
+          type: 'dashboard';
+          content: DashboardAsCode;
+      }
+    | {
+          type: 'chart';
+          content: ChartAsCode;
+      }
+>;
+
 export type UpdateProgressFn = (progress: string) => Promise<void>;
 
 export type GetPromptFn = () => Promise<SlackPrompt | AiWebAppPrompt>;
@@ -109,6 +146,22 @@ export type GetSavedChartFn = (chartUuid: string) => Promise<SavedChart>;
 
 export type SendFileFn = (args: PostSlackFile) => Promise<void>;
 
+export type SendSlackBlocksFn = (args: {
+    channelId: string;
+    threadTs: string;
+    organizationUuid: string;
+    text: string;
+    blocks: AnyType[];
+}) => Promise<{ ts: string }>;
+
+export type UpdateSlackMessageFn = (args: {
+    channelId: string;
+    organizationUuid: string;
+    ts: string;
+    text: string;
+    blocks: AnyType[];
+}) => Promise<void>;
+
 export type UpdatePromptFn = (
     prompt: UpdateWebAppResponse | UpdateSlackResponse,
 ) => Promise<void>;
@@ -118,6 +171,8 @@ export type StoreToolCallFn = (data: {
     toolCallId: string;
     toolName: string;
     toolArgs: object;
+    mcpServerUuid?: string | null;
+    parentToolCallId: string | null;
 }) => Promise<void>;
 
 export type StoreToolResultsFn = (
@@ -126,7 +181,7 @@ export type StoreToolResultsFn = (
         toolCallId: string;
         toolName: string;
         result: string;
-        metadata?: AgentToolOutput['metadata'];
+        metadata?: AgentToolOutput['metadata'] | Record<string, unknown> | null;
     }>,
 ) => Promise<void>;
 
@@ -139,7 +194,10 @@ export type StoreReasoningFn = (
 ) => Promise<void>;
 
 export type TrackEventFn = (
-    event: AiAgentResponseStreamed | AiAgentToolCallEvent,
+    event:
+        | AiAgentResponseStreamed
+        | AiAgentToolCallEvent
+        | AiAgentFindContentCoverageEvent,
 ) => void;
 
 export type SearchFieldValuesFn = (args: {
@@ -172,3 +230,40 @@ export type CreateChangeFn = (
 ) => Promise<string>;
 
 export type GetExploreCompilerFn = () => Promise<ExploreCompiler>;
+
+export type RunSqlJobFn = (args: { sql: string; limit: number }) => Promise<{
+    rows: Record<string, AnyType>[];
+    columns: string[];
+    rowCount: number;
+}>;
+
+export type ListWarehouseTablesFn = () => Promise<WarehouseTablesCatalog>;
+
+export type DescribeWarehouseTableFn = (args: {
+    table: string;
+    schema?: string;
+}) => Promise<{
+    columns: Array<{ name: string; type: string }>;
+    resolvedSchema: string | null;
+}>;
+
+export type ListKnowledgeDocumentsFn = () => Promise<AiAgentDocumentSummary[]>;
+
+export type GetKnowledgeDocumentContentFn = (args: {
+    documentUuid: string;
+}) => Promise<AiAgentDocumentContent>;
+
+export type WaitForSqlApprovalFn = (
+    toolCallId: string,
+    timeoutMs?: number,
+) => Promise<'approved' | 'rejected' | 'timeout'>;
+
+export type RecordSqlApprovalFn = (
+    toolCallId: string,
+    decision: 'approved' | 'rejected',
+    decidedByUserUuid: string | null,
+) => Promise<boolean>;
+
+export type LoadAgentSkillFn = (
+    name: string,
+) => Promise<AiAgentSkill | undefined>;

@@ -602,11 +602,16 @@ export type Project = {
     dbtVersion: DbtVersionOption;
     schedulerTimezone: string;
     queryTimezone: string | null;
+    useProjectTimezoneInFilters: boolean;
+    schedulerFailureNotifyRecipients: boolean;
+    schedulerFailureIncludeContact: boolean;
+    schedulerFailureContactOverride: string | null;
     createdByUserUuid: string | null;
     organizationWarehouseCredentialsUuid?: string;
     hasDefaultUserSpaces: boolean;
     projectDefaults?: ProjectDefaults;
     colorPaletteUuid: string | null;
+    expiresAt: Date | null;
 };
 
 export type ProjectSummary = Pick<
@@ -641,9 +646,13 @@ export type PreviewContentMapping = {
 };
 
 export type UpdateSchedulerSettings = {
-    schedulerTimezone: string;
+    schedulerTimezone?: string;
+    schedulerFailureNotifyRecipients?: boolean;
+    schedulerFailureIncludeContact?: boolean;
+    schedulerFailureContactOverride?: string | null;
 };
 
 export type UpdateQueryTimezoneSettings = {
-    queryTimezone: string | null;
+    queryTimezone?: string | null;
+    useProjectTimezoneInFilters?: boolean;
 };

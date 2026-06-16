@@ -1,33 +1,71 @@
-import { AiAgent } from '@lightdash/common';
+import {
+    AiAgent,
+    AiAgentDocumentSummary,
+    AiMcpServer,
+    AiMcpServerConnectionStatus,
+    WarehouseTypes,
+} from '@lightdash/common';
+// eslint-disable-next-line import/extensions
+import { type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { ModelMessage } from 'ai';
+import type { AiMcpCredentialPayload } from '../../../models/AiAgentModel';
 import { AiModel, AiProvider } from '../models/types';
+import { AiAgentSkillReference } from '../skills/types';
 import {
     CreateChangeFn,
     CreateOrUpdateArtifactFn,
+    DescribeWarehouseTableFn,
+    EditContentFn,
     FindContentFn,
     FindExploresFn,
     FindFieldFn,
     GetDashboardChartsFn,
     GetExploreCompilerFn,
     GetExploreFn,
+    GetKnowledgeDocumentContentFn,
     GetPromptFn,
     GetSavedChartFn,
     ListExploresFn,
+    ListKnowledgeDocumentsFn,
+    ListWarehouseTablesFn,
+    LoadAgentSkillFn,
+    ReadContentFn,
+    RecordSqlApprovalFn,
     RunAsyncQueryFn,
+    RunSqlJobFn,
     SearchFieldValuesFn,
     SendFileFn,
+    SendSlackBlocksFn,
     StoreReasoningFn,
     StoreToolCallFn,
     StoreToolResultsFn,
     TrackEventFn,
     UpdateProgressFn,
     UpdatePromptFn,
+    UpdateSlackMessageFn,
+    WaitForSqlApprovalFn,
 } from './aiAgentDependencies';
 
 type AnyAiModel<P = AiProvider> = P extends AiProvider ? AiModel<P> : never;
 
+export type AiAgentMcpServer = AiMcpServer & {
+    resolvedCredential: AiMcpCredentialPayload | null;
+    resolvedCredentialScope: 'shared' | 'user' | null;
+    oauthProvider?: OAuthClientProvider;
+    enabledToolNames?: string[];
+};
+
+export type UnavailableMcpServer = {
+    serverUuid: string;
+    serverName: string;
+    message: string;
+    status: AiMcpServerConnectionStatus;
+};
+
 export type AiAgentArgs = AnyAiModel & {
     agentSettings: AiAgent;
+    knowledgeDocuments: AiAgentDocumentSummary[];
+    mcpServers: AiAgentMcpServer[];
     messageHistory: ModelMessage[];
     promptUuid: string;
     threadUuid: string;
@@ -37,6 +75,13 @@ export type AiAgentArgs = AnyAiModel & {
     telemetryEnabled: boolean;
     enableDataAccess: boolean;
     enableSelfImprovement: boolean;
+    canRunSql: boolean;
+    autoApproveSql: boolean;
+    autoApproveSqlUserUuid: string | null;
+    warehouseType: WarehouseTypes | null;
+    warehouseSchema: string | null;
+    availableSkills: AiAgentSkillReference[];
+    enableAgentRevamp: boolean;
 
     findExploresFieldSearchSize: number;
     findFieldsPageSize: number;
@@ -44,6 +89,7 @@ export type AiAgentArgs = AnyAiModel & {
     maxQueryLimit: number;
     siteUrl: string;
     canManageAgent: boolean;
+    toolHints: string[];
 };
 
 export type PerformanceMetrics = {
@@ -60,15 +106,24 @@ export type PerformanceMetrics = {
 export type AiAgentDependencies = {
     listExplores: ListExploresFn;
     findContent: FindContentFn;
+    readContent: ReadContentFn;
+    editContent: EditContentFn;
     getDashboardCharts: GetDashboardChartsFn;
     findExplores: FindExploresFn;
     findFields: FindFieldFn;
     getExplore: GetExploreFn;
     getExploreCompiler: GetExploreCompilerFn;
     runAsyncQuery: RunAsyncQueryFn;
+    runSqlJob: RunSqlJobFn;
+    listWarehouseTables: ListWarehouseTablesFn;
+    describeWarehouseTable: DescribeWarehouseTableFn;
+    listKnowledgeDocuments: ListKnowledgeDocumentsFn;
+    getKnowledgeDocumentContent: GetKnowledgeDocumentContentFn;
     getSavedChart: GetSavedChartFn;
     getPrompt: GetPromptFn;
     sendFile: SendFileFn;
+    sendSlackBlocks: SendSlackBlocksFn;
+    updateSlackMessage: UpdateSlackMessageFn;
     updatePrompt: UpdatePromptFn;
     updateProgress: UpdateProgressFn;
     storeToolCall: StoreToolCallFn;
@@ -78,6 +133,9 @@ export type AiAgentDependencies = {
     trackEvent: TrackEventFn;
     createOrUpdateArtifact: CreateOrUpdateArtifactFn;
     createChange: CreateChangeFn;
+    waitForSqlApproval: WaitForSqlApprovalFn;
+    recordSqlApproval: RecordSqlApprovalFn;
+    loadSkill: LoadAgentSkillFn;
     perf: PerformanceMetrics;
 };
 

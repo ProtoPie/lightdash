@@ -11,6 +11,7 @@ import {
     HealthState,
     isDashboardChartTileType,
     isDashboardSqlChartTile,
+    isTileInSelectedTabs,
     LightdashMode,
     LightdashPage,
     LightdashRequestMethodHeader,
@@ -52,10 +53,12 @@ import {
 import { LightdashConfig } from '../../config/parseConfig';
 import { slackErrorHandler } from '../../errors';
 import Logger from '../../logging/logger';
+import { AppModel } from '../../models/AppModel';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
 import { DownloadFileModel } from '../../models/DownloadFileModel';
 import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
+import { SavedSqlModel } from '../../models/SavedSqlModel';
 import { ShareModel } from '../../models/ShareModel';
 import { SlackAuthenticationModel } from '../../models/SlackAuthenticationModel';
 import { SlackUnfurlImageModel } from '../../models/SlackUnfurlImageModel';
@@ -237,6 +240,8 @@ export type ParsedUrl = {
     dashboardUuid?: string;
     projectUuid?: string;
     chartUuid?: string;
+    savedSqlUuid?: string;
+    appUuid?: string;
     exploreModel?: string;
 };
 
@@ -271,6 +276,8 @@ type UnfurlServiceArguments = {
     lightdashConfig: LightdashConfig;
     dashboardModel: DashboardModel;
     savedChartModel: SavedChartModel;
+    savedSqlModel: SavedSqlModel;
+    appModel: AppModel;
     shareModel: ShareModel;
     fileStorageClient: FileStorageClient;
     slackClient: SlackClient;
@@ -288,6 +295,10 @@ export class UnfurlService extends BaseService {
     dashboardModel: DashboardModel;
 
     savedChartModel: SavedChartModel;
+
+    savedSqlModel: SavedSqlModel;
+
+    appModel: AppModel;
 
     shareModel: ShareModel;
 
@@ -311,6 +322,8 @@ export class UnfurlService extends BaseService {
         lightdashConfig,
         dashboardModel,
         savedChartModel,
+        savedSqlModel,
+        appModel,
         shareModel,
         fileStorageClient,
         projectModel,
@@ -325,6 +338,8 @@ export class UnfurlService extends BaseService {
         this.lightdashConfig = lightdashConfig;
         this.dashboardModel = dashboardModel;
         this.savedChartModel = savedChartModel;
+        this.savedSqlModel = savedSqlModel;
+        this.appModel = appModel;
         this.shareModel = shareModel;
         this.fileStorageClient = fileStorageClient;
         this.slackClient = slackClient;
@@ -385,12 +400,12 @@ export class UnfurlService extends BaseService {
 
                 validateSelectedTabs(selectedTabs, dashboard.tiles);
 
-                // Filter tiles based on selected tabs if they exist
-                const filteredTiles = selectedTabs
-                    ? dashboard.tiles.filter((tile) =>
-                          selectedTabs.includes(tile.tabUuid || ''),
-                      )
-                    : dashboard.tiles;
+                // Filter tiles based on selected tabs if they exist.
+                // Orphan tiles (tabUuid=null) are always included to match the
+                // frontend behaviour that renders them on the first tab.
+                const filteredTiles = dashboard.tiles.filter((tile) =>
+                    isTileInSelectedTabs(tile, selectedTabs),
+                );
 
                 return {
                     title: dashboard.name,
@@ -422,6 +437,20 @@ export class UnfurlService extends BaseService {
                     chartType: chart.chartType,
                     resourceUuid: chart.uuid,
                 };
+            case LightdashPage.SQL_CHART:
+                if (!parsedUrl.savedSqlUuid)
+                    throw new ParameterError(
+                        `Missing savedSqlUuid when unfurling SQL Runner URL ${parsedUrl.url}`,
+                    );
+                const sqlChart = await this.savedSqlModel.getByUuid(
+                    parsedUrl.savedSqlUuid,
+                );
+                return {
+                    title: sqlChart.name,
+                    description: sqlChart.description ?? undefined,
+                    organizationUuid: sqlChart.organization.organizationUuid,
+                    resourceUuid: sqlChart.savedSqlUuid,
+                };
             case LightdashPage.EXPLORE:
                 const project = await this.projectModel.getSummary(
                     parsedUrl.projectUuid!,
@@ -433,6 +462,25 @@ export class UnfurlService extends BaseService {
                 return {
                     title: exploreName,
                     organizationUuid: project.organizationUuid,
+                };
+            case LightdashPage.APP:
+                if (!parsedUrl.appUuid)
+                    throw new ParameterError(
+                        `Missing appUuid when unfurling App URL ${parsedUrl.url}`,
+                    );
+                const app = await this.appModel.findAppByUuid(
+                    parsedUrl.appUuid,
+                );
+                if (!app) {
+                    throw new ParameterError(
+                        `App not found when unfurling URL ${parsedUrl.url}`,
+                    );
+                }
+                return {
+                    title: app.name,
+                    description: app.description,
+                    organizationUuid: app.organization_uuid,
+                    resourceUuid: app.app_id,
                 };
             case undefined:
                 throw new Error(`Unrecognized page for URL ${parsedUrl.url}`);
@@ -638,15 +686,15 @@ export class UnfurlService extends BaseService {
 
         validateSelectedTabs(selectedTabs, dashboard.tiles);
 
-        // Create a new URLSearchParams object for query filters
+        // Create a new URLSearchParams object for query filters.
+        // When selectedTabs is null we forward every tab UUID present on the
+        // dashboard (and `null` for orphan tiles) so the frontend's
+        // `schedulerTabsSelected.includes(tile.tabUuid)` filter keeps orphans
+        // in the aggregated screenshot. See PROD-2505.
         const selectedTabsParams = new URLSearchParams();
-        const selectedTabsList =
+        const selectedTabsList: (string | null)[] =
             selectedTabs ??
-            uniq(
-                dashboard.tiles
-                    .map((tile) => tile.tabUuid)
-                    .filter((tabUuid) => !!tabUuid),
-            );
+            uniq(dashboard.tiles.map((tile) => tile.tabUuid ?? null));
 
         if (selectedTabsList.length > 0)
             selectedTabsParams.set(
@@ -1361,27 +1409,125 @@ export class UnfurlService extends BaseService {
                         );
                     }
 
-                    this.logger.info(
-                        `Waiting for screenshot ready indicator - unfurlId: ${imageId}`,
-                    );
-                    try {
-                        await page.waitForSelector(
-                            SCREENSHOT_SELECTORS.READY_INDICATOR,
-                            {
-                                state: 'attached',
-                                timeout: RESPONSE_TIMEOUT_MS,
-                            },
-                        );
+                    if (lightdashPage === LightdashPage.APP) {
+                        // Apps render inside a sandboxed cross-origin iframe,
+                        // so a DOM-level indicator inside the iframe doesn't
+                        // bubble out to the parent. `MinimalApp` mounts the
+                        // ready indicator on the *parent* page once the iframe
+                        // has loaded and all SDK-bridge queries have settled
+                        // (the bridge sees every metric query the iframe
+                        // runs). After the signal we sleep briefly so CSS /
+                        // chart entrance animations can finish.
+                        const APP_READY_TIMEOUT_MS = 60_000;
+                        const APP_ANIMATION_BUFFER_MS = 5_000;
                         this.logger.info(
-                            `Screenshot ready indicator found - page is ready - unfurlId: ${imageId}`,
+                            `Waiting for app screenshot ready indicator (timeout ${APP_READY_TIMEOUT_MS}ms) - unfurlId: ${imageId}`,
                         );
-                    } catch (waitError) {
-                        // Probe the always-mounted progress indicator to find
-                        // out which tiles never reported ready/errored. Logged
-                        // before re-throwing so callers (and retries) can see
-                        // exactly which tile is blocking the indicator.
-                        await this.logUnreadyTilesOnTimeout(page, url, imageId);
-                        throw waitError;
+                        try {
+                            await page.waitForSelector(
+                                SCREENSHOT_SELECTORS.READY_INDICATOR,
+                                {
+                                    state: 'attached',
+                                    timeout: APP_READY_TIMEOUT_MS,
+                                },
+                            );
+                            this.logger.info(
+                                `App ready indicator found - waiting ${APP_ANIMATION_BUFFER_MS}ms for animations - unfurlId: ${imageId}`,
+                            );
+                        } catch (waitError) {
+                            // Fall through to the animation buffer so the
+                            // screenshot still happens for apps that never
+                            // signal (older bundles, or pathological cases).
+                            this.logger.warn(
+                                `App ready indicator not detected within ${APP_READY_TIMEOUT_MS}ms; proceeding with animation buffer only - unfurlId: ${imageId}`,
+                            );
+                        }
+                        // page.evaluate keeps CDP traffic flowing during the
+                        // animation buffer so a remote Chromium doesn't drop
+                        // the connection on idle.
+                        await page.evaluate(
+                            (ms) =>
+                                new Promise((resolve) => {
+                                    setTimeout(resolve, ms);
+                                }),
+                            APP_ANIMATION_BUFFER_MS,
+                        );
+                    } else {
+                        this.logger.info(
+                            `Waiting for screenshot ready indicator - unfurlId: ${imageId}`,
+                        );
+                        try {
+                            await page.waitForSelector(
+                                SCREENSHOT_SELECTORS.READY_INDICATOR,
+                                {
+                                    state: 'attached',
+                                    timeout: RESPONSE_TIMEOUT_MS,
+                                },
+                            );
+                            this.logger.info(
+                                `Screenshot ready indicator found - page is ready - unfurlId: ${imageId}`,
+                            );
+                        } catch (waitError) {
+                            // Probe the always-mounted progress indicator to
+                            // find out which tiles never reported
+                            // ready/errored. Logged before re-throwing so
+                            // callers (and retries) can see exactly which
+                            // tile is blocking the indicator.
+                            await this.logUnreadyTilesOnTimeout(
+                                page,
+                                url,
+                                imageId,
+                            );
+                            throw waitError;
+                        }
+                    }
+
+                    if (lightdashPage === LightdashPage.APP) {
+                        // The app is rendered inside a sandboxed iframe sized
+                        // to 100vh on the parent. The browser doesn't expose
+                        // the iframe's internal scroll height to the parent
+                        // body's boundingBox, so a normal screenshot only
+                        // captures the visible portion. Reach into the
+                        // iframe (Playwright bypasses sandbox same-origin
+                        // restrictions via CDP), measure its content height,
+                        // and stretch the iframe element on the parent so
+                        // the parent body grows to match — then the existing
+                        // boundingBox + setViewportSize path captures it
+                        // all.
+                        try {
+                            const frames = page!.frames();
+                            const mainFrame = page!.mainFrame();
+                            const appFrame = frames.find(
+                                (f) => f !== mainFrame,
+                            );
+                            if (appFrame) {
+                                const contentHeight = await appFrame.evaluate(
+                                    () =>
+                                        Math.max(
+                                            document.documentElement
+                                                .scrollHeight,
+                                            document.body?.scrollHeight ?? 0,
+                                        ),
+                                );
+                                if (contentHeight > 0) {
+                                    await page!.evaluate((h) => {
+                                        const iframe =
+                                            document.querySelector('iframe');
+                                        if (iframe) {
+                                            iframe.style.height = `${h}px`;
+                                        }
+                                    }, contentHeight);
+                                    // Layout settle.
+                                    await page!.waitForTimeout(150);
+                                }
+                            }
+                        } catch (err) {
+                            this.logger.warn(
+                                `App full-content stretch failed; falling back to viewport capture - unfurlId: ${imageId}, err: ${getErrorMessage(
+                                    err,
+                                )}`,
+                            );
+                        }
                     }
 
                     // Auto-detect CJK language from page content and set
@@ -1538,6 +1684,24 @@ export class UnfurlService extends BaseService {
                     ) {
                         imageBuffer = await page
                             .locator(finalSelector)
+                            .screenshot({
+                                path,
+                                animations: 'disabled',
+                                timeout: RESPONSE_TIMEOUT_MS,
+                            });
+                    } else if (lightdashPage === LightdashPage.APP) {
+                        // Screenshot the iframe element directly. The iframe
+                        // was stretched above to fit its inner contentHeight,
+                        // so this captures exactly the app surface with no
+                        // surrounding parent-page whitespace. A `fullPage`
+                        // shot here picks up `documentElement.scrollHeight`,
+                        // which is consistently a few px taller than the
+                        // iframe (parent Box stays at 100vh, body/html scroll
+                        // bounds extend past the iframe bottom) — producing
+                        // a thin white sliver at the bottom of the delivery.
+                        imageBuffer = await page
+                            .locator('iframe')
+                            .first()
                             .screenshot({
                                 path,
                                 animations: 'disabled',
@@ -1704,7 +1868,25 @@ export class UnfurlService extends BaseService {
         const dashboardUrl = new RegExp(`/projects/${uuid}/dashboards/${uuid}`);
         const chartUrl = new RegExp(`/projects/${uuid}/saved/${uuid}`);
         const exploreUrl = new RegExp(`/projects/${uuid}/tables/`);
+        const sqlChartUrl = new RegExp(
+            `/projects/(${uuid})/sql-runner/([^/?#]+)`,
+        );
+        const appUrl = new RegExp(`/projects/${uuid}/apps/${uuid}`);
 
+        if (url.match(appUrl) !== null) {
+            const [projectUuid, appUuid] = url.match(uuidRegex) || [];
+            return {
+                isValid: true,
+                lightdashPage: LightdashPage.APP,
+                url,
+                minimalUrl: new URL(
+                    `/minimal/projects/${projectUuid}/apps/${appUuid}`,
+                    this.lightdashConfig.headlessBrowser.internalLightdashHost,
+                ).href,
+                projectUuid,
+                appUuid,
+            };
+        }
         if (url.match(dashboardUrl) !== null) {
             const [projectUuid, dashboardUuid] = url.match(uuidRegex) || [];
 
@@ -1751,6 +1933,35 @@ export class UnfurlService extends BaseService {
                 projectUuid,
                 exploreModel,
             };
+        }
+        const sqlChartMatch = url.match(sqlChartUrl);
+        if (sqlChartMatch !== null) {
+            const [, projectUuid, slug] = sqlChartMatch;
+            try {
+                const sqlChart = await this.savedSqlModel.getBySlug(
+                    projectUuid,
+                    slug,
+                );
+                return {
+                    isValid: true,
+                    lightdashPage: LightdashPage.SQL_CHART,
+                    url,
+                    minimalUrl: new URL(
+                        `/minimal/projects/${projectUuid}/sql-runner/${sqlChart.savedSqlUuid}`,
+                        this.lightdashConfig.headlessBrowser
+                            .internalLightdashHost,
+                    ).href,
+                    projectUuid,
+                    savedSqlUuid: sqlChart.savedSqlUuid,
+                };
+            } catch (e) {
+                this.logger.debug(
+                    `SQL chart slug ${slug} did not resolve in project ${projectUuid}: ${getErrorMessage(
+                        e,
+                    )}`,
+                );
+                // fall through to isValid: false
+            }
         }
 
         this.logger.debug(`URL to unfurl ${url} is not valid`);
@@ -1838,11 +2049,27 @@ export class UnfurlService extends BaseService {
 
         Logger.debug(`Got link_shared slack event ${event.message_ts}`);
 
+        const { teamId } = context;
+        if (!teamId) {
+            Logger.warn(
+                `Slack unfurl skipped: no teamId on link_shared event ${event.message_ts}`,
+            );
+            return;
+        }
+
+        const unfurlsEnabled =
+            await this.slackAuthenticationModel.getUnfurlsEnabled(teamId);
+        if (!unfurlsEnabled) {
+            Logger.info(
+                `Slack unfurl skipped for team ${teamId}: link unfurls disabled in integration settings`,
+            );
+            return;
+        }
+
         void event.links.map(async (l) => {
             const eventUserId = context.botUserId;
 
             try {
-                const { teamId } = context;
                 const details = await this.unfurlDetails(l.url, null);
 
                 if (details) {
@@ -1870,9 +2097,7 @@ export class UnfurlService extends BaseService {
 
                     const imageId = `slack-image-${useNanoid()}`;
                     const authUserUuid =
-                        await this.slackAuthenticationModel.getUserUuid(
-                            teamId ?? '',
-                        );
+                        await this.slackAuthenticationModel.getUserUuid(teamId);
 
                     const installation =
                         await this.slackAuthenticationModel.getInstallationFromOrganizationUuid(

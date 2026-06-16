@@ -458,6 +458,42 @@ type AiAgentAskClickedEvent = {
     };
 };
 
+type AiAgentChatMinimizedEvent = {
+    name: EventName.AI_AGENT_CHAT_MINIMIZED;
+    properties: {
+        userId: string | undefined;
+        organizationId: string | undefined;
+        projectId: string;
+        agentUuid: string;
+        threadUuid: string | undefined;
+    };
+};
+
+type AiAgentSuggestionImpressionEvent = {
+    name: EventName.AI_AGENT_SUGGESTION_IMPRESSION;
+    properties: {
+        projectId: string;
+        agentId: string;
+        chipCount: number;
+    };
+};
+
+type AiAgentSuggestionClickEvent = {
+    name: EventName.AI_AGENT_SUGGESTION_CLICK;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        agentId: string;
+        threadId?: string;
+        afterMessageId?: string;
+        chipLabel: string;
+        chipKind: 'prompt' | 'navigate';
+        chipTool?: string;
+        chipIndex: number;
+        mode: 'empty-state' | 'post-response';
+    };
+};
+
 type ThemeToggledEvent = {
     name: EventName.THEME_TOGGLED;
     properties: {
@@ -502,6 +538,17 @@ type DashboardUiVersionToggledEvent = {
     };
 };
 
+type DashboardFilterLockToggledEvent = {
+    name: EventName.DASHBOARD_FILTER_LOCK_TOGGLED;
+    properties: {
+        action: 'lock' | 'unlock';
+        dashboardUuid: string | undefined;
+        tabUuid: string | undefined;
+        fieldId: string;
+        tableName: string;
+    };
+};
+
 export type EventData =
     | GenericEvent
     | SetupStepClickedEvent
@@ -540,10 +587,14 @@ export type EventData =
     | AiAgentChartCreatedEvent
     | AiAgentChartExploredEvent
     | AiAgentAskClickedEvent
+    | AiAgentChatMinimizedEvent
+    | AiAgentSuggestionImpressionEvent
+    | AiAgentSuggestionClickEvent
     | ThemeToggledEvent
     | DashboardUiVersionToggledEvent
     | TableCalculationSaveEvent
-    | FormulaTableCalculationAiGenerateClickedEvent;
+    | FormulaTableCalculationAiGenerateClickedEvent
+    | DashboardFilterLockToggledEvent;
 
 export type IdentifyData = {
     id: string;

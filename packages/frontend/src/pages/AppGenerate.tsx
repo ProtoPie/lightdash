@@ -2,6 +2,7 @@ import { subject } from '@casl/ability';
 import {
     ChartKind,
     ContentType,
+    DEFAULT_DATA_APP_CLAUDE_MODEL,
     FeatureFlags,
     isAppVersionInProgress,
     ResourceViewItemType,
@@ -9,6 +10,7 @@ import {
     type AppChartReference,
     type AppClarification,
     type AppDashboardReference,
+    type DataAppClaudeModel,
     type DataAppTemplate,
 } from '@lightdash/common';
 import {
@@ -27,25 +29,30 @@ import {
     Title,
     Tooltip,
 } from '@mantine-8/core';
-import { useLocalStorage } from '@mantine-8/hooks';
 import {
     IconAppsOff,
     IconAppWindow,
     IconArrowUp,
+    IconCopy,
+    IconDatabase,
+    IconBrush,
     IconDots,
     IconExternalLink,
+    IconArrowBackUp,
     IconFolderPlus,
     IconFolderSymlink,
     IconPencil,
     IconLayoutDashboard,
     IconPlayerStop,
     IconRefresh,
+    IconRestore,
     IconSparkles,
     IconTrash,
 } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdownPreview from '@uiw/react-markdown-preview';
 import {
+    forwardRef,
     useCallback,
     useEffect,
     useMemo,
@@ -62,22 +69,26 @@ import {
     useParams,
 } from 'react-router';
 import { v4 as uuid4 } from 'uuid';
+import Callout from '../components/common/Callout';
 import MantineIcon from '../components/common/MantineIcon';
+import MantineModal from '../components/common/MantineModal';
 import AppDeleteModal from '../components/common/modal/AppDeleteModal';
 import AppUpdateModal from '../components/common/modal/AppUpdateModal';
-import { ChartIcon, IconBox } from '../components/common/ResourceIcon';
+import { getChartIcon } from '../components/common/ResourceIcon/utils';
 import SuboptimalState from '../components/common/SuboptimalState/SuboptimalState';
 import TransferItemsModal from '../components/common/TransferItemsModal/TransferItemsModal';
-import AppIframePreview from '../features/apps/AppIframePreview';
+import AppIframePreview, {
+    type AppIframePreviewHandle,
+} from '../features/apps/AppIframePreview';
 import AppPromptEditor, {
     type AppPromptEditorHandle,
     type ElementRef,
 } from '../features/apps/AppPromptEditor';
 import {
-    DashboardButton,
-    ImageButton,
+    AttachButton,
     InspectButton,
-    QueryButton,
+    ModelPicker,
+    ScreenshotButton,
     SelectedDashboardSection,
     SelectedImageSection,
     SelectedQuerySection,
@@ -85,6 +96,7 @@ import {
     type SelectedDashboard,
 } from '../features/apps/AppResourcePicker';
 import AppTemplatePicker from '../features/apps/AppTemplatePicker';
+import ChatBubbleMeta from '../features/apps/ChatBubbleMeta';
 import ChatMessageContent from '../features/apps/ChatMessageContent';
 import { useAppBuildPoller } from '../features/apps/hooks/useAppBuildPoller';
 import { useAppImageUpload } from '../features/apps/hooks/useAppImageUpload';
@@ -94,12 +106,21 @@ import type { QueryEvent } from '../features/apps/hooks/useAppSdkBridge';
 import { useBuildNotification } from '../features/apps/hooks/useBuildNotification';
 import { useCancelAppVersion } from '../features/apps/hooks/useCancelAppVersion';
 import { useClarifyApp } from '../features/apps/hooks/useClarifyApp';
+import { useDuplicateApp } from '../features/apps/hooks/useDuplicateApp';
 import { useGenerateApp } from '../features/apps/hooks/useGenerateApp';
 import { useGetApp } from '../features/apps/hooks/useGetApp';
 import { useIterateApp } from '../features/apps/hooks/useIterateApp';
+import { useRestoreAppVersion } from '../features/apps/hooks/useRestoreAppVersion';
+import { useTrackedAppQueries } from '../features/apps/hooks/useTrackedAppQueries';
 import { usePreviewOrigin } from '../features/apps/previewOrigin';
 import QueryInspector from '../features/apps/QueryInspector';
 import { getTemplate } from '../features/apps/templates';
+import {
+    mergeChatMessages,
+    type ChatChart,
+    type ChatMessage,
+} from '../features/apps/utils/mergeChatMessages';
+import { useOrganizationDesigns } from '../features/organizationDesigns/hooks/useOrganizationDesigns';
 import useToaster from '../hooks/toaster/useToaster';
 import { useContentAction } from '../hooks/useContent';
 import { useServerFeatureFlag } from '../hooks/useServerOrClientFeatureFlag';
@@ -107,8 +128,6 @@ import { useSpaceSummaries } from '../hooks/useSpaces';
 import { useAbilityContext } from '../providers/Ability/useAbilityContext';
 import useApp from '../providers/App/useApp';
 import classes from './AppGenerate.module.css';
-
-const PERSIST_LOGS_STORAGE_KEY = 'data-apps:persist-logs';
 
 /**
  * Parse `[tag "text" @loc]` (or `[tag @loc]`, `[tag "text"]`, `[tag]`) from
@@ -128,23 +147,8 @@ function parseElementRefLabel(label: string): ElementRef | null {
     return { tag: m[1] ?? '', text: m[2] ?? '', loc: m[3] ?? '' };
 }
 
-type ChatChart = {
-    name: string;
-    uuid: string;
-    chartKind?: ChartKind;
-};
-
-type ChatMessage = {
-    role: 'user' | 'assistant';
-    content: string;
-    imagePreviewUrls: string[];
-    imageResourceIds: string[];
-    charts: ChatChart[];
-    dashboardName: string | null;
-    clarifications: AppClarification[];
-    appUuid: string | null;
-    version: number | null;
-};
+// ChatChart and ChatMessage are imported from `features/apps/utils/mergeChatMessages`
+// alongside the merge helper, so the type and the merge logic stay collocated.
 
 const AppResourceImage: FC<{
     projectUuid: string;
@@ -157,7 +161,7 @@ const AppResourceImage: FC<{
     return <Image src={data.imageUrl} className={className} alt="Attached" />;
 };
 
-const AppPreview: FC<{
+type AppPreviewProps = {
     projectUuid: string;
     appUuid: string;
     version: number;
@@ -170,64 +174,77 @@ const AppPreview: FC<{
     inspectorEnabled?: boolean;
     onElementSelected?: (event: { label: string }) => void;
     onInspectorAvailabilityChange?: (available: boolean) => void;
+    onScreenshotAvailabilityChange?: (available: boolean) => void;
     onInspectorCancelled?: () => void;
-}> = ({
-    projectUuid,
-    appUuid,
-    version,
-    refreshKey,
-    onQueryEvent,
-    inspectorEnabled,
-    onElementSelected,
-    onInspectorAvailabilityChange,
-    onInspectorCancelled,
-}) => {
-    const {
-        data: token,
-        isLoading,
-        error,
-    } = useAppPreviewToken(projectUuid, appUuid, version);
-
-    const previewOrigin = usePreviewOrigin();
-    const previewUrl = token
-        ? `${previewOrigin}/api/apps/${appUuid}/versions/${version}/?token=${token}&r=${refreshKey}#transport=postMessage&projectUuid=${projectUuid}`
-        : undefined;
-
-    if (isLoading) {
-        return (
-            <Group gap="sm" p="md" justify="center">
-                <Loader size="sm" />
-                <Text size="sm" c="dimmed">
-                    Loading preview...
-                </Text>
-            </Group>
-        );
-    }
-
-    if (error) {
-        return (
-            <Text c="red" p="md" size="sm">
-                Failed to load preview:{' '}
-                {error instanceof Error ? error.message : 'Unknown error'}
-            </Text>
-        );
-    }
-
-    if (!previewUrl) return null;
-
-    return (
-        <AppIframePreview
-            src={previewUrl}
-            expectedPreviewOrigin={previewOrigin}
-            identityKey={`${appUuid}:${version}`}
-            onQueryEvent={onQueryEvent}
-            inspectorEnabled={inspectorEnabled}
-            onElementSelected={onElementSelected}
-            onInspectorAvailabilityChange={onInspectorAvailabilityChange}
-            onInspectorCancelled={onInspectorCancelled}
-        />
-    );
 };
+
+const AppPreview = forwardRef<AppIframePreviewHandle, AppPreviewProps>(
+    (
+        {
+            projectUuid,
+            appUuid,
+            version,
+            refreshKey,
+            onQueryEvent,
+            inspectorEnabled,
+            onElementSelected,
+            onInspectorAvailabilityChange,
+            onScreenshotAvailabilityChange,
+            onInspectorCancelled,
+        },
+        ref,
+    ) => {
+        const {
+            data: token,
+            isLoading,
+            error,
+        } = useAppPreviewToken(projectUuid, appUuid, version);
+
+        const previewOrigin = usePreviewOrigin();
+        const previewUrl = token
+            ? `${previewOrigin}/api/apps/${appUuid}/versions/${version}/t/${token}/?r=${refreshKey}#transport=postMessage&projectUuid=${projectUuid}`
+            : undefined;
+
+        if (isLoading) {
+            return (
+                <Group gap="sm" p="md" justify="center">
+                    <Loader size="sm" />
+                    <Text size="sm" c="dimmed">
+                        Loading preview...
+                    </Text>
+                </Group>
+            );
+        }
+
+        if (error) {
+            return (
+                <Text c="red" p="md" size="sm">
+                    Failed to load preview:{' '}
+                    {error instanceof Error ? error.message : 'Unknown error'}
+                </Text>
+            );
+        }
+
+        if (!previewUrl) return null;
+
+        return (
+            <AppIframePreview
+                ref={ref}
+                src={previewUrl}
+                expectedPreviewOrigin={previewOrigin}
+                identityKey={appUuid}
+                onQueryEvent={onQueryEvent}
+                inspectorEnabled={inspectorEnabled}
+                onElementSelected={onElementSelected}
+                onInspectorAvailabilityChange={onInspectorAvailabilityChange}
+                onScreenshotAvailabilityChange={onScreenshotAvailabilityChange}
+                onInspectorCancelled={onInspectorCancelled}
+            />
+        );
+    },
+);
+
+AppPreview.displayName = 'AppPreview';
 
 const LoadingDots: FC = () => (
     <span className={classes.loadingDots}>
@@ -240,18 +257,27 @@ const LoadingDots: FC = () => (
 const TemplateChip: FC<{ template: DataAppTemplate }> = ({ template }) => {
     const t = getTemplate(template);
     return (
-        <Group gap="xs" pb="xs">
-            <Badge
-                variant="light"
-                color="gray"
-                size="md"
-                leftSection={<MantineIcon icon={t.icon} size={12} />}
-            >
-                {t.title}
-            </Badge>
-        </Group>
+        <Badge
+            variant="light"
+            color="gray"
+            size="md"
+            leftSection={<MantineIcon icon={t.icon} size={12} />}
+        >
+            {t.title}
+        </Badge>
     );
 };
+
+const ThemeChip: FC<{ themeName: string }> = ({ themeName }) => (
+    <Badge
+        variant="light"
+        color="gray"
+        size="md"
+        leftSection={<MantineIcon icon={IconBrush} size={12} />}
+    >
+        {themeName}
+    </Badge>
+);
 
 const AppGenerate: FC = () => {
     const { projectUuid, appUuid: urlAppUuid } = useParams<{
@@ -290,11 +316,26 @@ const AppGenerate: FC = () => {
     //             wizard no longer asks any questions of its own.
     const [selectedTemplate, setSelectedTemplate] =
         useState<DataAppTemplate | null>(null);
+    // Claude model used for the next submit. By default, derived from the
+    // most recent version's persisted `resources.claudeModel` so reopening
+    // an app pre-selects whatever model it was last built with. The user's
+    // explicit pick (tracked in `modelOverride` below) wins until they
+    // navigate to a different app. Per-version persistence happens
+    // server-side on `AppVersionResources.claudeModel`.
+    //
+    // Keyed by appUuid (mirrors the `pin` lifecycle) so the override
+    // self-invalidates when the user navigates — no useEffect+setState
+    // chain (lightdash frontend rule).
+    const [modelOverride, setModelOverride] = useState<{
+        appUuid: string | null; // null = override set from the new-app page
+        model: DataAppClaudeModel;
+    } | null>(null);
     const [wizardStage, setWizardStage] = useState<'pick' | 'confirm'>('pick');
     const [imageAttachments, setImageAttachments] = useState<
         Array<{
             file: File;
             previewUrl: string;
+            kind?: 'screenshot';
         }>
     >([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -311,48 +352,25 @@ const AppGenerate: FC = () => {
     // inspector. Existing apps in resumed sandboxes may have an older SDK
     // that never announces, in which case the toggle stays hidden.
     const [inspectorAvailable, setInspectorAvailable] = useState(false);
-    const [trackedQueries, setTrackedQueries] = useState<QueryEvent[]>([]);
-    // Mirrors Chrome DevTools "Preserve log". When off (default), the queries
-    // panel is cleared on iframe refresh and on new-version load — fresh
-    // bundles re-run their queries, so stale entries would only confuse the
-    // user. Stored in localStorage so the preference survives a tab close
-    // and stays consistent across tabs.
-    const [persistLogs, setPersistLogs] = useLocalStorage<boolean>({
-        key: PERSIST_LOGS_STORAGE_KEY,
-        defaultValue: false,
-    });
-    // Request IDs of queries we marked as interrupted on iframe reload. The
-    // bridge's parent-side fetch keeps running after the iframe dies and will
-    // emit a late `running` event for them — without this guard that event
-    // would resurrect the entry as 'running', or (if not matched) get appended
-    // as a fresh ghost entry. The set grows for the page session; entries are
-    // short request IDs, so the footprint is negligible.
-    const interruptedRequestIdsRef = useRef<Set<string>>(new Set());
-    const handleClearQueries = useCallback(() => {
-        setTrackedQueries([]);
-    }, []);
-    // Move pending/running entries into a terminal `error` state. Used when
-    // the preview iframe reloads with persistLogs on — the iframe that would
-    // have polled their queryUuids is dead, so they would otherwise sit
-    // non-terminal forever.
-    const interruptInFlightQueries = useCallback(() => {
-        setTrackedQueries((prev) => {
-            let mutated = false;
-            const next = prev.map((q) => {
-                if (q.status !== 'pending' && q.status !== 'running') {
-                    return q;
-                }
-                mutated = true;
-                interruptedRequestIdsRef.current.add(q.id);
-                return {
-                    ...q,
-                    status: 'error' as const,
-                    error: 'Interrupted by reload',
-                };
-            });
-            return mutated ? next : prev;
-        });
-    }, []);
+    // Same handshake for screenshot capture. Older templates (resumed
+    // sandboxes built before this feature shipped) never announce, so the
+    // Screenshot button stays hidden — they keep working as before.
+    const [screenshotAvailable, setScreenshotAvailable] = useState(false);
+    const [isCapturingScreenshot, setIsCapturingScreenshot] = useState(false);
+    const previewRef = useRef<AppIframePreviewHandle>(null);
+    const {
+        queries: trackedQueries,
+        persistLogs,
+        setPersistLogs,
+        handleQueryEvent,
+        clearQueries,
+        interruptInFlightQueries,
+    } = useTrackedAppQueries();
+    // Parent-owned visibility so the X dismisses the panel completely and the
+    // user re-opens it from the dots menu — same model as preview, for
+    // consistency. Defaults to visible because the builder is the technical
+    // workflow where seeing queries as they fire is the point.
+    const [queriesPanelHidden, setQueriesPanelHidden] = useState(false);
     const handleElementSelected = useCallback((event: { label: string }) => {
         const ref = parseElementRefLabel(event.label);
         if (!ref) {
@@ -369,65 +387,6 @@ const AppGenerate: FC = () => {
     const handleInspectorCancelled = useCallback(() => {
         setInspectorEnabled(false);
     }, []);
-    const handleQueryEvent = useCallback((event: QueryEvent) => {
-        // Drop late events (typically the POST-resolution `running` event)
-        // for requests we already marked interrupted — without this they
-        // either un-terminal the entry or get appended as a ghost.
-        if (interruptedRequestIdsRef.current.has(event.id)) {
-            return;
-        }
-        setTrackedQueries((prev) => {
-            // If this event has a queryUuid, merge it with an existing entry
-            if (event.queryUuid) {
-                const existing = prev.find(
-                    (q) => q.queryUuid === event.queryUuid,
-                );
-                if (existing) {
-                    // Don't resurrect a terminal entry. Covers the rare race
-                    // where iframe-1 managed to issue a poll GET before
-                    // dying, so a late `ready` event arrives keyed on the
-                    // (already-interrupted) queryUuid.
-                    if (
-                        existing.status === 'ready' ||
-                        existing.status === 'error'
-                    ) {
-                        return prev;
-                    }
-                    return prev.map((q) =>
-                        q.queryUuid === event.queryUuid
-                            ? {
-                                  ...q,
-                                  label: event.label ?? q.label,
-                                  status: event.status,
-                                  rowCount: event.rowCount ?? q.rowCount,
-                                  durationMs: event.durationMs ?? q.durationMs,
-                                  error: event.error ?? q.error,
-                                  rawMetricQuery:
-                                      event.rawMetricQuery ?? q.rawMetricQuery,
-                              }
-                            : q,
-                    );
-                }
-            }
-            // If this is a POST initiation with queryUuid, check if we
-            // have a pending entry from the same request id to merge
-            const pendingIdx = prev.findIndex(
-                (q) => q.id === event.id && q.status === 'pending',
-            );
-            if (pendingIdx >= 0) {
-                return prev.map((q, i) =>
-                    i === pendingIdx
-                        ? {
-                              ...event,
-                              rawMetricQuery:
-                                  event.rawMetricQuery ?? q.rawMetricQuery,
-                          }
-                        : q,
-                );
-            }
-            return [...prev, event];
-        });
-    }, []);
     const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
     // Pre-build clarification round: captured submission args that we need
     // to fire the actual generate call once the user answers the questions.
@@ -442,6 +401,14 @@ const AppGenerate: FC = () => {
         charts: AppChartReference[] | undefined;
         dashboard: AppDashboardReference | undefined;
         spaceUuid: string | undefined;
+        // Snapshot of `selectedModel` at submit time so a mid-clarification
+        // model switch doesn't change which model the build kicks off with —
+        // the user's intent was captured when they pressed send.
+        claudeModel: DataAppClaudeModel;
+        // Same intent-snapshot reasoning as claudeModel — capture the picked
+        // theme at submit time so flipping the picker mid-clarification
+        // doesn't change what the build runs against.
+        designUuid: string | null;
     } | null>(null);
     const [clarificationAnswers, setClarificationAnswers] = useState<string[]>(
         [],
@@ -469,10 +436,12 @@ const AppGenerate: FC = () => {
         setSelectedDashboard(null);
         setImageAttachments([]);
         setLocalMessages([]);
-        setPreviewApp(null);
-        setTrackedQueries([]);
+        setPin(null);
+        clearQueries();
         setInspectorEnabled(false);
         setInspectorAvailable(false);
+        setScreenshotAvailable(false);
+        setIsCapturingScreenshot(false);
         setSelectedTemplate(null);
         setWizardStage('pick');
         setPendingClarification(null);
@@ -483,7 +452,7 @@ const AppGenerate: FC = () => {
             urls.forEach((url) => URL.revokeObjectURL(url)),
         );
         sentImagesByPrompt.current.clear();
-    }, []);
+    }, [clearQueries]);
     useEffect(() => {
         const prev = prevUrlAppUuid.current;
         prevUrlAppUuid.current = urlAppUuid;
@@ -509,6 +478,20 @@ const AppGenerate: FC = () => {
         useClarifyApp();
     const { mutate: cancelMutate, isLoading: isCancelling } =
         useCancelAppVersion();
+    const { mutate: duplicateMutate, isLoading: isDuplicating } =
+        useDuplicateApp();
+    const {
+        mutate: restoreVersionMutate,
+        isLoading: isRestoringVersion,
+        error: restoreVersionError,
+        reset: resetRestoreVersion,
+    } = useRestoreAppVersion();
+    // Which version the user is about to restore. `null` while the modal is
+    // closed. Set when the user clicks "Restore" on a bubble; consumed by
+    // the confirm modal at the bottom of the page.
+    const [restoreTargetVersion, setRestoreTargetVersion] = useState<
+        number | null
+    >(null);
     const { mutateAsync: uploadImage } = useAppImageUpload();
     const { showToastError, showToastWarning } = useToaster();
     const dataAppsFlag = useServerFeatureFlag(FeatureFlags.EnableDataApps);
@@ -626,6 +609,15 @@ const AppGenerate: FC = () => {
                 sentDashboardByPrompt.current.get(v.prompt) ??
                 null;
             const clarifications = v.resources?.clarifications ?? [];
+            const authorName = v.createdByUser
+                ? [v.createdByUser.firstName, v.createdByUser.lastName]
+                      .filter((s) => s.length > 0)
+                      .join(' ') || null
+                : null;
+            // Assistant reply is dated to when the build actually finished;
+            // fall back to createdAt for old rows persisted before the column
+            // started being written, or for rows still mid-build.
+            const replyTimestamp = v.statusUpdatedAt ?? v.createdAt;
             const msgs: ChatMessage[] = [
                 {
                     role: 'user',
@@ -637,6 +629,8 @@ const AppGenerate: FC = () => {
                     clarifications,
                     appUuid: null,
                     version: null,
+                    timestamp: new Date(v.createdAt),
+                    userName: authorName,
                 },
             ];
             if (v.status === 'ready') {
@@ -654,6 +648,8 @@ const AppGenerate: FC = () => {
                     clarifications: [],
                     appUuid: activeAppUuid ?? null,
                     version: v.version,
+                    timestamp: new Date(replyTimestamp),
+                    userName: null,
                 });
             } else if (v.status === 'error') {
                 msgs.push({
@@ -668,6 +664,8 @@ const AppGenerate: FC = () => {
                     clarifications: [],
                     appUuid: null,
                     version: null,
+                    timestamp: new Date(replyTimestamp),
+                    userName: null,
                 });
             }
             // 'building' status is not rendered as a history message —
@@ -676,10 +674,25 @@ const AppGenerate: FC = () => {
         });
     }, [allVersions, activeAppUuid]);
 
-    // Merge: history messages first, then any optimistic local messages
+    // Highest server-known version number, used by `mergeChatMessages` to drop
+    // optimistic local bubbles whose corresponding server version has already
+    // landed in history.
+    const maxHistoryVersion = useMemo(
+        () => allVersions.reduce((max, v) => Math.max(max, v.version), 0),
+        [allVersions],
+    );
+
+    // Merge history with the optimistic queue, dropping any local user bubble
+    // whose `submittedAtVersion` is older than `maxHistoryVersion` — see
+    // `mergeChatMessages` for the dedup contract.
     const messages = useMemo(
-        () => [...historyMessages, ...localMessages],
-        [historyMessages, localMessages],
+        () =>
+            mergeChatMessages(
+                historyMessages,
+                localMessages,
+                maxHistoryVersion,
+            ),
+        [historyMessages, localMessages, maxHistoryVersion],
     );
 
     // The starter-template wizard only shows for v1 of a brand-new app -
@@ -713,42 +726,188 @@ const AppGenerate: FC = () => {
     const hasUnloadedEarlierVersions =
         hasNextPage && !allVersions.some((v) => v.version === 1);
 
-    // Stable reference for the preview — only updates when a new version
-    // becomes ready, preventing iframe reloads during status polling.
-    const latestReadyPreview = useMemo(() => {
-        if (allVersions.length === 0 || !activeAppUuid) return null;
-        // Find the highest-numbered ready version
-        const ready = [...allVersions]
-            .sort((a, b) => b.version - a.version)
-            .find((v) => v.status === 'ready');
-        if (!ready) return null;
-        return { appUuid: activeAppUuid, version: ready.version };
-    }, [allVersions, activeAppUuid]);
-    const [previewApp, setPreviewApp] = useState(latestReadyPreview);
-    useEffect(() => {
-        if (
-            latestReadyPreview &&
-            (latestReadyPreview.appUuid !== previewApp?.appUuid ||
-                latestReadyPreview.version !== previewApp?.version)
-        ) {
-            setPreviewApp(latestReadyPreview);
-            // The new bundle re-runs its queries from scratch, so the
-            // previous version's entries are stale. With "Persist" on we
-            // flip in-flight ones to a terminal "interrupted" state instead
-            // of clearing — the iframe that would have polled their
-            // queryUuids is gone, so they'd otherwise sit non-terminal.
-            if (persistLogs) {
-                interruptInFlightQueries();
-            } else {
-                setTrackedQueries([]);
+    // Latest ready version for this app. Updates as new versions finish
+    // building — preview defaults to this unless the user pins an older one.
+    const latestReadyVersion = useMemo(() => {
+        if (allVersions.length === 0) return null;
+        return (
+            [...allVersions]
+                .sort((a, b) => b.version - a.version)
+                .find((v) => v.status === 'ready') ?? null
+        );
+    }, [allVersions]);
+
+    // Last Claude model used on this app, sourced from the most recent
+    // version (any status — a still-building version's model is already a
+    // valid signal of the user's intent). `null` when no version data is
+    // loaded yet or older versions didn't persist the field.
+    const latestVersionModel: DataAppClaudeModel | null = useMemo(() => {
+        if (allVersions.length === 0) return null;
+        const latest = [...allVersions].sort(
+            (a, b) => b.version - a.version,
+        )[0];
+        return latest.resources?.claudeModel ?? null;
+    }, [allVersions]);
+
+    // Effective model for the picker / next submit:
+    // user's explicit pick (if it's for this app) > latest version's model
+    // > default. Pure derivation; no useEffect+setState chain.
+    //
+    // A `null` appUuid on the override means the pick was made from the
+    // new-app page (no activeAppUuid yet). It keeps matching even after
+    // `activeAppUuid` materialises to the newly created app's UUID, so the
+    // trigger button doesn't briefly flash the default model between submit
+    // and the first version fetch. The route mount boundary
+    // (/apps/generate → /apps/:appUuid) drops local state on real
+    // navigation, which keeps this from leaking across apps.
+    const selectedModel: DataAppClaudeModel = useMemo(() => {
+        if (modelOverride) {
+            const overrideAppUuid = modelOverride.appUuid;
+            if (overrideAppUuid === null || overrideAppUuid === activeAppUuid) {
+                return modelOverride.model;
             }
         }
+        return latestVersionModel ?? DEFAULT_DATA_APP_CLAUDE_MODEL;
+    }, [modelOverride, activeAppUuid, latestVersionModel]);
+
+    const handleModelChange = useCallback(
+        (model: DataAppClaudeModel) => {
+            setModelOverride({ appUuid: activeAppUuid ?? null, model });
+        },
+        [activeAppUuid],
+    );
+
+    // Theme (org design) picker state — only meaningful on initial creation.
+    // We pre-populate with the org's default theme so the visible selection
+    // matches what the backend would have applied anyway. `null` means
+    // "no theme" (the Lightdash default styling).
+    const { data: orgThemes = [] } = useOrganizationDesigns({
+        enabled: isNewApp,
+    });
+    const [themeOverride, setThemeOverride] = useState<
+        string | null | undefined
+    >(undefined);
+    const orgDefaultThemeUuid =
+        orgThemes.find((t) => t.isDefault)?.designUuid ?? null;
+    const selectedThemeUuid: string | null =
+        themeOverride !== undefined ? themeOverride : orgDefaultThemeUuid;
+    const handleThemeChange = useCallback((designUuid: string | null) => {
+        setThemeOverride(designUuid);
+    }, []);
+
+    // What theme name to render on the chip above the prompt input.
+    // - New apps: the just-picked theme's name (from the org themes list).
+    // - Existing apps: the snapshot the pipeline persisted on the latest
+    //   version's resources — survives org-default changes and theme
+    //   renames, so what you see is what the build actually used.
+    const displayThemeName: string | null = isNewApp
+        ? selectedThemeUuid
+            ? (orgThemes.find((t) => t.designUuid === selectedThemeUuid)
+                  ?.name ?? null)
+            : null
+        : (latestReadyVersion?.resources?.design?.name ?? null);
+
+    // User-pinned version override. `null` = follow latest ready (default).
+    // We snapshot the app uuid and the latest ready version at the moment of
+    // pinning so the pin can self-invalidate via the derived
+    // `effectivePinnedVersion` below — no useEffect+setState chain needed
+    // (lightdash frontend rule).
+    const [pin, setPin] = useState<{
+        appUuid: string;
+        version: number;
+        /** Latest ready version at the moment of pinning. The pin is treated
+         *  as cleared once a newer build finishes past this snapshot. */
+        pinnedAtLatest: number | null;
+    } | null>(null);
+
+    // Effective pinned version after applying invalidation rules:
+    //  - pin from a different app (user navigated away) → ignore.
+    //  - a newer ready version exists than at pin time → ignore (the user
+    //    just authored a fresh prompt; show them the result, not the stale
+    //    review state).
+    //  - the pinned version is no longer in the ready set → ignore.
+    // Polling cycles where latestReadyVersion stays the same are no-ops, so
+    // the pin survives normal refetches.
+    const effectivePinnedVersion = useMemo(() => {
+        if (pin === null || pin.appUuid !== activeAppUuid) return null;
+        if (
+            pin.pinnedAtLatest !== null &&
+            latestReadyVersion !== null &&
+            latestReadyVersion.version > pin.pinnedAtLatest
+        ) {
+            return null;
+        }
+        const stillReady = allVersions.some(
+            (v) => v.version === pin.version && v.status === 'ready',
+        );
+        return stillReady ? pin.version : null;
+    }, [pin, activeAppUuid, latestReadyVersion, allVersions]);
+
+    // Effective preview target: derived pin wins over latest ready.
+    const previewApp = useMemo(() => {
+        if (!activeAppUuid) return null;
+        if (effectivePinnedVersion !== null) {
+            return { appUuid: activeAppUuid, version: effectivePinnedVersion };
+        }
+        if (!latestReadyVersion) return null;
+        return { appUuid: activeAppUuid, version: latestReadyVersion.version };
+    }, [activeAppUuid, effectivePinnedVersion, latestReadyVersion]);
+
+    // Pin the preview to a specific version. Captures the current latest as
+    // the "pinned-at" snapshot so the derived state can decide later when
+    // the pin has become stale.
+    const pinPreviewToVersion = useCallback(
+        (version: number) => {
+            if (!activeAppUuid) return;
+            setPin({
+                appUuid: activeAppUuid,
+                version,
+                pinnedAtLatest: latestReadyVersion?.version ?? null,
+            });
+        },
+        [activeAppUuid, latestReadyVersion],
+    );
+
+    // Build the `version` prop for an assistant bubble's `ChatBubbleMeta`.
+    // Extracted so the arrow-function `onPreview` captures a `number` rather
+    // than `number | null` — TS won't carry inline ternary narrowing into a
+    // closure, but it does narrow this function's parameter directly.
+    const buildBubbleVersionInfo = (bubbleVersion: number) => ({
+        version: bubbleVersion,
+        isActive: previewApp?.version === bubbleVersion,
+        onPreview: () => pinPreviewToVersion(bubbleVersion),
+    });
+
+    // Whether the user is currently looking at a version other than the
+    // latest ready one. Drives the "viewing older version" banner.
+    const isViewingOlderVersion =
+        previewApp !== null &&
+        latestReadyVersion !== null &&
+        previewApp.version !== latestReadyVersion.version;
+
+    // When the effective preview version changes (auto-bump to a newer
+    // build, or a user click pinning an older one), the iframe reloads and
+    // re-runs its metric queries from scratch. With "Persist" on we flip
+    // in-flight entries to a terminal "interrupted" state — the iframe that
+    // would have polled their queryUuids is gone, so they'd otherwise sit
+    // non-terminal forever. Without persist we just clear the log.
+    const lastPreviewVersionRef = useRef<number | null>(null);
+    useEffect(() => {
+        const next = previewApp?.version ?? null;
+        if (lastPreviewVersionRef.current === next) return;
+        const prev = lastPreviewVersionRef.current;
+        lastPreviewVersionRef.current = next;
+        if (prev === null) return; // Initial render — nothing to clean up.
+        if (persistLogs) {
+            interruptInFlightQueries();
+        } else {
+            clearQueries();
+        }
     }, [
-        latestReadyPreview,
-        previewApp?.appUuid,
         previewApp?.version,
         persistLogs,
         interruptInFlightQueries,
+        clearQueries,
     ]);
 
     // Manual refresh counter for the preview iframe. The iframe URL embeds
@@ -762,9 +921,9 @@ const AppGenerate: FC = () => {
         if (persistLogs) {
             interruptInFlightQueries();
         } else {
-            setTrackedQueries([]);
+            clearQueries();
         }
-    }, [persistLogs, interruptInFlightQueries]);
+    }, [persistLogs, interruptInFlightQueries, clearQueries]);
 
     const scrollToBottom = useCallback(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -853,7 +1012,7 @@ const AppGenerate: FC = () => {
         'image/webp',
     ];
 
-    const handleImageAttach = (file: File) => {
+    const handleImageAttach = (file: File, kind?: 'screenshot') => {
         if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
             showToastError({
                 title: 'Unsupported image type',
@@ -876,7 +1035,10 @@ const AppGenerate: FC = () => {
                 });
                 return prev;
             }
-            return [...prev, { file, previewUrl: URL.createObjectURL(file) }];
+            return [
+                ...prev,
+                { file, previewUrl: URL.createObjectURL(file), kind },
+            ];
         });
     };
 
@@ -888,7 +1050,7 @@ const AppGenerate: FC = () => {
             );
             if (imageFiles.length > 0) {
                 e.preventDefault();
-                imageFiles.forEach(handleImageAttach);
+                imageFiles.forEach((file) => handleImageAttach(file));
             }
         }
     };
@@ -896,7 +1058,7 @@ const AppGenerate: FC = () => {
     const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files;
         if (files) {
-            Array.from(files).forEach(handleImageAttach);
+            Array.from(files).forEach((file) => handleImageAttach(file));
         }
         e.target.value = '';
     };
@@ -916,7 +1078,24 @@ const AppGenerate: FC = () => {
         e.preventDefault();
         Array.from(e.dataTransfer.files)
             .filter((f) => f.type.startsWith('image/'))
-            .forEach(handleImageAttach);
+            .forEach((file) => handleImageAttach(file));
+    };
+
+    const handleCaptureScreenshot = async () => {
+        const capture = previewRef.current?.captureScreenshot;
+        if (!capture) return;
+        setIsCapturingScreenshot(true);
+        try {
+            const file = await capture();
+            handleImageAttach(file, 'screenshot');
+        } catch (err) {
+            showToastError({
+                title: 'Screenshot failed',
+                subtitle: err instanceof Error ? err.message : 'Unknown error',
+            });
+        } finally {
+            setIsCapturingScreenshot(false);
+        }
     };
 
     const buildSubmitCallbacks = () => ({
@@ -947,6 +1126,8 @@ const AppGenerate: FC = () => {
                     clarifications: [],
                     appUuid: null,
                     version: null,
+                    timestamp: new Date(),
+                    userName: null,
                 },
             ]);
         },
@@ -992,6 +1173,7 @@ const AppGenerate: FC = () => {
                             projectUuid: projectUuid!,
                             file: att.file,
                             appUuid: targetAppUuid!,
+                            kind: att.kind,
                         });
                         ids.push(result.imageId);
                     } catch (err) {
@@ -1048,11 +1230,23 @@ const AppGenerate: FC = () => {
                     clarifications: [],
                     appUuid: null,
                     version: null,
+                    timestamp: new Date(),
+                    userName:
+                        [user.data?.firstName, user.data?.lastName]
+                            .filter((s): s is string => !!s && s.length > 0)
+                            .join(' ') || null,
+                    // Snapshot the highest server version known at submit time.
+                    // Once history catches up past this number the optimistic
+                    // bubble is dropped by `mergeChatMessages` — even if the
+                    // brittle `serverVersionCount`-based clear effect misses
+                    // a transition.
+                    submittedAtVersion: maxHistoryVersion,
                 },
             ]);
             promptEditorRef.current?.clear();
             setIsPromptEmpty(true);
             setImageAttachments([]);
+            setIsCapturingScreenshot(false);
             setSelectedCharts([]);
             setSelectedDashboard(null);
             resetGenerate();
@@ -1084,6 +1278,8 @@ const AppGenerate: FC = () => {
                             charts,
                             dashboard,
                             spaceUuid: targetSpaceUuid,
+                            claudeModel: selectedModel,
+                            designUuid: selectedThemeUuid,
                         });
                         setClarificationAnswers(
                             new Array(questions.length).fill(''),
@@ -1114,6 +1310,7 @@ const AppGenerate: FC = () => {
                         imageIds,
                         charts,
                         dashboard,
+                        claudeModel: selectedModel,
                     },
                     callbacks,
                 );
@@ -1128,6 +1325,8 @@ const AppGenerate: FC = () => {
                         charts,
                         dashboard,
                         spaceUuid: targetSpaceUuid,
+                        claudeModel: selectedModel,
+                        designUuid: selectedThemeUuid,
                     },
                     callbacks,
                 );
@@ -1195,6 +1394,8 @@ const AppGenerate: FC = () => {
                 clarifications:
                     clarifications.length > 0 ? clarifications : undefined,
                 spaceUuid: captured.spaceUuid,
+                claudeModel: captured.claudeModel,
+                designUuid: captured.designUuid,
             },
             buildSubmitCallbacks(),
         );
@@ -1243,7 +1444,12 @@ const AppGenerate: FC = () => {
         <Box className={classes.layout}>
             <PanelGroup direction="horizontal">
                 {/* Chat Panel */}
-                <Panel defaultSize={30} minSize={20} maxSize={50}>
+                <Panel
+                    defaultSize={30}
+                    minSize={22}
+                    maxSize={50}
+                    className={classes.chatPanelOuter}
+                >
                     <Box className={classes.chatPanel}>
                         <Box className={classes.chatMessages}>
                             {hasUnloadedEarlierVersions && (
@@ -1272,6 +1478,8 @@ const AppGenerate: FC = () => {
                                 isNewApp && wizardStage === 'pick' ? (
                                     <AppTemplatePicker
                                         onSelect={handleTemplateSelect}
+                                        selectedThemeUuid={selectedThemeUuid}
+                                        onThemeChange={handleThemeChange}
                                     />
                                 ) : (
                                     <Box className={classes.emptyChat}>
@@ -1315,6 +1523,14 @@ const AppGenerate: FC = () => {
                                                             classes.userBubble
                                                         }
                                                     >
+                                                        <ChatBubbleMeta
+                                                            timestamp={
+                                                                msg.timestamp
+                                                            }
+                                                            userName={
+                                                                msg.userName
+                                                            }
+                                                        />
                                                         <ChatMessageContent
                                                             content={
                                                                 msg.content
@@ -1330,34 +1546,44 @@ const AppGenerate: FC = () => {
                                                             >
                                                                 {msg.charts.map(
                                                                     (chart) => (
-                                                                        <Group
+                                                                        <Box
                                                                             key={
                                                                                 chart.uuid
                                                                             }
-                                                                            gap="xs"
-                                                                            wrap="nowrap"
                                                                             className={
                                                                                 classes.bubbleQueryItem
                                                                             }
                                                                         >
-                                                                            <ChartIcon
-                                                                                chartKind={
-                                                                                    chart.chartKind ??
-                                                                                    ChartKind.VERTICAL_BAR
+                                                                            <Box
+                                                                                className={
+                                                                                    classes.bubbleQueryItemIcon
                                                                                 }
-                                                                            />
+                                                                            >
+                                                                                <MantineIcon
+                                                                                    icon={getChartIcon(
+                                                                                        chart.chartKind ??
+                                                                                            ChartKind.VERTICAL_BAR,
+                                                                                    )}
+                                                                                    size={
+                                                                                        12
+                                                                                    }
+                                                                                    color="blue.6"
+                                                                                />
+                                                                            </Box>
                                                                             <Text
-                                                                                size="xs"
                                                                                 fw={
                                                                                     500
                                                                                 }
                                                                                 truncate
+                                                                                className={
+                                                                                    classes.bubbleQueryItemName
+                                                                                }
                                                                             >
                                                                                 {
                                                                                     chart.name
                                                                                 }
                                                                             </Text>
-                                                                        </Group>
+                                                                        </Box>
                                                                     ),
                                                                 )}
                                                             </Box>
@@ -1369,29 +1595,38 @@ const AppGenerate: FC = () => {
                                                                     classes.bubbleQueryList
                                                                 }
                                                             >
-                                                                <Group
-                                                                    gap="xs"
-                                                                    wrap="nowrap"
+                                                                <Box
                                                                     className={
                                                                         classes.bubbleQueryItem
                                                                     }
                                                                 >
-                                                                    <IconBox
-                                                                        icon={
-                                                                            IconLayoutDashboard
+                                                                    <Box
+                                                                        className={
+                                                                            classes.bubbleQueryItemIcon
                                                                         }
-                                                                        color="green.6"
-                                                                    />
+                                                                    >
+                                                                        <MantineIcon
+                                                                            icon={
+                                                                                IconLayoutDashboard
+                                                                            }
+                                                                            size={
+                                                                                12
+                                                                            }
+                                                                            color="green.6"
+                                                                        />
+                                                                    </Box>
                                                                     <Text
-                                                                        size="xs"
                                                                         fw={500}
                                                                         truncate
+                                                                        className={
+                                                                            classes.bubbleQueryItemName
+                                                                        }
                                                                     >
                                                                         {
                                                                             msg.dashboardName
                                                                         }
                                                                     </Text>
-                                                                </Group>
+                                                                </Box>
                                                             </Box>
                                                         )}
                                                         {msg.clarifications
@@ -1482,22 +1717,26 @@ const AppGenerate: FC = () => {
                                                         classes.assistantMessage
                                                     }
                                                 >
-                                                    <ThemeIcon
-                                                        size="sm"
-                                                        radius="xl"
-                                                        variant="light"
-                                                        color="gray"
-                                                        mt={2}
-                                                    >
-                                                        <IconSparkles
-                                                            size={12}
-                                                        />
-                                                    </ThemeIcon>
                                                     <Box
                                                         className={
                                                             classes.assistantBubble
                                                         }
                                                     >
+                                                        <ChatBubbleMeta
+                                                            timestamp={
+                                                                msg.timestamp
+                                                            }
+                                                            userName={null}
+                                                            version={
+                                                                msg.appUuid &&
+                                                                msg.version !==
+                                                                    null
+                                                                    ? buildBubbleVersionInfo(
+                                                                          msg.version,
+                                                                      )
+                                                                    : undefined
+                                                            }
+                                                        />
                                                         {msg.appUuid ? (
                                                             <ReactMarkdownPreview
                                                                 source={
@@ -1524,19 +1763,9 @@ const AppGenerate: FC = () => {
                                         <Box
                                             className={classes.clarifyContainer}
                                         >
-                                            <Group gap="xs">
-                                                <ThemeIcon
-                                                    size="sm"
-                                                    radius="xl"
-                                                    variant="light"
-                                                    color="gray"
-                                                >
-                                                    <IconSparkles size={12} />
-                                                </ThemeIcon>
-                                                <Text size="sm">
-                                                    A few quick questions:
-                                                </Text>
-                                            </Group>
+                                            <Text size="sm">
+                                                A few quick questions:
+                                            </Text>
                                             <Stack gap={6}>
                                                 {pendingClarification.questions.map(
                                                     (question, qi) => (
@@ -1613,32 +1842,81 @@ const AppGenerate: FC = () => {
                                         </Box>
                                     ) : (
                                         isAgentWorking && (
-                                            <Box
-                                                className={
-                                                    classes.assistantMessage
-                                                }
-                                            >
-                                                <ThemeIcon
-                                                    size="sm"
-                                                    radius="xl"
-                                                    variant="light"
-                                                    color="gray"
-                                                    mt={2}
-                                                >
-                                                    <IconSparkles size={12} />
-                                                </ThemeIcon>
+                                            <Box>
                                                 <Box
                                                     className={
-                                                        classes.assistantBubble
+                                                        classes.assistantMessage
                                                     }
                                                 >
-                                                    <Text size="sm" c="dimmed">
-                                                        {isClarifying
-                                                            ? 'Hold tight, I may have some questions before starting'
-                                                            : (latestBuildingVersion?.statusMessage ??
-                                                              'Generating your app')}{' '}
-                                                        <LoadingDots />
-                                                    </Text>
+                                                    <Box
+                                                        className={
+                                                            classes.assistantBubble
+                                                        }
+                                                    >
+                                                        {isClarifying ? (
+                                                            <Text
+                                                                size="sm"
+                                                                c="dimmed"
+                                                            >
+                                                                Hold tight, I
+                                                                may have some
+                                                                questions before
+                                                                starting{' '}
+                                                                <LoadingDots />
+                                                            </Text>
+                                                        ) : latestBuildingVersion?.statusMessage ? (
+                                                            <ReactMarkdownPreview
+                                                                source={
+                                                                    latestBuildingVersion.statusMessage
+                                                                }
+                                                                className={`${classes.markdown} ${classes.markdownDimmed} ${classes.markdownInline}`}
+                                                                components={{
+                                                                    p: ({
+                                                                        node: _node,
+                                                                        children,
+                                                                        ...rest
+                                                                    }) => (
+                                                                        <p
+                                                                            {...rest}
+                                                                        >
+                                                                            {
+                                                                                children
+                                                                            }{' '}
+                                                                            <LoadingDots />
+                                                                        </p>
+                                                                    ),
+                                                                }}
+                                                            />
+                                                        ) : (
+                                                            <Text
+                                                                size="sm"
+                                                                c="dimmed"
+                                                            >
+                                                                Generating your
+                                                                app{' '}
+                                                                <LoadingDots />
+                                                            </Text>
+                                                        )}
+                                                        {!isClarifying &&
+                                                            latestBuildingVersion?.status ===
+                                                                'generating' && (
+                                                                <Text
+                                                                    fz={11}
+                                                                    c="dimmed"
+                                                                    mt={6}
+                                                                >
+                                                                    I'll
+                                                                    continue
+                                                                    building in
+                                                                    the
+                                                                    background —
+                                                                    feel free to
+                                                                    switch tabs
+                                                                    or close
+                                                                    this one.
+                                                                </Text>
+                                                            )}
+                                                    </Box>
                                                 </Box>
                                             </Box>
                                         )
@@ -1649,7 +1927,63 @@ const AppGenerate: FC = () => {
                         </Box>
 
                         {/* Chat Input */}
-                        {!wizardCoversInput && (
+                        {!wizardCoversInput && isViewingOlderVersion && (
+                            <Box className={classes.chatInputArea}>
+                                <Callout
+                                    variant="info"
+                                    title={`You're viewing version ${previewApp?.version}`}
+                                >
+                                    <Text size="sm">
+                                        New prompts always continue from the
+                                        latest build. Return to version{' '}
+                                        {latestReadyVersion?.version}, or
+                                        restore this version as the new latest
+                                        to keep iterating from here.
+                                    </Text>
+                                    <Group gap="xs" mt="sm">
+                                        <Button
+                                            size="xs"
+                                            variant="light"
+                                            color="blue"
+                                            leftSection={
+                                                <MantineIcon
+                                                    icon={IconArrowBackUp}
+                                                    size={12}
+                                                />
+                                            }
+                                            onClick={() => setPin(null)}
+                                        >
+                                            Return to latest (v
+                                            {latestReadyVersion?.version})
+                                        </Button>
+                                        {previewApp &&
+                                            previewApp.version !==
+                                                latestReadyVersion?.version && (
+                                                <Button
+                                                    size="xs"
+                                                    variant="outline"
+                                                    color="blue"
+                                                    leftSection={
+                                                        <MantineIcon
+                                                            icon={IconRestore}
+                                                            size={12}
+                                                        />
+                                                    }
+                                                    disabled={isAgentWorking}
+                                                    onClick={() =>
+                                                        setRestoreTargetVersion(
+                                                            previewApp.version,
+                                                        )
+                                                    }
+                                                >
+                                                    Restore this version
+                                                </Button>
+                                            )}
+                                    </Group>
+                                </Callout>
+                            </Box>
+                        )}
+                        {!wizardCoversInput && !isViewingOlderVersion && (
                             <Box className={classes.chatInputArea}>
                                 <input
                                     ref={fileInputRef}
@@ -1659,98 +1993,42 @@ const AppGenerate: FC = () => {
                                     onChange={handleFileInputChange}
                                     hidden
                                 />
-                                {displayTemplate && (
-                                    <TemplateChip template={displayTemplate} />
+                                {(displayTemplate || displayThemeName) && (
+                                    <Group gap="xs" pb="xs">
+                                        {displayTemplate && (
+                                            <TemplateChip
+                                                template={displayTemplate}
+                                            />
+                                        )}
+                                        {displayThemeName && (
+                                            <ThemeChip
+                                                themeName={displayThemeName}
+                                            />
+                                        )}
+                                    </Group>
                                 )}
-                                <Box className={classes.inputWrapper}>
-                                    <Box className={classes.textareaColumn}>
-                                        <AppPromptEditor
-                                            ref={promptEditorRef}
-                                            placeholder="Describe the app you want to build..."
-                                            autoFocus
-                                            disabled={isLoading}
-                                            onEmptyChange={setIsPromptEmpty}
-                                            onSubmit={() => void handleSubmit()}
-                                            onPaste={handlePaste}
-                                        />
-                                    </Box>
-                                    {isBuilding ? (
-                                        <ActionIcon
-                                            size="sm"
-                                            radius="xl"
-                                            variant="filled"
-                                            color="red"
-                                            onClick={handleCancel}
-                                            loading={isCancelling}
-                                            className={classes.submitButton}
-                                        >
-                                            <IconPlayerStop size={14} />
-                                        </ActionIcon>
-                                    ) : (
-                                        <ActionIcon
-                                            size="sm"
-                                            radius="xl"
-                                            variant="filled"
-                                            color="violet"
-                                            onClick={() => void handleSubmit()}
-                                            disabled={
-                                                isPromptEmpty || isLoading
-                                            }
-                                            loading={
-                                                isSubmitting ||
-                                                isGenerating ||
-                                                isIterating
-                                            }
-                                            className={classes.submitButton}
-                                        >
-                                            <IconArrowUp size={14} />
-                                        </ActionIcon>
-                                    )}
-                                </Box>
-                                <Group gap="xs" pt="xs">
-                                    <QueryButton
-                                        selectedCharts={selectedCharts}
-                                        onSelect={(chart) =>
-                                            setSelectedCharts((prev) => [
-                                                ...prev,
-                                                chart,
-                                            ])
-                                        }
-                                        disabled={isLoading}
-                                    />
-                                    <DashboardButton
-                                        selected={selectedDashboard}
-                                        onSelect={setSelectedDashboard}
-                                        disabled={isLoading}
-                                    />
-                                    <ImageButton
-                                        onClick={() =>
-                                            fileInputRef.current?.click()
-                                        }
-                                        disabled={
-                                            isLoading ||
-                                            imageAttachments.length >=
-                                                MAX_IMAGES_PER_VERSION
-                                        }
-                                    />
-                                    {inspectorAvailable && (
-                                        <InspectButton
-                                            enabled={inspectorEnabled}
-                                            onToggle={() =>
-                                                setInspectorEnabled((v) => !v)
-                                            }
-                                        />
-                                    )}
-                                </Group>
                                 <Box
-                                    className={classes.resourceSections}
+                                    className={classes.inputWrapper}
                                     onDragOver={handleDragOver}
                                     onDrop={handleDrop}
                                 >
-                                    {selectedCharts.length > 0 ||
-                                    selectedDashboard ||
-                                    imageAttachments.length > 0 ? (
-                                        <>
+                                    <AppPromptEditor
+                                        ref={promptEditorRef}
+                                        placeholder="Describe the app you want to build..."
+                                        autoFocus
+                                        disabled={isLoading}
+                                        onEmptyChange={setIsPromptEmpty}
+                                        onSubmit={() => void handleSubmit()}
+                                        onPaste={handlePaste}
+                                    />
+                                    {(selectedCharts.length > 0 ||
+                                        selectedDashboard ||
+                                        imageAttachments.length > 0) && (
+                                        <Box
+                                            className={
+                                                classes.attachedResources
+                                            }
+                                        >
                                             {selectedCharts.length > 0 && (
                                                 <SelectedQuerySection
                                                     charts={selectedCharts}
@@ -1824,14 +2102,123 @@ const AppGenerate: FC = () => {
                                                     loading={isSubmitting}
                                                 />
                                             )}
-                                        </>
-                                    ) : (
-                                        <Box className={classes.resourceEmpty}>
-                                            <Text size="xs" c="dimmed">
-                                                Resources
-                                            </Text>
                                         </Box>
                                     )}
+                                    <Group
+                                        className={classes.inputBottomRow}
+                                        justify="space-between"
+                                        gap="xs"
+                                    >
+                                        <AttachButton
+                                            selectedCharts={selectedCharts}
+                                            onSelectChart={(chart) =>
+                                                setSelectedCharts((prev) => [
+                                                    ...prev,
+                                                    chart,
+                                                ])
+                                            }
+                                            onDeselectChart={(uuid) =>
+                                                setSelectedCharts((prev) =>
+                                                    prev.filter(
+                                                        (c) => c.uuid !== uuid,
+                                                    ),
+                                                )
+                                            }
+                                            selectedDashboard={
+                                                selectedDashboard
+                                            }
+                                            onSelectDashboard={
+                                                setSelectedDashboard
+                                            }
+                                            onDeselectDashboard={() =>
+                                                setSelectedDashboard(null)
+                                            }
+                                            onAddImages={() =>
+                                                fileInputRef.current?.click()
+                                            }
+                                            disabled={isLoading}
+                                            imagesDisabled={
+                                                imageAttachments.length >=
+                                                MAX_IMAGES_PER_VERSION
+                                            }
+                                        />
+                                        <Group gap="xs">
+                                            <ScreenshotButton
+                                                onClick={() =>
+                                                    void handleCaptureScreenshot()
+                                                }
+                                                disabled={
+                                                    !previewApp ||
+                                                    !screenshotAvailable ||
+                                                    isLoading ||
+                                                    imageAttachments.length >=
+                                                        MAX_IMAGES_PER_VERSION
+                                                }
+                                                loading={isCapturingScreenshot}
+                                            />
+                                            <InspectButton
+                                                enabled={inspectorEnabled}
+                                                onToggle={() =>
+                                                    setInspectorEnabled(
+                                                        (v) => !v,
+                                                    )
+                                                }
+                                                disabled={!inspectorAvailable}
+                                            />
+                                            <ModelPicker
+                                                value={selectedModel}
+                                                onChange={handleModelChange}
+                                                disabled={isLoading}
+                                            />
+                                            {isBuilding ? (
+                                                <ActionIcon
+                                                    size="lg"
+                                                    variant="filled"
+                                                    onClick={handleCancel}
+                                                    loading={isCancelling}
+                                                    className={
+                                                        classes.submitButton
+                                                    }
+                                                    aria-label="Stop generation"
+                                                >
+                                                    <MantineIcon
+                                                        icon={IconPlayerStop}
+                                                        color="ldGray.0"
+                                                        size={18}
+                                                        stroke={2}
+                                                    />
+                                                </ActionIcon>
+                                            ) : (
+                                                <ActionIcon
+                                                    size="lg"
+                                                    variant="filled"
+                                                    onClick={() =>
+                                                        void handleSubmit()
+                                                    }
+                                                    disabled={
+                                                        isPromptEmpty ||
+                                                        isLoading
+                                                    }
+                                                    loading={
+                                                        isSubmitting ||
+                                                        isGenerating ||
+                                                        isIterating
+                                                    }
+                                                    className={
+                                                        classes.submitButton
+                                                    }
+                                                    aria-label="Send message"
+                                                >
+                                                    <MantineIcon
+                                                        icon={IconArrowUp}
+                                                        color="ldGray.0"
+                                                        size={20}
+                                                        stroke={2}
+                                                    />
+                                                </ActionIcon>
+                                            )}
+                                        </Group>
+                                    </Group>
                                 </Box>
                             </Box>
                         )}
@@ -1893,7 +2280,10 @@ const AppGenerate: FC = () => {
                                             color="ldGray.6"
                                             aria-label="App actions"
                                         >
-                                            <IconDots size={16} />
+                                            <MantineIcon
+                                                icon={IconDots}
+                                                size={16}
+                                            />
                                         </ActionIcon>
                                     </Menu.Target>
                                     <Menu.Dropdown>
@@ -1903,7 +2293,8 @@ const AppGenerate: FC = () => {
                                                 to={`/projects/${projectUuid}/apps/${previewApp.appUuid}/preview`}
                                                 target="_blank"
                                                 leftSection={
-                                                    <IconExternalLink
+                                                    <MantineIcon
+                                                        icon={IconExternalLink}
                                                         size={14}
                                                     />
                                                 }
@@ -1911,10 +2302,57 @@ const AppGenerate: FC = () => {
                                                 Preview latest
                                             </Menu.Item>
                                         )}
-                                        {previewApp && <Menu.Divider />}
                                         <Menu.Item
                                             leftSection={
-                                                <IconPencil size={14} />
+                                                <MantineIcon
+                                                    icon={IconDatabase}
+                                                    size={14}
+                                                />
+                                            }
+                                            onClick={() =>
+                                                setQueriesPanelHidden(false)
+                                            }
+                                        >
+                                            View queries
+                                        </Menu.Item>
+                                        <Menu.Divider />
+                                        <Menu.Item
+                                            leftSection={
+                                                <MantineIcon
+                                                    icon={IconCopy}
+                                                    size={14}
+                                                />
+                                            }
+                                            disabled={
+                                                isDuplicating || !activeAppUuid
+                                            }
+                                            onClick={() => {
+                                                if (!activeAppUuid) return;
+                                                duplicateMutate(
+                                                    {
+                                                        projectUuid,
+                                                        appUuid: activeAppUuid,
+                                                    },
+                                                    {
+                                                        onSuccess: ({
+                                                            appUuid: newAppUuid,
+                                                        }) => {
+                                                            void navigate(
+                                                                `/projects/${projectUuid}/apps/${newAppUuid}`,
+                                                            );
+                                                        },
+                                                    },
+                                                );
+                                            }}
+                                        >
+                                            Duplicate
+                                        </Menu.Item>
+                                        <Menu.Item
+                                            leftSection={
+                                                <MantineIcon
+                                                    icon={IconPencil}
+                                                    size={14}
+                                                />
                                             }
                                             onClick={() =>
                                                 setIsUpdateModalOpen(true)
@@ -1924,13 +2362,14 @@ const AppGenerate: FC = () => {
                                         </Menu.Item>
                                         <Menu.Item
                                             leftSection={
-                                                appSpaceUuid ? (
-                                                    <IconFolderSymlink
-                                                        size={14}
-                                                    />
-                                                ) : (
-                                                    <IconFolderPlus size={14} />
-                                                )
+                                                <MantineIcon
+                                                    icon={
+                                                        appSpaceUuid
+                                                            ? IconFolderSymlink
+                                                            : IconFolderPlus
+                                                    }
+                                                    size={14}
+                                                />
                                             }
                                             onClick={() =>
                                                 setIsMoveToSpaceOpen(true)
@@ -1944,7 +2383,10 @@ const AppGenerate: FC = () => {
                                         <Menu.Item
                                             color="red"
                                             leftSection={
-                                                <IconTrash size={14} />
+                                                <MantineIcon
+                                                    icon={IconTrash}
+                                                    size={14}
+                                                />
                                             }
                                             onClick={() =>
                                                 setIsDeleteModalOpen(true)
@@ -2033,10 +2475,57 @@ const AppGenerate: FC = () => {
                                 }}
                             />
                         )}
+                        {restoreTargetVersion !== null && activeAppUuid && (
+                            <MantineModal
+                                opened
+                                onClose={() => {
+                                    if (isRestoringVersion) return;
+                                    setRestoreTargetVersion(null);
+                                    resetRestoreVersion();
+                                }}
+                                title={`Restore version ${restoreTargetVersion}?`}
+                                icon={IconRestore}
+                                confirmLabel="Restore version"
+                                cancelDisabled={isRestoringVersion}
+                                confirmLoading={isRestoringVersion}
+                                onConfirm={() =>
+                                    restoreVersionMutate(
+                                        {
+                                            projectUuid,
+                                            appUuid: activeAppUuid,
+                                            version: restoreTargetVersion,
+                                        },
+                                        {
+                                            onSuccess: () => {
+                                                setRestoreTargetVersion(null);
+                                            },
+                                        },
+                                    )
+                                }
+                            >
+                                <Stack gap="sm">
+                                    <Text fz="sm">
+                                        This will create a new version on top of
+                                        the timeline that duplicates the
+                                        contents of version{' '}
+                                        {restoreTargetVersion}. Your next prompt
+                                        will iterate from there.
+                                    </Text>
+                                    {restoreVersionError && (
+                                        <Callout variant="danger">
+                                            {restoreVersionError.error
+                                                ?.message ??
+                                                'Failed to restore version.'}
+                                        </Callout>
+                                    )}
+                                </Stack>
+                            </MantineModal>
+                        )}
 
                         <Box className={classes.previewContent}>
                             {previewApp ? (
                                 <AppPreview
+                                    ref={previewRef}
                                     projectUuid={projectUuid}
                                     appUuid={previewApp.appUuid}
                                     version={previewApp.version}
@@ -2046,6 +2535,9 @@ const AppGenerate: FC = () => {
                                     onElementSelected={handleElementSelected}
                                     onInspectorAvailabilityChange={
                                         setInspectorAvailable
+                                    }
+                                    onScreenshotAvailabilityChange={
+                                        setScreenshotAvailable
                                     }
                                     onInspectorCancelled={
                                         handleInspectorCancelled
@@ -2059,13 +2551,18 @@ const AppGenerate: FC = () => {
                                     </Text>
                                 </Box>
                             )}
-                            <QueryInspector
-                                queries={trackedQueries}
-                                projectUuid={projectUuid!}
-                                onClear={handleClearQueries}
-                                persistLogs={persistLogs}
-                                onPersistLogsChange={setPersistLogs}
-                            />
+                            {!queriesPanelHidden && (
+                                <QueryInspector
+                                    queries={trackedQueries}
+                                    projectUuid={projectUuid!}
+                                    onClear={clearQueries}
+                                    persistLogs={persistLogs}
+                                    onPersistLogsChange={setPersistLogs}
+                                    onDismiss={() =>
+                                        setQueriesPanelHidden(true)
+                                    }
+                                />
+                            )}
                         </Box>
                     </Box>
                 </Panel>

@@ -687,6 +687,37 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Replace project-level table-group definitions. Sent by the CLI on
+     * deploy/preview so labels & descriptions from `table_groups` in
+     * `lightdash.config.yml` are applied. Pass an empty object to clear.
+     * @summary Replace project table groups
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Put('{projectUuid}/table-groups')
+    @OperationId('replaceProjectTableGroups')
+    async replaceProjectTableGroups(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+        @Body() tableGroups: ApiTableGroupsResults,
+    ): Promise<ApiSuccess<undefined>> {
+        assertRegisteredAccount(req.account);
+        await this.services.getProjectService().replaceProjectTableGroups({
+            user: toSessionUser(req.account),
+            projectUuid,
+            tableGroups,
+        });
+        return {
+            status: 'ok',
+            results: undefined,
+        };
+    }
+
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Get('{projectUuid}/colorPalette')
@@ -968,41 +999,49 @@ export class ProjectController extends BaseController {
         assertRegisteredAccount(req.account);
         this.setStatus(200);
 
-        const { schedulerTimezone: oldDefaultProjectTimezone } =
-            await this.services
-                .getProjectService()
-                .getProject(projectUuid, req.account);
+        const timezoneChanging = body.schedulerTimezone !== undefined;
+        const oldTimezone = timezoneChanging
+            ? (
+                  await this.services
+                      .getProjectService()
+                      .getProject(projectUuid, req.account)
+              ).schedulerTimezone
+            : null;
 
         await this.services
             .getProjectService()
-            .updateDefaultSchedulerTimezone(
+            .updateSchedulerSettings(
                 toSessionUser(req.account),
                 projectUuid,
-                body.schedulerTimezone,
+                body,
             );
 
-        try {
-            await this.services
-                .getSchedulerService()
-                .updateSchedulersWithDefaultTimezone(
-                    toSessionUser(req.account),
-                    projectUuid,
-                    {
-                        oldDefaultProjectTimezone,
-                        newDefaultProjectTimezone: body.schedulerTimezone,
-                    },
-                );
-        } catch (e) {
-            // reset the old timezone when it fails to set the hours
-            await this.services
-                .getProjectService()
-                .updateDefaultSchedulerTimezone(
-                    toSessionUser(req.account),
-                    projectUuid,
-                    oldDefaultProjectTimezone,
-                );
+        if (timezoneChanging && oldTimezone !== null) {
+            try {
+                await this.services
+                    .getSchedulerService()
+                    .updateSchedulersWithDefaultTimezone(
+                        toSessionUser(req.account),
+                        projectUuid,
+                        {
+                            oldDefaultProjectTimezone: oldTimezone,
+                            newDefaultProjectTimezone:
+                                body.schedulerTimezone as string,
+                        },
+                    );
+            } catch (e) {
+                // Only reset the timezone — the failure-notification fields
+                // don't affect downstream scheduler timezone propagation.
+                await this.services
+                    .getProjectService()
+                    .updateSchedulerSettings(
+                        toSessionUser(req.account),
+                        projectUuid,
+                        { schedulerTimezone: oldTimezone },
+                    );
 
-            throw e;
+                throw e;
+            }
         }
 
         return {
@@ -1033,11 +1072,7 @@ export class ProjectController extends BaseController {
 
         await this.services
             .getProjectService()
-            .updateQueryTimezone(
-                toSessionUser(req.account),
-                projectUuid,
-                body.queryTimezone,
-            );
+            .updateQueryTimezone(toSessionUser(req.account), projectUuid, body);
 
         return {
             status: 'ok',

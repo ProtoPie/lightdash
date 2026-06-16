@@ -25,6 +25,7 @@ export const lightdashConfigMock: LightdashConfig = {
             googleDriveApiKey: undefined,
             enableGCloudADC: false,
             enabled: false,
+            includeBigqueryScope: false,
         },
         okta: {
             loginPath: '',
@@ -98,18 +99,18 @@ export const lightdashConfigMock: LightdashConfig = {
         path: '/metrics',
         eventMetricsEnabled: false,
         allQueryMetricsEnabled: false,
+        extendedMetricsEnabled: false,
     },
-    chart: { versionHistory: { daysLimit: 0 } },
     dashboard: {
         maxTilesPerTab: 50,
         maxTabsPerDashboard: 20,
-        versionHistory: { daysLimit: 0 },
         disableSentryTracking: false,
     },
     database: {
         connectionUri: undefined,
         maxConnections: undefined,
         minConnections: undefined,
+        allowMissingMigrations: false,
     },
     intercom: {
         appId: '',
@@ -135,7 +136,6 @@ export const lightdashConfigMock: LightdashConfig = {
     maxPayloadSize: '',
     pivotTable: { maxColumnLimit: 0 },
     enableImprovedExcelDates: false,
-    posthog: undefined,
     s3: {
         endpoint: 'mock_endpoint',
         bucket: 'mock_bucket',

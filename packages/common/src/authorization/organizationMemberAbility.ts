@@ -80,6 +80,9 @@ export const applyOrganizationMemberStaticAbilities: Record<
                 $elemMatch: { userUuid: member.userUuid },
             },
         });
+        can('view', 'OrganizationDesign', {
+            organizationUuid: member.organizationUuid,
+        });
         can('view', 'Project', {
             organizationUuid: member.organizationUuid,
         });
@@ -228,6 +231,9 @@ export const applyOrganizationMemberStaticAbilities: Record<
         can('view', 'AiAgent', {
             organizationUuid: member.organizationUuid,
         });
+        can('view', 'AiAgentDocument', {
+            organizationUuid: member.organizationUuid,
+        });
         can('create', 'AiAgentThread', {
             organizationUuid: member.organizationUuid,
         });
@@ -275,6 +281,9 @@ export const applyOrganizationMemberStaticAbilities: Record<
             organizationUuid: member.organizationUuid,
         });
         can('manage', 'CustomFields', {
+            organizationUuid: member.organizationUuid,
+        });
+        can('manage', 'CustomSqlTableCalculations', {
             organizationUuid: member.organizationUuid,
         });
         can('manage', 'SqlRunner', {
@@ -338,6 +347,9 @@ export const applyOrganizationMemberStaticAbilities: Record<
         can('manage', 'AiAgent', {
             organizationUuid: member.organizationUuid,
         });
+        can('manage', 'AiAgentDocument', {
+            organizationUuid: member.organizationUuid,
+        });
         can('manage', 'AiAgentThread', {
             organizationUuid: member.organizationUuid,
             userUuid: member.userUuid,
@@ -347,6 +359,10 @@ export const applyOrganizationMemberStaticAbilities: Record<
         applyOrganizationMemberStaticAbilities.developer(member, { can });
 
         can('manage', 'DataApp', {
+            organizationUuid: member.organizationUuid,
+        });
+
+        can('manage', 'OrganizationDesign', {
             organizationUuid: member.organizationUuid,
         });
 

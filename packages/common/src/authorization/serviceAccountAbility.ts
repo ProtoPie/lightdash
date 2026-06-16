@@ -175,7 +175,13 @@ const applyServiceAccountStaticAbilities: Record<
         can('view', 'AiAgent', {
             organizationUuid,
         });
+        can('view', 'AiAgentDocument', {
+            organizationUuid,
+        });
         can('create', 'AiAgentThread', {
+            organizationUuid,
+        });
+        can('view', 'OrganizationDesign', {
             organizationUuid,
         });
     },
@@ -246,6 +252,9 @@ const applyServiceAccountStaticAbilities: Record<
         can('manage', 'CustomFields', {
             organizationUuid,
         });
+        can('manage', 'CustomSqlTableCalculations', {
+            organizationUuid,
+        });
         can('manage', 'SqlRunner', {
             organizationUuid,
         });
@@ -302,11 +311,17 @@ const applyServiceAccountStaticAbilities: Record<
         can('manage', 'AiAgent', {
             organizationUuid,
         });
+        can('manage', 'AiAgentDocument', {
+            organizationUuid,
+        });
         can('manage', 'AiAgentThread', {
             organizationUuid,
             //  userUuid: userUuid,
         });
         can('manage', 'DataApp', {
+            organizationUuid,
+        });
+        can('manage', 'OrganizationDesign', {
             organizationUuid,
         });
         can('manage', 'Dashboard', {
@@ -367,6 +382,16 @@ const applyServiceAccountStaticAbilities: Record<
     // System-role aliases. Each one delegates to the matching org-member
     // ability builder so the SA's CASL is exactly the user-with-this-role
     // shape — no parallel scope mapping to drift out of sync.
+    [ServiceAccountScope.SYSTEM_MEMBER]: ({
+        organizationUuid,
+        userUuid,
+        builder: { can },
+    }) => {
+        applyOrganizationMemberStaticAbilities[OrganizationMemberRole.MEMBER](
+            { organizationUuid, userUuid },
+            { can },
+        );
+    },
     [ServiceAccountScope.SYSTEM_ADMIN]: ({
         organizationUuid,
         userUuid,

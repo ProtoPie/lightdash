@@ -82,6 +82,7 @@ export type DbAiPrompt = {
     metric_query: object | null;
     saved_query_uuid: string | null;
     model_config: { modelName: string; modelProvider: string } | null;
+    token_usage: { totalTokens: number } | null;
 };
 
 export type AiPromptTable = Knex.CompositeTableType<
@@ -103,10 +104,36 @@ export type AiPromptTable = Knex.CompositeTableType<
             | 'metric_query'
             | 'saved_query_uuid'
             | 'model_config'
+            | 'token_usage'
         > & {
             responded_at: Knex.Raw;
         }
     >
+>;
+
+export const AiThreadCompactionTableName = 'ai_thread_compaction';
+
+export type DbAiThreadCompaction = {
+    ai_thread_compaction_uuid: string;
+    ai_thread_uuid: string;
+    compacted_through_ai_prompt_uuid: string;
+    triggering_ai_prompt_uuid: string;
+    serialized_input: string;
+    summary: string;
+    created_at: Date;
+};
+
+export type AiThreadCompactionTable = Knex.CompositeTableType<
+    DbAiThreadCompaction,
+    Pick<
+        DbAiThreadCompaction,
+        | 'ai_thread_uuid'
+        | 'compacted_through_ai_prompt_uuid'
+        | 'triggering_ai_prompt_uuid'
+        | 'serialized_input'
+        | 'summary'
+    >,
+    never
 >;
 
 export const AiSlackPromptTableName = 'ai_slack_prompt';
@@ -153,6 +180,8 @@ export type DbAiAgentToolCall = {
     tool_call_id: string;
     tool_name: string;
     tool_args: object;
+    ai_mcp_server_uuid: string | null;
+    parent_tool_call_id: string | null;
     created_at: Date;
 };
 
@@ -160,7 +189,12 @@ export type AiAgentToolCallTable = Knex.CompositeTableType<
     DbAiAgentToolCall,
     Pick<
         DbAiAgentToolCall,
-        'ai_prompt_uuid' | 'tool_call_id' | 'tool_name' | 'tool_args'
+        | 'ai_prompt_uuid'
+        | 'tool_call_id'
+        | 'tool_name'
+        | 'tool_args'
+        | 'ai_mcp_server_uuid'
+        | 'parent_tool_call_id'
     >,
     never
 >;
@@ -228,4 +262,22 @@ export type AiOrganizationSettingsTable = Knex.CompositeTableType<
     DbAiOrganizationSettings,
     Pick<DbAiOrganizationSettings, 'organization_uuid' | 'ai_agents_visible'>,
     Partial<Pick<DbAiOrganizationSettings, 'ai_agents_visible'>>
+>;
+
+export const AiSqlApprovalTableName = 'ai_sql_approval';
+
+export type AiSqlApprovalDecision = 'approved' | 'rejected';
+
+export type DbAiSqlApproval = {
+    tool_call_id: string;
+    decision: AiSqlApprovalDecision;
+    decided_by_user_uuid: string | null;
+    decided_at: Date;
+};
+
+export type AiSqlApprovalTable = Knex.CompositeTableType<
+    DbAiSqlApproval,
+    Pick<DbAiSqlApproval, 'tool_call_id' | 'decision'> &
+        Partial<Pick<DbAiSqlApproval, 'decided_by_user_uuid'>>,
+    never
 >;

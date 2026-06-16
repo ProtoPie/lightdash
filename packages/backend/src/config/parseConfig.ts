@@ -988,7 +988,6 @@ export type LightdashConfig = {
     databaseConnectionUri?: string;
     smtp: SmtpConfig | undefined;
     rudder: RudderConfig;
-    posthog: PosthogConfig | undefined;
     mode: LightdashMode;
     license: {
         licenseKey: string | null;
@@ -1019,11 +1018,13 @@ export type LightdashConfig = {
         eventMetricsEnabled: boolean;
         eventMetricsConfigPath?: string;
         allQueryMetricsEnabled: boolean;
+        extendedMetricsEnabled: boolean;
     };
     database: {
         connectionUri: string | undefined;
         maxConnections: number | undefined;
         minConnections: number | undefined;
+        allowMissingMigrations: boolean;
     };
     allowMultiOrgs: boolean;
     maxPayloadSize: string;
@@ -1040,17 +1041,9 @@ export type LightdashConfig = {
         maxColumnLimit: number;
     };
     enableImprovedExcelDates: boolean;
-    chart: {
-        versionHistory: {
-            daysLimit: number;
-        };
-    };
     dashboard: {
         maxTilesPerTab: number;
         maxTabsPerDashboard: number;
-        versionHistory: {
-            daysLimit: number;
-        };
         disableSentryTracking: boolean;
     };
     // This is the override color palette for the organization
@@ -1357,12 +1350,6 @@ export type RudderConfig = {
     dataPlaneUrl: string | undefined;
 };
 
-export type PosthogConfig = {
-    projectApiKey: string;
-    feApiHost: string;
-    beApiHost: string;
-};
-
 type JwtKeySetConfig = {
     /**
      * Path or content of the x509 pem-encoded public key certificate for use as part of
@@ -1403,6 +1390,13 @@ export type AuthGoogleConfig = {
     googleDriveApiKey: string | undefined;
     enabled: boolean;
     enableGCloudADC: boolean;
+    /**
+     * When true, the Google login flow also requests the BigQuery scope so
+     * users on BigQuery SSO complete a single consent screen instead of two
+     * separate OAuth flows (one for login, one for BigQuery warehouse access).
+     * See PROD-7783.
+     */
+    includeBigqueryScope: boolean;
 };
 
 type AuthOktaConfig = {
@@ -1561,8 +1555,8 @@ const parseAppRuntimeConfig = (siteUrl: string): AppRuntimeConfig => {
  * operators should migrate to LIGHTDASH_ENABLE_FEATURE_FLAGS /
  * LIGHTDASH_DISABLE_FEATURE_FLAGS. Entries here translate the legacy var into
  * the unified allowlists for backward compatibility, so self-hosted
- * deployments don't regress when a per-flag handler is removed during
- * PostHog migration. Once an entry has soaked for ~6 months after the
+ * deployments don't regress when a per-flag handler is removed.
+ * Once an entry has soaked for ~6 months after the
  * unified pattern is documented, delete it.
  */
 const LEGACY_ENABLE_ENV_VARS: ReadonlyArray<
@@ -1746,17 +1740,6 @@ export const parseConfig = (): LightdashConfig => {
                       process.env.EMAIL_SMTP_IMAGE_INLINE_CID === 'true',
               }
             : undefined,
-        posthog: process.env.POSTHOG_PROJECT_API_KEY
-            ? {
-                  projectApiKey: process.env.POSTHOG_PROJECT_API_KEY,
-                  feApiHost:
-                      process.env.POSTHOG_FE_API_HOST ||
-                      'https://us.i.posthog.com',
-                  beApiHost:
-                      process.env.POSTHOG_BE_API_HOST ||
-                      'https://us.i.posthog.com',
-              }
-            : undefined,
         rudder: {
             writeKey:
                 process.env.RUDDERSTACK_ANALYTICS_DISABLED === 'true'
@@ -1812,6 +1795,8 @@ export const parseConfig = (): LightdashConfig => {
                 getIntegerFromEnvironmentVariable('PGMAXCONNECTIONS'),
             minConnections:
                 getIntegerFromEnvironmentVariable('PGMINCONNECTIONS'),
+            allowMissingMigrations:
+                process.env.ALLOW_MISSING_MIGRATIONS === 'true',
         },
         auth: {
             pat: {
@@ -1839,6 +1824,8 @@ export const parseConfig = (): LightdashConfig => {
                 googleDriveApiKey: process.env.GOOGLE_DRIVE_API_KEY,
                 enabled: process.env.AUTH_GOOGLE_ENABLED === 'true',
                 enableGCloudADC: process.env.AUTH_ENABLE_GCLOUD_ADC === 'true',
+                includeBigqueryScope:
+                    process.env.AUTH_GOOGLE_INCLUDE_BIGQUERY_SCOPE === 'true',
             },
             okta: {
                 oauth2Issuer: process.env.AUTH_OKTA_OAUTH_ISSUER,
@@ -1980,6 +1967,9 @@ export const parseConfig = (): LightdashConfig => {
             allQueryMetricsEnabled:
                 process.env.LIGHTDASH_PROMETHEUS_ALL_QUERY_METRICS_ENABLED ===
                 'true', // defaults to false, tracks execution duration & S3 upload for all queries (not just pre-aggregate)
+            extendedMetricsEnabled:
+                process.env.LIGHTDASH_PROMETHEUS_EXTENDED_METRICS_ENABLED ===
+                'true', // defaults to false
         },
         allowMultiOrgs: process.env.ALLOW_MULTIPLE_ORGS === 'true',
         maxPayloadSize: process.env.LIGHTDASH_MAX_PAYLOAD || '5mb',
@@ -2010,14 +2000,6 @@ export const parseConfig = (): LightdashConfig => {
                 ? process.env.LIGHTDASH_ENABLE_TIMEZONE_SUPPORT === 'true'
                 : undefined,
         },
-        chart: {
-            versionHistory: {
-                daysLimit:
-                    getIntegerFromEnvironmentVariable(
-                        'LIGHTDASH_CHART_VERSION_HISTORY_DAYS_LIMIT',
-                    ) || 3,
-            },
-        },
         dashboard: {
             maxTilesPerTab:
                 getIntegerFromEnvironmentVariable(
@@ -2027,12 +2009,6 @@ export const parseConfig = (): LightdashConfig => {
                 getIntegerFromEnvironmentVariable(
                     'LIGHTDASH_DASHBOARD_MAX_TABS_PER_DASHBOARD',
                 ) || 20,
-            versionHistory: {
-                daysLimit:
-                    getIntegerFromEnvironmentVariable(
-                        'LIGHTDASH_DASHBOARD_VERSION_HISTORY_DAYS_LIMIT',
-                    ) || 3,
-            },
             disableSentryTracking:
                 process.env.LIGHTDASH_DASHBOARD_DISABLE_SENTRY_TRACKING ===
                 'true',
@@ -2283,9 +2259,9 @@ export const parseConfig = (): LightdashConfig => {
                 .filter(Boolean),
             schedule: process.env.MANAGED_AGENT_SCHEDULE || '0 0 * * *',
             sessionTimeoutMs: parseInt(
-                process.env.MANAGED_AGENT_SESSION_TIMEOUT_MS || '300000',
+                process.env.MANAGED_AGENT_SESSION_TIMEOUT_MS || '600000',
                 10,
-            ), // 5 minutes default
+            ), // 10 minutes default
         },
         initialSetup: getInitialSetupConfig(),
         updateSetup: getUpdateSetupConfig(),

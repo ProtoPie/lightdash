@@ -23,6 +23,10 @@ export type ExecuteAsyncMetricQueryRequestParams =
         query: Omit<MetricQueryRequest, 'csvLimit'>;
         dateZoom?: DateZoom;
         pivotConfiguration?: PivotConfiguration;
+        // Filters whose target field is absent from the query's explore are
+        // dropped silently — an app may run queries against multiple explores
+        // and one mismatch shouldn't break the others.
+        dashboardFilters?: DashboardFilters;
     };
 
 export type ExecuteAsyncSavedChartRequestParams =
@@ -120,6 +124,7 @@ export type DownloadAsyncQueryResultsRequestParams = {
     columnOrder?: string[];
     hiddenFields?: string[];
     pivotConfig?: PivotConfig;
+    exportPivotedData?: boolean;
     attachmentDownloadName?: string;
 };
 

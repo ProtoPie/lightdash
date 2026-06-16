@@ -13,7 +13,23 @@ Lightdash has two timezone settings. They look similar but solve different probl
 | **Data timezone**    | Warehouse   | "What timezone are my NTZ timestamps stored in?" | Warehouse connection → Advanced settings |
 | **Project timezone** | Application | "What timezone should my users see data in?"     | Project settings → Timezone              |
 
-The `EnableTimezoneSupport` feature flag (`LIGHTDASH_ENABLE_TIMEZONE_SUPPORT=true`) gates the data timezone feature — both the warehouse UI field and the session setup. The project timezone setting is always available. The flag can also be toggled per-organization (or per-user) via `feature_flag_overrides` in the database, which takes precedence over the env var, so we can roll out gradually without flipping the global switch.
+In addition, two display-layer overrides sit on top of the project timezone:
+
+| Override               | Scope              | Wins over project? | Where configured                  |
+| ---------------------- | ------------------ | ------------------ | --------------------------------- |
+| **User timezone**      | Per viewer         | ✅                 | Profile settings → Default timezone |
+| **Chart timezone**     | Per saved chart    | ✅ (also wins over user) | Explorer header → Timezone picker |
+
+Resolution order: `chart → user → project → server default ('UTC')`. A viewer with no profile preference falls through to the project. A viewer with a profile timezone sees their zone on charts that don't pin one. See [User-level timezone](#user-level-timezone) below.
+
+Two flags gate timezone behavior:
+
+| Flag                    | Env var                               | Gates                                                                                                                  |
+| ----------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `EnableTimezoneSupport` | `LIGHTDASH_ENABLE_TIMEZONE_SUPPORT`   | Data timezone feature: warehouse UI field, session-TZ setup, and the project-level "filter inputs in project TZ" toggle |
+| `EnableUserTimezones`   | `enable-user-timezones` (flag only)   | UI surface for user-facing timezone pickers: Profile panel picker and Explorer chart-level picker                       |
+
+The project timezone setting itself is always available. Server-side resolution (`resolveQueryTimezone`) honors a user's profile timezone regardless of `EnableUserTimezones` — the flag only gates the input that lets users set it. Both flags can be toggled per-organization (or per-user) via `feature_flag_overrides` in the database, which takes precedence over the env var, so we can roll out gradually without flipping the global switch.
 
 ### Data timezone (`dataTimezone`)
 
@@ -32,6 +48,26 @@ Controls where date boundaries fall for filters and grouping. When a user picks 
 
 - **Without it:** "today" = midnight UTC.
 - **With `America/New_York`:** "today" = midnight ET (4am or 5am UTC depending on DST).
+
+### User-level timezone
+
+Per-viewer override stored on the `users` row (`users.timezone`, IANA string or `NULL`). Slots between the chart-level and project-level layers in the resolution chain:
+
+```
+metricQuery.timezone  →  user.timezone  →  project.queryTimezone  →  config  →  'UTC'
+```
+
+- A viewer with `timezone = 'Asia/Tokyo'` sees charts in Tokyo whenever the chart hasn't pinned its own timezone.
+- An author can still "pin" a chart to a specific zone via the Explorer timezone picker — that wins for every viewer (matches Looker's `timezone: <fixed_zone>` behavior).
+- Charts without a pinned zone fall through per-viewer (Looker's `timezone: user_timezone` model).
+
+Resolution happens server-side in [`resolveQueryTimezone`](../packages/common/src/utils/resolveQueryTimezone.ts). Anonymous viewers (embeds / JWT) and service accounts have no profile timezone — the helper `getAccountUserTimezone(account)` returns `null` for them, so they fall through to the project default.
+
+**Worker / retrieval paths** (queued warehouse execution, pre-aggregate workers, results pagination, downloads, ready-results fetch) don't re-resolve the timezone. `executePreparedAsyncQuery` stamps the resolved chart > user > project timezone onto `metricQuery.timezone` before persisting the query history snapshot, so any method that receives a `queryUuid` reads it back directly as `queryHistory.metricQuery.timezone` — no resolver helper, no project lookup, no flag check.
+
+**Pre-aggregate materialization is an exception.** Materializations build shared tables queried by every viewer, so the user-level layer is skipped. When `prepareMetricQueryAsyncQueryArgs` is called with a `materializationRole`, `userTimezone` is forced to `null` regardless of the triggering account — the materialization SQL compiles against `chart.timezone ?? project.queryTimezone`, never the triggering user's profile preference.
+
+**Files:** `packages/common/src/utils/resolveQueryTimezone.ts` (chain + `getAccountUserTimezone`), `packages/backend/src/services/UserService.ts` (validation on update), `packages/frontend/src/components/UserSettings/ProfilePanel/index.tsx` (profile UI).
 
 ### How they combine
 
@@ -64,7 +100,7 @@ End-to-end, timezone concerns are handled at four boundaries: compile in Node, e
 flowchart LR
     subgraph Compile["Compile · Node.js"]
         direction TB
-        C1["Resolve project TZ<br/><code>metricQuery.timezone ?? project.queryTimezone ?? 'UTC'</code><br/>Build SELECT (DATE_TRUNC round-trip)<br/>Build WHERE (boundaries in project TZ)"]
+        C1["Resolve timezone<br/><code>metricQuery.timezone ?? user.timezone ?? project.queryTimezone ?? 'UTC'</code><br/>Build SELECT (DATE_TRUNC round-trip)<br/>Build WHERE (boundaries in resolved TZ)"]
     end
     subgraph Execute["Execute · Warehouse"]
         direction TB
@@ -97,6 +133,8 @@ With `useTimezoneAwareDateTrunc` on, truncation is timezone-aware. The base dime
 The source TZ for step 1 is derived once per query at the service boundary via `getColumnTimezone(credentials)` (in `packages/common/src/types/projects.ts`) and threaded through `timeFrames.ts` as `sourceTimezone`. It returns `'UTC'` for Snowflake when the translator wrap is active, `dataTimezone` when Snowflake's `disableTimestampConversion` opts out of that wrap, and `dataTimezone` (defaulting to UTC) for every other adapter. Most warehouses ignore it because their `toProjectTz` doesn't take a source TZ; Snowflake threads it into the inner `CONVERT_TIMEZONE`.
 
 The SQL differs per warehouse (some have native TZ-aware truncation, others compose `AT TIME ZONE` / `CONVERT_TIMEZONE` / `to_utc_timestamp`), but the shape is identical everywhere. Flag off → falls back to raw `DATE_TRUNC` grouping in UTC (old behavior).
+
+**No-op short-circuit when target equals source.** When the resolved query timezone matches the column source TZ (e.g. a UTC project on a UTC-stored column), the wrap is semantically a no-op — and on BigQuery it defeats partition pruning, leading to unbounded scans. `resolveTimezoneWrap` (via the shared `isTimezoneRoundTripNoOp` predicate) skips the wrap entirely at the boundary, so every call site — DATE_TRUNC, EXTRACT, format wrap, filter literal — short-circuits to the unwrapped form symmetrically. The predicate lives in `timeFrames.ts` so new call sites that forget to check it inherit the same behavior.
 
 **Filter parity.** When the round-trip is active, the WHERE clause reuses the same wrapped expression for the LHS so filter literals (still UTC with a `+00:00` offset on most warehouses) compare against the same shifted value the SELECT groups on.
 
@@ -177,6 +215,37 @@ const formatTimestampAsUTCNoOffset = (date: Date): string =>
 **DATE-dimension boundaries are server-timezone-independent.** DATE-dimension filter boundaries are computed and formatted in UTC (flag off) or the project timezone (flag on) — never in the server's local timezone. Previously the default formatter used `moment(date)`, which read the process timezone — on a server with a positive UTC offset, `endOf('day')` would shift into the next calendar day and produce a 2-day filter range.
 
 **File:** `packages/common/src/compiler/filtersCompiler.ts`
+
+### Cell actions — filter-by, drill-down, view-underlying-data
+
+When a user clicks a result cell to filter, drill, or view underlying rows, the row's stored raw value is a UTC instant. For time-interval dimensions whose base is a TIMESTAMP (e.g. `created_at_day`, `created_at_month`), the displayed bucket is a project-TZ wall-clock date, so feeding the raw UTC instant straight into a filter would target the previous calendar day in any positive-offset project (e.g. Europe/Paris).
+
+`normalizeCellRawForFilter` (in `@lightdash/common`) shifts the raw UTC instant into the resolved project TZ and reformats as `YYYY-MM-DD` before constructing the filter rule. The shift is gated by `shouldShiftItemTimezone(field)`:
+
+| Field shape                              | Shifted? | Reason                                                              |
+| ---------------------------------------- | -------- | ------------------------------------------------------------------- |
+| Time-interval DATE on TIMESTAMP base     | ✅       | Bucket is project-TZ wall-clock; raw is UTC instant                 |
+| Time-interval DATE on DATE base          | ❌       | Bucket is already a calendar value                                  |
+| Plain DATE column (no time interval)     | ❌       | No time component to shift                                          |
+| `convert_timezone: false` on the dim     | ❌       | Display opt-out implies filters target the raw warehouse value      |
+| No resolved project timezone             | ❌       | Bit-identical to pre-feature behavior                               |
+
+**Files:** `packages/common/src/utils/normalizeCellRawForFilter.ts`, `packages/common/src/utils/formatting.ts` (`shouldShiftItemTimezone`), `packages/frontend/src/providers/MetricQueryData/MetricQueryDataProvider.tsx` (Filter-by / Drill-down / Underlying-data call sites).
+
+### Filter input pickers — project-TZ wall-clock
+
+Absolute-date filter pickers (`FilterDateTimePicker`, `FilterDateTimeRangePicker`) can optionally render their wall-clock value in the project timezone instead of the browser zone. This is a per-project opt-in on top of `EnableTimezoneSupport`:
+
+- Per-project boolean `use_project_timezone_in_filters` on `projects` (`NOT NULL DEFAULT false`)
+- Project settings exposes it as a Switch on the "Project time zone" page (page was renamed from "Query time zone")
+- Server-side invariant in `ProjectModel.updateQueryTimezone`: rejects `useProjectTimezoneInFilters=true` when the resulting `queryTimezone` would be null — the toggle is also disabled in the UI while no TZ is set
+- The picker shifts the rendered `Date` into the project zone for Mantine, and inverts the shift on change so the underlying UTC instant bubbles up to callers unchanged
+- Subtext flips to a local-time translation; side label shows the project TZ
+- Per-chart overrides via `metricQuery.timezone` are respected — the picker reads the resolved chart > user > project value rather than the project setting directly
+
+The toggle is independent of `EnableUserTimezones`: it controls picker rendering for absolute boundaries, not the chain that resolves which zone applies.
+
+**Files:** `packages/frontend/src/components/common/Filters/FilterInputs/FilterDateTimePicker.tsx`, `packages/frontend/src/components/SettingsQueryTimezone/index.tsx`, `packages/backend/src/database/migrations/20260511132608_add_use_project_timezone_in_filters_to_projects.ts`, `packages/backend/src/models/ProjectModel/ProjectModel.ts`.
 
 ### Session — Warehouse timezone
 
@@ -270,6 +339,8 @@ Inline array-style series data (`[x, y]` tuples) has no dataset dimension to ren
 | No shift (category / UTC)  | `resolvedTimezone` | `undefined`        | Values are still UTC instants — formatter converts and labels normally  |
 
 **Skipped for:** category-axis intervals (`WEEK`, `MONTH`, `QUARTER`, `YEAR`) — rendered as strings, not numeric positions; UTC or unresolved timezone — shift would be a no-op; pivot metadata (legend labels, stack totals) — those go through the formatter path, not the ECharts time scale.
+
+**Category date axes do their own project-TZ snap.** Category-axis intervals don't need the dataset shift, but the continuous range of category strings the axis emits has to line up with the row values it labels. `getCategoryDateAxisConfig` iterates `minX → maxX` in the resolved project TZ (via `dayjs.tz`) instead of UTC so the WEEK / MONTH / QUARTER / YEAR boundaries match the row buckets the backend produced. When the resolved zone is UTC the helper bypasses `dayjs.tz` entirely — `.add()` chains on `dayjs.tz` objects drift sub-ms and can break `.isBefore` at the boundary, producing a duplicate trailing category (empty bar).
 
 **Files:** `packages/frontend/src/hooks/echarts/timezoneShift.ts`, `packages/frontend/src/hooks/echarts/useEchartsCartesianConfig.ts`, `packages/common/src/visualizations/helpers/tooltipFormatter.ts`
 

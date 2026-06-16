@@ -68,7 +68,6 @@ export const BaseResponse: HealthState = {
     pivotTable: {
         maxColumnLimit: 0,
     },
-    posthog: undefined,
     pylon: {
         appId: '',
         verificationHash: undefined,
@@ -86,9 +85,6 @@ export const BaseResponse: HealthState = {
     dashboard: {
         maxTilesPerTab: 50,
         maxTabsPerDashboard: 20,
-        versionHistory: {
-            daysLimit: 0,
-        },
         disableSentryTracking: false,
     },
     rudder: {
@@ -105,7 +101,6 @@ export const BaseResponse: HealthState = {
         profilesSampleRate: 0,
     },
     hasCacheAutocompleResults: false,
-    hasResultsCaching: false,
     appearance: {
         overrideColorPalette: undefined,
         overrideColorPaletteName: undefined,
@@ -138,7 +133,6 @@ export const BaseResponse: HealthState = {
         enabled: false,
     },
     dataApps: {
-        enabled: false,
         previewOrigin: null,
     },
 };

@@ -1,36 +1,45 @@
 import { AgentToolOutput, assertUnreachable, Explore } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
 import {
-    APICallError,
     generateText,
     smoothStream,
     stepCountIs,
     streamText,
     StreamTextResult,
+    type ModelMessage,
     type Output,
+    type ToolSet,
 } from 'ai';
 import Logger from '../../../../logging/logger';
 import { getSystemPromptV2 } from '../prompts/systemV2';
+import { getDescribeWarehouseTable } from '../tools/describeWarehouseTable';
+import { getEditContent } from '../tools/editContent';
 import { getFindContent } from '../tools/findContent';
-import { getFindExplores } from '../tools/findExplores';
-import { getFindFields } from '../tools/findFields';
 import { getGenerateDashboardV2 } from '../tools/generateDashboardV2';
 import { getGetDashboardCharts } from '../tools/getDashboardCharts';
+import { getGetKnowledgeDocumentContent } from '../tools/getKnowledgeDocumentContent';
 import { getImproveContext } from '../tools/improveContext';
+import { getListKnowledgeDocuments } from '../tools/listKnowledgeDocuments';
+import { getListWarehouseTables } from '../tools/listWarehouseTables';
 import { getProposeChange } from '../tools/proposeChange';
+import { getReadContent } from '../tools/readContent';
 import { getRunQuery } from '../tools/runQuery';
 import { getRunSavedChart } from '../tools/runSavedChart';
+import { getRunSql } from '../tools/runSql';
 import { getSearchFieldValues } from '../tools/searchFieldValues';
 import type {
     AiAgentArgs,
     AiAgentDependencies,
     AiStreamAgentResponseArgs,
+    UnavailableMcpServer,
 } from '../types/aiAgent';
 import { AgentContext } from '../utils/AgentContext';
 import {
     AiAgentStepCapReachedError,
     getUserFacingErrorMessage,
 } from '../utils/errorMessages';
+import { getDiscoverFields } from './discoverFields/tool';
+import { getAgentTelemetryConfig } from './telemetry';
 
 const createAiAgentLogger =
     (debugLoggingEnabled: boolean) => (context: string, message: string) => {
@@ -41,68 +50,142 @@ const createAiAgentLogger =
 
 const STEP_CAP = 40;
 
+const withToolHints = (
+    messageHistory: ModelMessage[],
+    toolHints: string[],
+): ModelMessage[] => {
+    if (toolHints.length === 0) return messageHistory;
+    const hint = `\n\n(User hinted at using: ${toolHints.join(', ')})`;
+    const lastUserIndex = messageHistory.findLastIndex(
+        (m) => m.role === 'user',
+    );
+    if (lastUserIndex === -1) return messageHistory;
+    const lastUser = messageHistory[lastUserIndex];
+    if (lastUser.role !== 'user') return messageHistory;
+    const updatedContent =
+        typeof lastUser.content === 'string'
+            ? `${lastUser.content}${hint}`
+            : [...lastUser.content, { type: 'text' as const, text: hint }];
+    return [
+        ...messageHistory.slice(0, lastUserIndex),
+        { ...lastUser, content: updatedContent } as ModelMessage,
+        ...messageHistory.slice(lastUserIndex + 1),
+    ];
+};
+
+export type AgentMcpToolSetup = {
+    tools: ToolSet;
+    mcpToolNameToServerUuid: Record<string, string>;
+    unavailableMcpServers: UnavailableMcpServer[];
+    closeMcpClients: () => Promise<void>;
+};
+
+export const normalizeToolOutput = (
+    output: unknown,
+): { result: string; metadata?: AgentToolOutput['metadata'] } => {
+    if (
+        output !== null &&
+        typeof output === 'object' &&
+        'result' in output &&
+        typeof output.result === 'string'
+    ) {
+        const metadata =
+            'metadata' in output
+                ? (output.metadata as AgentToolOutput['metadata'])
+                : undefined;
+
+        return {
+            result: output.result,
+            metadata,
+        };
+    }
+
+    if (typeof output === 'string') {
+        return { result: output };
+    }
+
+    try {
+        return { result: JSON.stringify(output) ?? String(output) };
+    } catch {
+        return { result: String(output) };
+    }
+};
+
 export const defaultAgentOptions = {
     toolChoice: 'auto' as const,
     stopWhen: stepCountIs(STEP_CAP),
     maxRetries: 6, // Increased for Bedrock rate limits
 };
 
-const getAgentTelemetryConfig = (
-    functionId: string,
-    {
-        agentSettings,
-        threadUuid,
-        promptUuid,
-        telemetryEnabled,
-    }: Pick<
-        AiAgentArgs,
-        'agentSettings' | 'threadUuid' | 'promptUuid' | 'telemetryEnabled'
-    >,
-) =>
-    ({
-        functionId,
-        isEnabled: true,
-        recordInputs: telemetryEnabled,
-        recordOutputs: telemetryEnabled,
-        metadata: {
-            agentUuid: agentSettings.uuid,
-            threadUuid,
-            promptUuid,
-        },
-    }) as const;
-
 const getAgentTools = (
     args: AiAgentArgs,
     dependencies: AiAgentDependencies,
-) => {
+    availableExplores: Explore[],
+    mcpToolSetup: AgentMcpToolSetup,
+): ToolSet => {
     const logger = createAiAgentLogger(args.debugLoggingEnabled);
     logger(
         'Agent Tools',
         `Getting agent tools for agent: ${args.agentSettings.name}`,
     );
 
-    const findExplores = getFindExplores({
-        fieldSearchSize: args.findExploresFieldSearchSize,
-        findExplores: dependencies.findExplores,
-        updateProgress: dependencies.updateProgress,
-    });
-
-    const findFields = getFindFields({
-        getExplore: dependencies.getExplore,
-        findFields: dependencies.findFields,
-        updateProgress: dependencies.updateProgress,
-        pageSize: args.findFieldsPageSize,
-    });
+    const discoverFields = getDiscoverFields(
+        {
+            model: args.model,
+            callOptions: args.callOptions,
+            providerOptions: args.providerOptions,
+            availableExplores,
+            findExploresFieldSearchSize: args.findExploresFieldSearchSize,
+            findFieldsPageSize: args.findFieldsPageSize,
+            promptUuid: args.promptUuid,
+            telemetry: {
+                agentSettings: args.agentSettings,
+                threadUuid: args.threadUuid,
+                promptUuid: args.promptUuid,
+                telemetryEnabled: args.telemetryEnabled,
+            },
+        },
+        {
+            findExplores: dependencies.findExplores,
+            findFields: dependencies.findFields,
+            getExplore: dependencies.getExplore,
+            updateProgress: dependencies.updateProgress,
+            storeToolCall: dependencies.storeToolCall,
+            storeToolResults: dependencies.storeToolResults,
+        },
+    );
 
     const findContent = getFindContent({
         findContent: dependencies.findContent,
         siteUrl: args.siteUrl,
+        trackCoverage: (coverage) => {
+            dependencies.trackEvent({
+                event: 'ai_agent.find_content_coverage',
+                userId: args.userId,
+                properties: {
+                    organizationId: args.organizationId,
+                    projectId: args.agentSettings.projectUuid,
+                    aiAgentId: args.agentSettings.uuid,
+                    agentName: args.agentSettings.name,
+                    threadId: args.threadUuid,
+                    promptId: args.promptUuid,
+                    searchQuery: coverage.searchQuery,
+                    totalResultCount: coverage.totalResultCount,
+                    verifiedResultCount: coverage.verifiedResultCount,
+                    topResultVerified: coverage.topResultVerified,
+                },
+            });
+        },
     });
 
     const getDashboardCharts = getGetDashboardCharts({
         getDashboardCharts: dependencies.getDashboardCharts,
         siteUrl: args.siteUrl,
         pageSize: args.getDashboardChartsPageSize,
+    });
+
+    const readContent = getReadContent({
+        readContent: dependencies.readContent,
     });
 
     const runQuery = getRunQuery({
@@ -124,12 +207,40 @@ const getAgentTools = (
         enableDataAccess: args.enableDataAccess,
     });
 
+    const runSql = args.canRunSql
+        ? getRunSql({
+              updateProgress: dependencies.updateProgress,
+              runSqlJob: dependencies.runSqlJob,
+              getPrompt: dependencies.getPrompt,
+              sendFile: dependencies.sendFile,
+              updateSlackMessage: dependencies.updateSlackMessage,
+              siteUrl: args.siteUrl,
+              waitForSqlApproval: dependencies.waitForSqlApproval,
+              recordSqlApproval: dependencies.recordSqlApproval,
+          })
+        : null;
+
+    const listWarehouseTables = args.canRunSql
+        ? getListWarehouseTables({
+              listWarehouseTables: dependencies.listWarehouseTables,
+          })
+        : null;
+
+    const describeWarehouseTable = args.canRunSql
+        ? getDescribeWarehouseTable({
+              describeWarehouseTable: dependencies.describeWarehouseTable,
+          })
+        : null;
+
     const generateDashboard = getGenerateDashboardV2({
         getPrompt: dependencies.getPrompt,
         createOrUpdateArtifact: dependencies.createOrUpdateArtifact,
     });
 
     const improveContext = getImproveContext();
+    const editContent = getEditContent({
+        editContent: dependencies.editContent,
+    });
 
     const proposeChange = getProposeChange({
         createChange: dependencies.createChange,
@@ -140,11 +251,27 @@ const getAgentTools = (
         searchFieldValues: dependencies.searchFieldValues,
     });
 
-    const tools = {
+    const listKnowledgeDocuments = getListKnowledgeDocuments({
+        listKnowledgeDocuments: dependencies.listKnowledgeDocuments,
+    });
+
+    const getKnowledgeDocumentContent = getGetKnowledgeDocumentContent({
+        getKnowledgeDocumentContent: dependencies.getKnowledgeDocumentContent,
+    });
+
+    const tools: ToolSet = {
         findContent,
-        getDashboardCharts,
-        findExplores,
-        findFields,
+        discoverFields,
+        listKnowledgeDocuments,
+        getKnowledgeDocumentContent,
+        ...(args.enableAgentRevamp
+            ? {
+                  readContent,
+                  editContent,
+              }
+            : {
+                  getDashboardCharts,
+              }),
         runQuery,
         runSavedChart,
         generateDashboard,
@@ -153,28 +280,40 @@ const getAgentTools = (
             ? { proposeChange }
             : {}),
         ...(args.enableDataAccess ? { searchFieldValues } : {}),
+        ...(runSql ? { runSql } : {}),
+        ...(listWarehouseTables ? { listWarehouseTables } : {}),
+        ...(describeWarehouseTable ? { describeWarehouseTable } : {}),
     };
+
+    const mergedTools = { ...tools, ...mcpToolSetup.tools };
 
     logger(
         'Agent Tools',
-        `Successfully retrieved agent tools: ${Object.keys(tools).join(', ')}`,
+        `Successfully retrieved agent tools: ${Object.keys(mergedTools).join(', ')}`,
     );
-    return tools;
+    return mergedTools;
 };
 
 const getAgentMessages = (args: AiAgentArgs, availableExplores: Explore[]) => {
     const logger = createAiAgentLogger(args.debugLoggingEnabled);
     logger('Agent Messages', 'Getting agent messages.');
 
+    const messageHistory = withToolHints(args.messageHistory, args.toolHints);
+
     const messages = [
         getSystemPromptV2({
             agentName: args.agentSettings.name,
             instructions: args.agentSettings.instruction || undefined,
             availableExplores,
+            availableSkills: args.availableSkills,
+            knowledgeDocuments: args.knowledgeDocuments,
             enableDataAccess: args.enableDataAccess,
             enableSelfImprovement: args.enableSelfImprovement,
+            canRunSql: args.canRunSql,
+            warehouseType: args.warehouseType,
+            warehouseSchema: args.warehouseSchema,
         }),
-        ...args.messageHistory,
+        ...messageHistory,
     ];
 
     logger('Agent Messages', `Retrieved ${messages.length} messages.`);
@@ -207,9 +346,11 @@ const getAgentMessages = (args: AiAgentArgs, availableExplores: Explore[]) => {
 export const generateAgentResponse = async ({
     args,
     dependencies,
+    mcpToolSetup,
 }: {
     args: AiAgentArgs;
     dependencies: AiAgentDependencies;
+    mcpToolSetup: AgentMcpToolSetup;
 }): Promise<string> => {
     const logger = createAiAgentLogger(args.debugLoggingEnabled);
     logger(
@@ -220,14 +361,18 @@ export const generateAgentResponse = async ({
         'Generate Agent Response',
         `Agent settings: ${JSON.stringify(args.agentSettings)}`,
     );
-    const availableExplores = await dependencies.listExplores();
-    const messages = getAgentMessages(args, availableExplores);
-    const tools = getAgentTools(args, dependencies);
-
     const startTime = Date.now();
     const modelName = args.model.modelId;
 
     try {
+        const availableExplores = await dependencies.listExplores();
+        const tools = getAgentTools(
+            args,
+            dependencies,
+            availableExplores,
+            mcpToolSetup,
+        );
+        const messages = getAgentMessages(args, availableExplores);
         logger(
             'Generate Agent Response',
             `Calling generateText with model: ${modelName}`,
@@ -264,9 +409,7 @@ export const generateAgentResponse = async ({
                                         args.promptUuid
                                     }: ${toolCall.toolName} (ID: ${
                                         toolCall.toolCallId
-                                    }) (ARGS: ${JSON.stringify(
-                                        toolCall.input,
-                                    )})`,
+                                    }) (ARGS: ${JSON.stringify(toolCall.input)})`,
                                 );
 
                                 dependencies.trackEvent({
@@ -289,6 +432,11 @@ export const generateAgentResponse = async ({
                                     toolCallId: toolCall.toolCallId,
                                     toolName: toolCall.toolName,
                                     toolArgs: toolCall.input as object,
+                                    mcpServerUuid:
+                                        mcpToolSetup.mcpToolNameToServerUuid[
+                                            toolCall.toolName
+                                        ] ?? null,
+                                    parentToolCallId: null,
                                 });
                             }
                         }),
@@ -316,12 +464,11 @@ export const generateAgentResponse = async ({
                                         args.promptUuid
                                     }: ${toolResult.toolName} (ID: ${
                                         toolResult.toolCallId
-                                    }) (RESULT: ${JSON.stringify(
-                                        toolResult.output,
-                                    )})`,
+                                    }) (RESULT: ${JSON.stringify(toolResult.output)})`,
                                 );
-                                const output =
-                                    toolResult.output as AgentToolOutput;
+                                const output = normalizeToolOutput(
+                                    toolResult.output,
+                                );
                                 return {
                                     promptUuid: args.promptUuid,
                                     toolCallId: toolResult.toolCallId,
@@ -353,6 +500,14 @@ export const generateAgentResponse = async ({
             throw new AiAgentStepCapReachedError(result.steps.length);
         }
 
+        await dependencies.updatePrompt({
+            promptUuid: args.promptUuid,
+            response: result.text,
+            tokenUsage: {
+                totalTokens: result.usage.totalTokens ?? 0,
+            },
+        });
+
         const totalTime = Date.now() - startTime;
         dependencies.perf.measureGenerateResponseTime(totalTime);
         dependencies.perf.measureTTFT(totalTime, modelName, 'generate');
@@ -378,17 +533,20 @@ export const generateAgentResponse = async ({
         });
 
         throw error;
+    } finally {
+        await mcpToolSetup.closeMcpClients();
     }
 };
 
 export const streamAgentResponse = async ({
     args,
     dependencies,
+    mcpToolSetup,
 }: {
     args: AiStreamAgentResponseArgs;
     dependencies: AiAgentDependencies;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-}): Promise<StreamTextResult<any, Output.Output>> => {
+    mcpToolSetup: AgentMcpToolSetup;
+}): Promise<StreamTextResult<ToolSet, Output.Output>> => {
     const logger = createAiAgentLogger(args.debugLoggingEnabled);
     logger(
         'Stream Agent Response',
@@ -398,17 +556,32 @@ export const streamAgentResponse = async ({
         'Stream Agent Response',
         `Agent settings: ${JSON.stringify(args.agentSettings)}`,
     );
-    const availableExplores = await dependencies.listExplores();
-    const messages = getAgentMessages(args, availableExplores);
-    const tools = getAgentTools(args, dependencies);
 
     const startTime = Date.now();
     let firstChunkTime: number | null = null;
     let firstTextTime: number | null = null;
+    let mcpClientsClosed = false;
     const modelName =
         typeof args.model === 'string' ? args.model : args.model.modelId;
 
+    const cleanupMcpClients = async () => {
+        if (mcpClientsClosed) {
+            return;
+        }
+
+        mcpClientsClosed = true;
+        await mcpToolSetup.closeMcpClients();
+    };
+
     try {
+        const availableExplores = await dependencies.listExplores();
+        const tools = getAgentTools(
+            args,
+            dependencies,
+            availableExplores,
+            mcpToolSetup,
+        );
+        const messages = getAgentMessages(args, availableExplores);
         logger(
             'Stream Agent Response',
             `Calling streamText with model: ${modelName}`,
@@ -474,6 +647,11 @@ export const streamAgentResponse = async ({
                                 toolCallId: event.chunk.toolCallId,
                                 toolName: event.chunk.toolName,
                                 toolArgs: event.chunk.input as object,
+                                mcpServerUuid:
+                                    mcpToolSetup.mcpToolNameToServerUuid[
+                                        event.chunk.toolName
+                                    ] ?? null,
+                                parentToolCallId: null,
                             })
                             .catch((error) => {
                                 Logger.error(
@@ -485,6 +663,15 @@ export const streamAgentResponse = async ({
                         break;
 
                     case 'tool-result':
+                        // The discoverFields tool emits preliminary
+                        // tool-result chunks as it streams subagent progress.
+                        // Only persist the final, non-preliminary one — N
+                        // intermediate rows for the same toolCallId would be
+                        // wasteful and the intermediate output shapes carry
+                        // streaming state, not the parent-facing result.
+                        if (event.chunk.preliminary) {
+                            break;
+                        }
                         logger(
                             'Chunk Tool Result',
                             `Storing tool result for Prompt UUID ${
@@ -499,12 +686,7 @@ export const streamAgentResponse = async ({
                                     promptUuid: args.promptUuid,
                                     toolCallId: event.chunk.toolCallId,
                                     toolName: event.chunk.toolName,
-                                    result: (
-                                        event.chunk.output as AgentToolOutput
-                                    ).result,
-                                    metadata: (
-                                        event.chunk.output as AgentToolOutput
-                                    ).metadata,
+                                    ...normalizeToolOutput(event.chunk.output),
                                 },
                             ])
                             .catch((error) => {
@@ -565,7 +747,7 @@ export const streamAgentResponse = async ({
                         });
                 }
             },
-            onFinish: ({ usage, steps, reasoning, finishReason }) => {
+            onFinish: async ({ usage, steps, reasoning, finishReason }) => {
                 logger(
                     'On Finish',
                     `Stream finished. Updating prompt with response. finishReason: ${finishReason}, steps: ${steps.length}`,
@@ -584,11 +766,17 @@ export const streamAgentResponse = async ({
                         errorMessage: getUserFacingErrorMessage(
                             new AiAgentStepCapReachedError(steps.length),
                         ),
+                        tokenUsage: {
+                            totalTokens: usage.totalTokens ?? 0,
+                        },
                     });
                 } else {
                     void dependencies.updatePrompt({
                         response: completeResponse,
                         promptUuid: args.promptUuid,
+                        tokenUsage: {
+                            totalTokens: usage.totalTokens ?? 0,
+                        },
                     });
                 }
 
@@ -624,10 +812,12 @@ export const streamAgentResponse = async ({
                 dependencies.perf.measureStreamResponseTime(
                     Date.now() - startTime,
                 );
+
+                await cleanupMcpClients();
             },
             experimental_transform: smoothStream({
                 delayInMs: 20,
-                chunking: 'line',
+                chunking: 'word',
             }),
             onError: ({ error }) => {
                 console.error(error);
@@ -652,6 +842,8 @@ export const streamAgentResponse = async ({
                     promptUuid: args.promptUuid,
                     errorMessage: userFacingMessage,
                 });
+
+                void cleanupMcpClients();
             },
             experimental_telemetry: getAgentTelemetryConfig(
                 'streamAgentResponse',
@@ -684,6 +876,7 @@ export const streamAgentResponse = async ({
             errorMessage: userFacingMessage,
         });
 
+        await cleanupMcpClients();
         throw error;
     }
 };

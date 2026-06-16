@@ -34,6 +34,7 @@ import type { InfiniteQueryResults } from '../useQueryResults';
 import { useServerFeatureFlag } from '../useServerOrClientFeatureFlag';
 import {
     getExpectedSeriesMap,
+    isPivotSeriesOrderDeterminedByQuery,
     mergeExistingAndExpectedSeries,
     sortDimensions,
 } from './utils';
@@ -1093,6 +1094,7 @@ const useCartesianChartConfig = ({
                         : undefined;
                 const defaultSmooth = prev?.series?.[0]?.smooth;
                 const defaultLabel = prev?.series?.[0]?.label;
+                const defaultStackLabel = prev?.series?.[0]?.stackLabel;
 
                 const defaultShowSymbol = prev?.series?.[0]?.showSymbol;
                 const expectedSeriesMap = getExpectedSeriesMap({
@@ -1107,15 +1109,15 @@ const useCartesianChartConfig = ({
                     xField: dirtyLayout.xField,
                     yFields: dirtyLayout.yField,
                     defaultLabel,
+                    defaultStackLabel,
                     itemsMap,
                     columnLimit,
                 });
-                // Check if any sort field matches a pivot dimension
-                const sortedByPivot =
-                    !!pivotKeys?.length &&
-                    !!resultsData?.metricQuery?.sorts?.some((sort) =>
-                        pivotKeys.includes(sort.fieldId),
-                    );
+                const sortedByPivot = isPivotSeriesOrderDeterminedByQuery(
+                    pivotKeys,
+                    dirtyLayout.yField,
+                    resultsData?.metricQuery?.sorts,
+                );
 
                 const newSeries = mergeExistingAndExpectedSeries({
                     expectedSeriesMap,

@@ -25,8 +25,10 @@ import JoinOrganization from './pages/JoinOrganization';
 import LegacySqlRunner from './pages/LegacySqlRunner';
 import Login from './pages/Login';
 import MetricsCatalog from './pages/MetricsCatalog';
+import MinimalApp from './pages/MinimalApp';
 import MinimalDashboard from './pages/MinimalDashboard';
 import MinimalSavedExplorer from './pages/MinimalSavedExplorer';
+import MinimalSqlChart from './pages/MinimalSqlChart';
 import PasswordRecovery from './pages/PasswordRecovery';
 import PasswordReset from './pages/PasswordReset';
 import Projects from './pages/Projects';
@@ -135,6 +137,18 @@ const MINIMAL_ROUTES: RouteObject[] = [
             {
                 path: '/minimal/projects/:projectUuid/dashboards/:dashboardUuid/view/tabs/:tabUuid',
                 element: <MinimalDashboard />,
+            },
+            {
+                path: '/minimal/projects/:projectUuid/sql-runner/:savedSqlUuid',
+                element: (
+                    <Stack p="lg" h="100vh">
+                        <MinimalSqlChart />
+                    </Stack>
+                ),
+            },
+            {
+                path: '/minimal/projects/:projectUuid/apps/:appUuid',
+                element: <MinimalApp />,
             },
         ],
     },

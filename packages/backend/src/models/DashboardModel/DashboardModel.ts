@@ -3,12 +3,14 @@ import {
     ContentType,
     CreateDashboard,
     CreateDashboardChartTile,
+    CreateDashboardDataAppTile,
     CreateDashboardHeadingTile,
     CreateDashboardLoomTile,
     CreateDashboardMarkdownTile,
     CreateDashboardSqlChartTile,
     DashboardChartTile,
     DashboardDAO,
+    DashboardDataAppTile,
     DashboardHeadingTile,
     DashboardLoomTile,
     DashboardMarkdownTile,
@@ -19,6 +21,7 @@ import {
     DashboardVersionedFields,
     HTML_SANITIZE_MARKDOWN_TILE_RULES,
     isDashboardChartTileType,
+    isDashboardDataAppTileType,
     isDashboardHeadingTileType,
     isDashboardLoomTileType,
     isDashboardMarkdownTileType,
@@ -37,12 +40,14 @@ import {
 } from '@lightdash/common';
 import { Knex } from 'knex';
 import { validate as isValidUuid, v4 as uuidv4 } from 'uuid';
+import { AppsTableName } from '../../database/entities/apps';
 import {
     DashboardsTableName,
     DashboardTable,
     DashboardTabsTableName,
     DashboardTileChartTable,
     DashboardTileChartTableName,
+    DashboardTileDataAppsTableName,
     DashboardTileHeadingsTableName,
     DashboardTileLoomsTableName,
     DashboardTileMarkdownsTableName,
@@ -74,6 +79,7 @@ import { SavedSqlTableName } from '../../database/entities/savedSql';
 import { SpaceTableName } from '../../database/entities/spaces';
 import { UserTable, UserTableName } from '../../database/entities/users';
 import { DbValidationTable } from '../../database/entities/validation';
+import Logger from '../../logging/logger';
 import { generateUniqueSlug } from '../../utils/SlugUtils';
 import { ContentVerificationModel } from '../ContentVerificationModel';
 import { SpaceModel } from '../SpaceModel';
@@ -125,22 +131,16 @@ export type GetChartTileQuery = Pick<
 
 type DashboardModelArguments = {
     database: Knex;
-    lightdashConfig?: {
-        dashboard: { versionHistory: { daysLimit: number } };
-    };
     contentVerificationModel?: ContentVerificationModel;
 };
 
 export class DashboardModel {
     private readonly database: Knex;
 
-    private readonly lightdashConfig?: DashboardModelArguments['lightdashConfig'];
-
     private contentVerificationModel: ContentVerificationModel | undefined;
 
     constructor(args: DashboardModelArguments) {
         this.database = args.database;
-        this.lightdashConfig = args.lightdashConfig;
         this.contentVerificationModel = args.contentVerificationModel;
     }
 
@@ -183,16 +183,39 @@ export class DashboardModel {
             );
         }
 
+        // Tiles may carry a tabUuid for a tab that no longer exists in this
+        // version (stale frontend state, concurrent edits, CLI/promotion).
+        // Drop those references so the insert can't violate the
+        // (tab_uuid, dashboard_version_id) FK on dashboard_tabs.
+        const validTabUuids = new Set(version.tabs.map((tab) => tab.uuid));
+
         const tilesWithUuids: Array<
             | (CreateDashboardChartTile & { uuid: string })
             | (CreateDashboardMarkdownTile & { uuid: string })
             | (CreateDashboardLoomTile & { uuid: string })
             | (CreateDashboardSqlChartTile & { uuid: string })
             | (CreateDashboardHeadingTile & { uuid: string })
+            | (CreateDashboardDataAppTile & { uuid: string })
         > = version.tiles.map((tile) => ({
             ...tile,
             uuid: tile.uuid || uuidv4(),
         }));
+
+        const droppedTabUuids = [
+            ...new Set(
+                tilesWithUuids
+                    .map((t) => t.tabUuid)
+                    .filter(
+                        (uuid): uuid is string =>
+                            !!uuid && !validTabUuids.has(uuid),
+                    ),
+            ),
+        ];
+        if (droppedTabUuids.length > 0) {
+            Logger.warn(
+                `Dropped stale tabUuid on tiles for dashboard ${dashboardId} version ${versionId.dashboard_version_id}: ${droppedTabUuids.join(', ')}`,
+            );
+        }
 
         if (tilesWithUuids.length > 0) {
             await trx(DashboardTilesTableName).insert(
@@ -204,7 +227,8 @@ export class DashboardModel {
                     width: w,
                     x_offset: x,
                     y_offset: y,
-                    tab_uuid: tabUuid,
+                    tab_uuid:
+                        tabUuid && validTabUuids.has(tabUuid) ? tabUuid : null,
                 })),
             );
         }
@@ -298,6 +322,19 @@ export class DashboardModel {
                     saved_sql_uuid: properties.savedSqlUuid,
                     hide_title: properties.hideTitle,
                     title: properties.title,
+                })),
+            );
+        }
+
+        const dataAppTiles = tilesWithUuids.filter(isDashboardDataAppTileType);
+        if (dataAppTiles.length > 0) {
+            await trx(DashboardTileDataAppsTableName).insert(
+                dataAppTiles.map(({ uuid, properties }) => ({
+                    dashboard_version_id: versionId.dashboard_version_id,
+                    dashboard_tile_uuid: uuid,
+                    app_uuid: properties.appUuid,
+                    title: properties.title ?? null,
+                    hide_title: properties.hideTitle ?? false,
                 })),
             );
         }
@@ -874,6 +911,8 @@ export class DashboardModel {
                     last_version_chart_kind: string | null;
                     tab_uuid: string;
                     chart_slug: string;
+                    app_uuid: string | null;
+                    data_app_deleted_at: Date | null;
                 }[]
             >(
                 `${DashboardTilesTableName}.x_offset`,
@@ -906,14 +945,16 @@ export class DashboardModel {
                         ${DashboardTileChartTableName}.title,
                         ${DashboardTileLoomsTableName}.title,
                         ${DashboardTileMarkdownsTableName}.title,
-                        ${DashboardTileSqlChartTableName}.title
+                        ${DashboardTileSqlChartTableName}.title,
+                        ${DashboardTileDataAppsTableName}.title
                     ) AS title`,
                 ),
                 this.database.raw(
                     `COALESCE(
                         ${DashboardTileLoomsTableName}.hide_title,
                         ${DashboardTileChartTableName}.hide_title,
-                        ${DashboardTileSqlChartTableName}.hide_title
+                        ${DashboardTileSqlChartTableName}.hide_title,
+                        ${DashboardTileDataAppsTableName}.hide_title
                     ) AS hide_title`,
                 ),
                 `${DashboardTileLoomsTableName}.url`,
@@ -921,6 +962,10 @@ export class DashboardModel {
                 `${DashboardTileMarkdownsTableName}.hide_frame`,
                 `${DashboardTileHeadingsTableName}.text`,
                 `${DashboardTileHeadingsTableName}.show_divider`,
+                `${DashboardTileDataAppsTableName}.app_uuid`,
+                this.database.raw(
+                    `${AppsTableName}.deleted_at AS data_app_deleted_at`,
+                ),
             )
             .leftJoin(DashboardTileChartTableName, function chartsJoin() {
                 this.on(
@@ -996,6 +1041,27 @@ export class DashboardModel {
                     `${SavedChartsTableName}.saved_query_id`,
                 ).andOnNull(`${SavedChartsTableName}.deleted_at`);
             })
+            .leftJoin(DashboardTileDataAppsTableName, function dataAppsJoin() {
+                this.on(
+                    `${DashboardTileDataAppsTableName}.dashboard_tile_uuid`,
+                    '=',
+                    `${DashboardTilesTableName}.dashboard_tile_uuid`,
+                );
+                this.andOn(
+                    `${DashboardTileDataAppsTableName}.dashboard_version_id`,
+                    '=',
+                    `${DashboardTilesTableName}.dashboard_version_id`,
+                );
+            })
+            // Intentionally does NOT filter `apps.deleted_at IS NULL`. We
+            // need to surface soft-deleted apps so the frontend can render a
+            // "this app no longer exists" placeholder instead of a broken
+            // iframe.
+            .leftJoin(
+                AppsTableName,
+                `${DashboardTileDataAppsTableName}.app_uuid`,
+                `${AppsTableName}.app_id`,
+            )
             .where(
                 `${DashboardTilesTableName}.dashboard_version_id`,
                 dashboard.dashboard_version_id,
@@ -1025,8 +1091,13 @@ export class DashboardModel {
                 dashboard.dashboard_id,
             );
 
-        const tableCalculationFilters = view?.filters?.tableCalculations;
-        view.filters.tableCalculations = tableCalculationFilters || [];
+        // A version may have no dashboard_views row (e.g. legacy or partially
+        // written data). Guard the backfill — the return below already defaults
+        // `filters` when `view` is absent.
+        if (view?.filters) {
+            view.filters.tableCalculations =
+                view.filters.tableCalculations || [];
+        }
 
         const verification =
             (await this.contentVerificationModel?.getByContent(
@@ -1068,6 +1139,8 @@ export class DashboardModel {
                     last_version_chart_kind,
                     tab_uuid,
                     chart_slug,
+                    app_uuid,
+                    data_app_deleted_at,
                 }) => {
                     const base: Omit<
                         DashboardDAO['tiles'][number],
@@ -1137,6 +1210,18 @@ export class DashboardModel {
                                 properties: {
                                     text: text || '',
                                     showDivider: show_divider ?? false,
+                                },
+                            };
+                        case DashboardTileTypes.DATA_APP:
+                            return <DashboardDataAppTile>{
+                                ...base,
+                                type: DashboardTileTypes.DATA_APP,
+                                properties: {
+                                    ...commonProperties,
+                                    appUuid: app_uuid ?? '',
+                                    appDeletedAt:
+                                        data_app_deleted_at?.toISOString() ??
+                                        null,
                                 },
                             };
                         default: {
@@ -1517,6 +1602,70 @@ export class DashboardModel {
         return !!result;
     }
 
+    async savedSqlChartExistsInDashboard(
+        projectUuid: string,
+        dashboardUuid: string,
+        savedSqlUuid: string,
+    ): Promise<boolean> {
+        const cteName = 'latest_dashboard_version_cte';
+
+        const result = await this.database
+            .with(cteName, (qb) => {
+                void qb
+                    .select({
+                        dashboard_uuid: `${DashboardsTableName}.dashboard_uuid`,
+                        dashboard_version_id: this.database.raw(
+                            `MAX(${DashboardVersionsTableName}.dashboard_version_id)`,
+                        ),
+                    })
+                    .from(DashboardsTableName)
+                    .innerJoin(
+                        DashboardVersionsTableName,
+                        `${DashboardsTableName}.dashboard_id`,
+                        `${DashboardVersionsTableName}.dashboard_id`,
+                    )
+                    .innerJoin(
+                        SpaceTableName,
+                        `${DashboardsTableName}.space_id`,
+                        `${SpaceTableName}.space_id`,
+                    )
+                    .innerJoin(
+                        ProjectTableName,
+                        `${SpaceTableName}.project_id`,
+                        `${ProjectTableName}.project_id`,
+                    )
+                    .where(
+                        `${DashboardsTableName}.dashboard_uuid`,
+                        dashboardUuid,
+                    )
+                    .where(`${ProjectTableName}.project_uuid`, projectUuid)
+                    .whereNull(`${DashboardsTableName}.deleted_at`)
+                    .groupBy(`${DashboardsTableName}.dashboard_uuid`);
+            })
+            .select<
+                {
+                    dashboard_uuid: string;
+                }[]
+            >(`${cteName}.dashboard_uuid`)
+            .from(cteName)
+            .innerJoin(
+                DashboardTileSqlChartTableName,
+                `${cteName}.dashboard_version_id`,
+                `${DashboardTileSqlChartTableName}.dashboard_version_id`,
+            )
+            .innerJoin(SavedSqlTableName, function savedSqlJoin() {
+                this.on(
+                    `${DashboardTileSqlChartTableName}.saved_sql_uuid`,
+                    '=',
+                    `${SavedSqlTableName}.saved_sql_uuid`,
+                ).andOnNull(`${SavedSqlTableName}.deleted_at`);
+            })
+            .where(`${SavedSqlTableName}.saved_sql_uuid`, savedSqlUuid)
+            .first();
+
+        return !!result;
+    }
+
     async findInfoForDbtExposures(projectUuid: string): Promise<
         Array<
             Pick<DashboardDAO, 'uuid' | 'name' | 'description'> &
@@ -1592,19 +1741,6 @@ export class DashboardModel {
             .whereNull(`${DashboardsTableName}.deleted_at`);
     }
 
-    private getLastVersionUuidQuery(dashboardUuid: string) {
-        return this.database(DashboardVersionsTableName)
-            .select(`${DashboardVersionsTableName}.dashboard_version_uuid`)
-            .innerJoin(
-                DashboardsTableName,
-                `${DashboardsTableName}.dashboard_id`,
-                `${DashboardVersionsTableName}.dashboard_id`,
-            )
-            .where(`${DashboardsTableName}.dashboard_uuid`, dashboardUuid)
-            .orderBy(`${DashboardVersionsTableName}.created_at`, 'desc')
-            .limit(1);
-    }
-
     async getVersionSummaryByUuid(
         dashboardUuid: string,
         versionUuid: string,
@@ -1665,11 +1801,6 @@ export class DashboardModel {
     async getLatestVersionSummaries(
         dashboardUuid: string,
     ): Promise<DashboardVersionSummary[]> {
-        const daysLimit =
-            this.lightdashConfig?.dashboard.versionHistory.daysLimit ?? 3;
-        const getLastVersionUuidSubQuery =
-            this.getLastVersionUuidQuery(dashboardUuid);
-
         type VersionSummaryRow = {
             dashboard_uuid: string;
             dashboard_version_uuid: string;
@@ -1699,15 +1830,6 @@ export class DashboardModel {
                 `${UserTableName}.last_name`,
             )
             .where(`${DashboardsTableName}.dashboard_uuid`, dashboardUuid)
-            .andWhere(function whereRecentVersionsOrCurrentVersion() {
-                void this.whereRaw(
-                    `${DashboardVersionsTableName}.created_at >= DATE(current_timestamp - interval '?? days')`,
-                    [daysLimit],
-                ).orWhere(
-                    `${DashboardVersionsTableName}.dashboard_version_uuid`,
-                    getLastVersionUuidSubQuery,
-                );
-            })
             .orderBy(`${DashboardVersionsTableName}.created_at`, 'desc');
 
         const mapRow = (row: VersionSummaryRow): DashboardVersionSummary => ({
@@ -1722,39 +1844,6 @@ export class DashboardModel {
                   }
                 : null,
         });
-
-        // If there's only one version in the date range (the current one),
-        // also fetch the previous version for comparison
-        if (versions.length === 1) {
-            const oldVersions = await this.database(DashboardVersionsTableName)
-                .innerJoin(
-                    DashboardsTableName,
-                    `${DashboardsTableName}.dashboard_id`,
-                    `${DashboardVersionsTableName}.dashboard_id`,
-                )
-                .leftJoin(
-                    UserTableName,
-                    `${UserTableName}.user_uuid`,
-                    `${DashboardVersionsTableName}.updated_by_user_uuid`,
-                )
-                .select<VersionSummaryRow[]>(
-                    `${DashboardsTableName}.dashboard_uuid`,
-                    `${DashboardVersionsTableName}.dashboard_version_uuid`,
-                    `${DashboardVersionsTableName}.created_at`,
-                    `${UserTableName}.user_uuid`,
-                    `${UserTableName}.first_name`,
-                    `${UserTableName}.last_name`,
-                )
-                .where(`${DashboardsTableName}.dashboard_uuid`, dashboardUuid)
-                .andWhereNot(
-                    `${DashboardVersionsTableName}.dashboard_version_uuid`,
-                    versions[0].dashboard_version_uuid,
-                )
-                .orderBy(`${DashboardVersionsTableName}.created_at`, 'desc')
-                .limit(1);
-
-            return [...versions, ...oldVersions].map(mapRow);
-        }
 
         return versions.map(mapRow);
     }
@@ -1871,6 +1960,8 @@ export class DashboardModel {
                     last_version_chart_kind: string | null;
                     tab_uuid: string;
                     chart_slug: string;
+                    app_uuid: string | null;
+                    data_app_deleted_at: Date | null;
                 }[]
             >(
                 `${DashboardTilesTableName}.x_offset`,
@@ -1903,14 +1994,16 @@ export class DashboardModel {
                         ${DashboardTileChartTableName}.title,
                         ${DashboardTileLoomsTableName}.title,
                         ${DashboardTileMarkdownsTableName}.title,
-                        ${DashboardTileSqlChartTableName}.title
+                        ${DashboardTileSqlChartTableName}.title,
+                        ${DashboardTileDataAppsTableName}.title
                     ) AS title`,
                 ),
                 this.database.raw(
                     `COALESCE(
                         ${DashboardTileLoomsTableName}.hide_title,
                         ${DashboardTileChartTableName}.hide_title,
-                        ${DashboardTileSqlChartTableName}.hide_title
+                        ${DashboardTileSqlChartTableName}.hide_title,
+                        ${DashboardTileDataAppsTableName}.hide_title
                     ) AS hide_title`,
                 ),
                 `${DashboardTileLoomsTableName}.url`,
@@ -1918,6 +2011,10 @@ export class DashboardModel {
                 `${DashboardTileMarkdownsTableName}.hide_frame`,
                 `${DashboardTileHeadingsTableName}.text`,
                 `${DashboardTileHeadingsTableName}.show_divider`,
+                `${DashboardTileDataAppsTableName}.app_uuid`,
+                this.database.raw(
+                    `${AppsTableName}.deleted_at AS data_app_deleted_at`,
+                ),
             )
             .leftJoin(DashboardTileChartTableName, function chartsJoin() {
                 this.on(
@@ -1989,6 +2086,23 @@ export class DashboardModel {
                 `${DashboardTileChartTableName}.saved_chart_id`,
                 `${SavedChartsTableName}.saved_query_id`,
             )
+            .leftJoin(DashboardTileDataAppsTableName, function dataAppsJoin() {
+                this.on(
+                    `${DashboardTileDataAppsTableName}.dashboard_tile_uuid`,
+                    '=',
+                    `${DashboardTilesTableName}.dashboard_tile_uuid`,
+                );
+                this.andOn(
+                    `${DashboardTileDataAppsTableName}.dashboard_version_id`,
+                    '=',
+                    `${DashboardTilesTableName}.dashboard_version_id`,
+                );
+            })
+            .leftJoin(
+                AppsTableName,
+                `${DashboardTileDataAppsTableName}.app_uuid`,
+                `${AppsTableName}.app_id`,
+            )
             .where(
                 `${DashboardTilesTableName}.dashboard_version_id`,
                 dashboard.dashboard_version_id,
@@ -2018,8 +2132,13 @@ export class DashboardModel {
                 dashboard.dashboard_id,
             );
 
-        const tableCalculationFilters = view?.filters?.tableCalculations;
-        view.filters.tableCalculations = tableCalculationFilters || [];
+        // A version may have no dashboard_views row (e.g. legacy or partially
+        // written data). Guard the backfill — the return below already defaults
+        // `filters` when `view` is absent.
+        if (view?.filters) {
+            view.filters.tableCalculations =
+                view.filters.tableCalculations || [];
+        }
 
         const verification =
             (await this.contentVerificationModel?.getByContent(
@@ -2061,6 +2180,8 @@ export class DashboardModel {
                     last_version_chart_kind,
                     tab_uuid,
                     chart_slug,
+                    app_uuid,
+                    data_app_deleted_at,
                 }) => {
                     const base: Omit<
                         DashboardDAO['tiles'][number],
@@ -2130,6 +2251,18 @@ export class DashboardModel {
                                 properties: {
                                     text: text || '',
                                     showDivider: show_divider ?? false,
+                                },
+                            };
+                        case DashboardTileTypes.DATA_APP:
+                            return <DashboardDataAppTile>{
+                                ...base,
+                                type: DashboardTileTypes.DATA_APP,
+                                properties: {
+                                    ...commonProperties,
+                                    appUuid: app_uuid ?? '',
+                                    appDeletedAt:
+                                        data_app_deleted_at?.toISOString() ??
+                                        null,
                                 },
                             };
                         default: {

@@ -19,6 +19,7 @@ import {
     IconIdBadge2,
     IconKey,
     IconLock,
+    IconBrush,
     IconPalette,
     IconPlug,
     IconRefresh,
@@ -56,10 +57,12 @@ import { DeleteOrganizationPanel } from '../components/UserSettings/DeleteOrgani
 import GithubSettingsPanel from '../components/UserSettings/GithubSettingsPanel';
 import GitlabSettingsPanel from '../components/UserSettings/GitlabSettingsPanel';
 import ImpersonationPanel from '../components/UserSettings/ImpersonationPanel';
+import { LeaveOrganizationPanel } from '../components/UserSettings/LeaveOrganizationPanel';
 import MyAppsPanel from '../components/UserSettings/MyAppsPanel';
 import { MyWarehouseConnectionsPanel } from '../components/UserSettings/MyWarehouseConnectionsPanel';
 import OAuthClientsPanel from '../components/UserSettings/OAuthClientsPanel';
 import OrganizationPanel from '../components/UserSettings/OrganizationPanel';
+import OrganizationSsoPanel from '../components/UserSettings/OrganizationSsoPanel';
 import { OrganizationWarehouseCredentialsPanel } from '../components/UserSettings/OrganizationWarehouseCredentialsPanel';
 import PasswordPanel from '../components/UserSettings/PasswordPanel';
 import ProfilePanel from '../components/UserSettings/ProfilePanel';
@@ -75,6 +78,7 @@ import { ServiceAccountsPage } from '../ee/features/serviceAccounts';
 import { CustomRoleCreate } from '../ee/pages/customRoles/CustomRoleCreate';
 import { CustomRoleEdit } from '../ee/pages/customRoles/CustomRoleEdit';
 import { CustomRoles } from '../ee/pages/customRoles/CustomRoles';
+import DesignListPage from '../features/organizationDesigns/components/DesignListPage';
 import { useOrganization } from '../hooks/organization/useOrganization';
 import { useActiveProjectUuid } from '../hooks/useActiveProject';
 import { useProject } from '../hooks/useProject';
@@ -126,7 +130,16 @@ const Settings: FC = () => {
         isUserImpersonationEnabled?.enabled &&
         user?.ability?.can('update', 'Organization');
 
-    const isCustomRolesEnabled = health?.isCustomRolesEnabled;
+    const { data: leaveOrganizationFlag } = useServerFeatureFlag(
+        FeatureFlags.LeaveOrganization,
+    );
+    const isLeaveOrganizationEnabled = leaveOrganizationFlag?.enabled === true;
+
+    const { data: customRolesFlag } = useServerFeatureFlag(
+        CommercialFeatureFlags.CustomRoles,
+    );
+    const isCustomRolesEnabled =
+        health?.isCustomRolesEnabled || customRolesFlag?.enabled;
 
     const userGroupsFeatureFlagQuery = useServerFeatureFlag(
         FeatureFlags.UserGroupsEnabled,
@@ -135,6 +148,12 @@ const Settings: FC = () => {
     const { data: dataAppsFlag } = useServerFeatureFlag(
         FeatureFlags.EnableDataApps,
     );
+
+    const { data: ssoOrganizationSettingsFlag } = useServerFeatureFlag(
+        FeatureFlags.SsoOrganizationSettings,
+    );
+    const isSsoOrganizationSettingsEnabled =
+        ssoOrganizationSettingsFlag?.enabled ?? false;
 
     const { track } = useTracking();
     const {
@@ -187,10 +206,26 @@ const Settings: FC = () => {
             {
                 path: '/profile',
                 element: (
-                    <SettingsGridCard>
-                        <Title order={4}>Profile settings</Title>
-                        <ProfilePanel />
-                    </SettingsGridCard>
+                    <Stack gap="xl">
+                        <SettingsGridCard>
+                            <Title order={4}>Profile settings</Title>
+                            <ProfilePanel />
+                        </SettingsGridCard>
+                        {isLeaveOrganizationEnabled && (
+                            <SettingsGridCard>
+                                <Box>
+                                    <Title order={4}>Danger zone</Title>
+                                    <Text c="ldGray.6" fz="xs">
+                                        Leave the organization to remove
+                                        yourself from it (you cannot leave if
+                                        you are the only admin). This action is
+                                        not reversible.
+                                    </Text>
+                                </Box>
+                                <LeaveOrganizationPanel />
+                            </SettingsGridCard>
+                        )}
+                    </Stack>
                 ),
             },
             {
@@ -297,17 +332,31 @@ const Settings: FC = () => {
                             </SettingsGridCard>
                         )}
 
-                        {user.ability?.can('delete', 'Organization') && (
+                        {(isLeaveOrganizationEnabled ||
+                            user.ability?.can('delete', 'Organization')) && (
                             <SettingsGridCard>
                                 <div>
                                     <Title order={4}>Danger zone </Title>
                                     <Text c="ldGray.6" fz="xs">
-                                        This action deletes the whole workspace
-                                        and all its content, including users.
-                                        This action is not reversible.
+                                        {isLeaveOrganizationEnabled &&
+                                            'Leave the organization to remove yourself from it (you cannot leave if you are the only admin). '}
+                                        {user.ability?.can(
+                                            'delete',
+                                            'Organization',
+                                        ) &&
+                                            'Deleting the organization removes the whole workspace and all its content, including users. '}
+                                        These actions are not reversible.
                                     </Text>
                                 </div>
-                                <DeleteOrganizationPanel />
+                                <Stack gap="sm" align="flex-end">
+                                    {isLeaveOrganizationEnabled && (
+                                        <LeaveOrganizationPanel />
+                                    )}
+                                    {user.ability?.can(
+                                        'delete',
+                                        'Organization',
+                                    ) && <DeleteOrganizationPanel />}
+                                </Stack>
                             </SettingsGridCard>
                         )}
                     </Stack>
@@ -393,6 +442,16 @@ const Settings: FC = () => {
             });
         }
 
+        if (
+            dataAppsFlag?.enabled &&
+            user?.ability.can('view', 'OrganizationDesign')
+        ) {
+            allowedRoutes.push({
+                path: '/themes',
+                element: <DesignListPage />,
+            });
+        }
+
         if (user?.ability.can('manage', 'Organization')) {
             allowedRoutes.push({
                 path: '/integrations',
@@ -415,6 +474,29 @@ const Settings: FC = () => {
             allowedRoutes.push({
                 path: '/oauthClients',
                 element: <OAuthClientsPanel />,
+            });
+        }
+
+        if (
+            user?.ability.can('manage', 'Organization') &&
+            isSsoOrganizationSettingsEnabled
+        ) {
+            allowedRoutes.push({
+                path: '/sso',
+                element: (
+                    <Stack gap="xl">
+                        <SettingsGridCard>
+                            <Stack gap="xs">
+                                <Title order={4}>Single Sign-On</Title>
+                                <Text c="ldGray.6" fz="xs">
+                                    Configure SSO providers for this
+                                    organization.
+                                </Text>
+                            </Stack>
+                            <OrganizationSsoPanel />
+                        </SettingsGridCard>
+                    </Stack>
+                ),
             });
         }
 
@@ -472,6 +554,8 @@ const Settings: FC = () => {
         health?.hasGithub,
         health?.hasGitlab,
         dataAppsFlag?.enabled,
+        isSsoOrganizationSettingsEnabled,
+        isLeaveOrganizationEnabled,
     ]);
     const routeElements = useRoutes(routes);
 
@@ -765,6 +849,21 @@ const Settings: FC = () => {
                                     />
                                 )}
 
+                                {dataAppsFlag?.enabled &&
+                                    user.ability.can(
+                                        'view',
+                                        'OrganizationDesign',
+                                    ) && (
+                                        <RouterNavLink
+                                            label="Themes"
+                                            exact
+                                            to="/generalSettings/themes"
+                                            leftSection={
+                                                <MantineIcon icon={IconBrush} />
+                                            }
+                                        />
+                                    )}
+
                                 {user.ability.can('manage', 'Organization') && (
                                     <RouterNavLink
                                         label="Integrations"
@@ -786,6 +885,18 @@ const Settings: FC = () => {
                                         }
                                     />
                                 )}
+
+                                {user.ability.can('manage', 'Organization') &&
+                                    isSsoOrganizationSettingsEnabled && (
+                                        <RouterNavLink
+                                            label="Single Sign-On"
+                                            exact
+                                            to="/generalSettings/sso"
+                                            leftSection={
+                                                <MantineIcon icon={IconLock} />
+                                            }
+                                        />
+                                    )}
 
                                 {user.ability.can(
                                     'manage',
@@ -982,7 +1093,7 @@ const Settings: FC = () => {
                                         })}
                                     >
                                         <RouterNavLink
-                                            label="Query time zone"
+                                            label="Project time zone"
                                             exact
                                             to={`/generalSettings/projectManagement/${project.projectUuid}/queryTimezone`}
                                             leftSection={

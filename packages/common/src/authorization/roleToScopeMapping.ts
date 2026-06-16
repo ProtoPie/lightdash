@@ -36,6 +36,7 @@ const BASE_ROLE_SCOPES = {
         'view:SpotlightTableConfig',
         'view:AiAgentThread@self',
         'view:DataApp',
+        'view:OrganizationDesign',
     ],
 
     [ProjectMemberRole.INTERACTIVE_VIEWER]: [
@@ -64,6 +65,7 @@ const BASE_ROLE_SCOPES = {
 
         // Enterprise scopes
         'view:AiAgent',
+        'view:AiAgentDocument',
         'create:AiAgentThread',
         'create:DataApp', // Personal apps (not yet in a space)
         'view:DataApp@self', // Own personal apps
@@ -105,6 +107,7 @@ const BASE_ROLE_SCOPES = {
         'delete:VirtualView',
         'manage:CustomSql',
         'manage:CustomFields',
+        'manage:CustomSqlTableCalculations',
         'manage:SqlRunner',
         'manage:Validation',
         'manage:CompileProject',
@@ -129,12 +132,14 @@ const BASE_ROLE_SCOPES = {
         'manage:SpotlightTableConfig',
         'manage:ContentAsCode',
         'manage:AiAgent',
+        'manage:AiAgentDocument',
         'manage:AiAgentThread@self', // User's own threads
     ],
 
     [ProjectMemberRole.ADMIN]: [
         // Admin-specific permissions
         'manage:DataApp',
+        'manage:OrganizationDesign',
         'delete:Project', // Any project
         'view:Analytics',
         'manage:Dashboard', // All dashboards
@@ -233,9 +238,11 @@ export const getNonEnterpriseScopesForRole = (
         'view:SpotlightTableConfig',
         'manage:SpotlightTableConfig',
         'view:AiAgent',
+        'view:AiAgentDocument',
         'view:AiAgentThread',
         'create:AiAgentThread',
         'manage:AiAgent',
+        'manage:AiAgentDocument',
         'manage:AiAgentThread',
         'manage:ContentAsCode',
         'view:DataApp',
@@ -244,6 +251,8 @@ export const getNonEnterpriseScopesForRole = (
         'create:DataApp',
         'view:DataApp@self',
         'manage:DataApp@self',
+        'view:OrganizationDesign',
+        'manage:OrganizationDesign',
         'manage:PersonalAccessToken',
         'manage:PreAggregation',
     ]);

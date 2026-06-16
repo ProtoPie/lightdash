@@ -2,6 +2,14 @@
 
 You are building a React data app that queries the Lightdash semantic layer. This file is your reference for the environment, SDK, and data model.
 
+## Iteration mindset
+
+This pipeline is built for iteration — the user refines the app with follow-up prompts, and you have the full conversation history on every iteration. **Favor a responsive first build over upfront perfection.** Hit the core ask and ship; let the user tell you what to add.
+
+Extended thinking adds latency and should only be used when it will meaningfully improve answer quality. Use it for genuinely load-bearing decisions: modelling a non-obvious query, resolving a semantic-layer ambiguity, picking the right chart type for an unusual data shape. Skip it for everything else — once you've picked a visual direction, don't re-ideate on it; pick reasonable defaults for naming, file structure, and component choice and move on. When in doubt, respond directly.
+
+Don't verify your own output. **After you Write or Edit a file, do not Read it back, do not Grep over it, do not run any shell command to "check" it.** The pipeline runs `pnpm build` after you exit and will surface any compile error in a follow-up turn — that's where fixes happen, not before. Re-reading your own writes catches nothing the build doesn't and burns a tool round-trip every time.
+
 ## Environment Constraints
 
 - **Only write files in `src/`** — config files, `package.json`, and everything outside `src/` is locked.
@@ -141,6 +149,45 @@ Each file contains:
   `customers_customer_name`, that's a joined table field — use `customers.customer_name`.
   **Only strip the prefix if it matches the explore name.** If it doesn't match, it's a joined table.
 - **Table calculation names:** Do NOT strip — pass them through as-is.
+
+## Attached images
+
+The user can attach images to a prompt. Use the Read tool to view each one at
+`/tmp/images/` before deciding how to use it.
+
+Two kinds, distinguished by filename:
+
+| Filename pattern | Meaning | How to use it |
+|---|---|---|
+| `screenshot-<uuid>.<ext>` | A live screenshot of the **current** built app — what the user is looking at when they wrote the prompt. | Treat as *context for the request*, not a target. The user's prompt usually says "change X" or "this looks wrong" — the screenshot tells you what the layout actually renders as right now (colors, spacing, missing data, broken charts). Do NOT try to reproduce the screenshot; the existing source files already produce it. |
+| `<uuid>.<ext>` (no prefix) | A design reference uploaded by the user — mockup, sketch, screenshot from elsewhere, or a chart they like. | Treat as a *target to approximate* for layout, color, typography, or component choice. Match the spirit, not pixel-perfect. The prompt prepend will also call these "Design reference image N". |
+
+If both are attached, the user is most likely saying "here's what it looks
+like now (screenshot) — change it to look more like this (design reference)."
+
+### Using an attached image inside the rendered app
+
+`/tmp/images/` is **inspection-only** — those paths do not exist in the built
+bundle and `<img src="/tmp/images/...">` will 404 at runtime.
+
+Design references (the `<uuid>.<ext>` files, *not* screenshots) are also
+copied to `/app/src/uploads/<same-filename>`. If the user wants the image to
+actually appear in the rendered app — "use this as our logo", "make this the
+hero image", "drop this illustration in the empty card" — import it as a
+Vite asset:
+
+```tsx
+import logo from './uploads/<uuid>.png';
+
+<img src={logo} alt="Acme" />
+```
+
+Vite hashes the URL, the asset is served auth-gated from the same origin as
+the iframe, and it works under our strict CSP. Don't construct the path as a
+string (`src="./uploads/..."`) — the import is what tells Vite to bundle it.
+
+Screenshots are not copied to `/app/src/uploads/` and must never end up in
+the bundle; they describe current state, not target.
 
 ## Element references in iteration prompts
 
@@ -405,6 +452,7 @@ type Filter = {
     operator: FilterOperator;
     value?: FilterValue | FilterValue[];
     unit?: UnitOfTime; // required for date/time operators
+    completed?: boolean; // for `inThePast`/`notInThePast`: restrict to fully completed periods
 };
 ```
 
@@ -413,7 +461,7 @@ type Filter = {
 | Comparison | `equals`, `notEquals`, `greaterThan`, `lessThan`, `greaterThanOrEqual`, `lessThanOrEqual` | Multi-value: `value: ['a', 'b']` |
 | Null | `isNull`, `notNull` | No `value` needed |
 | String | `startsWith`, `endsWith`, `include`, `doesNotInclude` | |
-| Date/time | `inThePast`, `notInThePast`, `inTheNext`, `inTheCurrent`, `notInTheCurrent` | Requires `unit`: `'days'`/`'weeks'`/`'months'`/`'quarters'`/`'years'` |
+| Date/time | `inThePast`, `notInThePast`, `inTheNext`, `inTheCurrent`, `notInTheCurrent` | Requires `unit`: `'days'`/`'weeks'`/`'months'`/`'quarters'`/`'years'`. Add `completed: true` to `inThePast`/`notInThePast` to exclude the current in-progress period — e.g. `{ operator: 'inThePast', unit: 'weeks', value: 4, completed: true }` means "the last 4 completed weeks", not including this week. |
 | Range | `inBetween`, `notInBetween` | |
 
 ### User context
@@ -433,6 +481,35 @@ Lightdash-specific constraints that apply on top of `frontend-design`'s directio
 - **Chart series colors must come from `CHART_COLORS` in `@/lib/theme`** — the canonical Lightdash palette, so generated apps' charts visually match native Lightdash dashboards. Cycle by index for multi-series (`CHART_COLORS[i % CHART_COLORS.length]`). `frontend-design`'s chosen accent/background/typography colors are independent of this.
 - **Use semantic shadcn tokens for UI chrome** — `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `text-destructive`, `border`, etc. Don't hardcode hex values for surfaces, text, or borders. (`frontend-design` may direct you to redefine the underlying CSS variables for a chosen theme — that's fine; the rule is no inline hex, not "use only the default token values".)
 - **Commit to one theme; don't design for dark while rendering light.** The template's `:root` defaults to white (light tokens). If your design needs a dark background, you must do *one* of: (a) apply `className="dark"` to your top-level `<div>` so Tailwind activates the dark token values, or (b) override the CSS variables on `:root` directly to match your chosen theme. **Never** author colors that assume a dark background without ensuring the page actually loads dark — the symptom is invisible secondary text (faint red/gray on white). Before declaring done, check: does the page background actually look the way you described it? If not, you have a theme-wiring bug.
+
+### Organization themes
+
+When `/app/src/design/` exists in the workspace, the organization has supplied brand assets that **must** drive the visual direction. The pipeline copies them in at build time; you do not create them. Treat their contents as inviolable: read and reference, never edit or duplicate.
+
+Directory layout (any subdirectory may be empty):
+
+- `/app/src/design/css/` — stylesheets. Inspect the style sheets and decide: If they are general colors and global styles **Import them** from your main entry point (`src/main.jsx`) before any of your own styles, so cascade order lets your CSS override theme defaults only where intentional. If they are component-specific (e.g. a `.fancy-button` class), **Reference them** in your JSX (`<button className="fancy-button">`) and use them as the basis for any custom components you build. You can build styles that typically match if the specific ones you are looking for are not there. 
+- `/app/src/design/fonts/` — web fonts. **Reference them via `@font-face` in your own CSS** and use the resulting `font-family` everywhere you'd otherwise pick a font. Do not link to external font CDNs (Google Fonts, Bunny, etc.) when fonts are present here.
+- `/app/src/design/images/` — logos and brand imagery. Import as ES modules (`import logo from './design/images/logo.png'`) so Vite hashes the URL. Use them in place of any generic logo/illustration you'd otherwise invent. Try to guess from the file names or context: is it a logo (use in the header), a pattern (use as a background), or a product screenshot (reference for UI details)? 
+
+**Images are IMPORTANT and frequently more telling than the CSS or instruction files** — they carry intent the other assets can't express. Decide how to use them in this order:
+
+1. **Use them as directed in the effective skill prompt or the user's prompt.** If the instructions tell you a specific image is the logo, or to apply a particular pattern, that's the answer — stop and follow it.
+2. **If you have no further direction**, classify each image by inspecting both its filename and (when in doubt) its contents via the `Read` tool. Treat each kind seriously:
+    - **Image assets** — things meant to appear in the rendered app: logos, mascots, hero images, icons, background patterns. Use them. A logo file means the header gets that logo, not a generic one you'd invent.
+    - **Design assets** — outputs from a design tool: color-swatch sheets, type-specimen pages, component mockups, exported Figma frames. These are NOT meant to appear in the app — they are a binding spec for how the app should look. Mine them for exact hex values, type sizes, spacing, component shapes, and apply them to your own components. Treat them with the same authority as a CSS file.
+    - **References and inspiration** — dashboard screenshots, product photos, mood-board imagery the organization wants the app to evoke. These ARE a directive, just at a higher level: match the aesthetic, density, and information hierarchy you see. Don't try to reproduce them pixel-for-pixel; do try to land in the same visual neighborhood.
+
+When unsure which bucket an image falls into, prefer **design asset** or **reference** over guessing. A file that looks like a Figma export is almost never meant to ship in the app.
+
+Hard rules when a theme is active:
+
+- **Theme CSS overrides `frontend-design`'s color/typography direction.** The aesthetic distinctness `frontend-design` pushes for still applies to layout, density, and motion — but colors, font families, and any other tokens the theme CSS defines win over your own picks. If the theme sets `--accent: #6B5B95`, your headings use that purple; don't reach for a "more distinctive" alternative.
+- **If the theme CSS defines a chart palette (CSS custom properties like `--chart-1`, `--chart-2`, …, or any `*-chart-*` variables), use it instead of `CHART_COLORS` from `@/lib/theme`.** Read the values via `getComputedStyle(document.documentElement).getPropertyValue('--chart-1')` once on mount and cycle them by index for multi-series. Falling back to `CHART_COLORS` when the theme doesn't define a chart palette is correct.
+- **Instruction text in the appended system prompt is binding.** Any rules described under "Organization theme instructions" later in this prompt override conflicting defaults in this file. Treat them as customer-supplied product requirements, not suggestions.
+- **Do not modify files under `/app/src/design/`.** `Write(//app/src/**)` would technically allow it, but those files are the source of truth for the brand and may be reused across many apps. Treat the directory as read-only.
+
+When `/app/src/design/` does not exist or is empty, behave as if these rules don't apply — no theme is active and `frontend-design`'s direction is the whole story.
 
 ## Required UX Patterns
 

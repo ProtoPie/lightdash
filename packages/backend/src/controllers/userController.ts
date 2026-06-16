@@ -39,6 +39,7 @@ import {
 } from '@tsoa/runtime';
 import express from 'express';
 import { toSessionUser } from '../auth/account';
+import Logger from '../logging/logger';
 import { UserModel } from '../models/UserModel';
 import {
     allowApiKeyAuthentication,
@@ -222,6 +223,48 @@ export class UserController extends BaseController {
             req.login(sessionUser, (err) => {
                 if (err) {
                     reject(err);
+                }
+                resolve();
+            });
+        });
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: undefined,
+        };
+    }
+
+    /**
+     * Remove the current user from their organization. Fails if the caller is
+     * the only admin remaining. The user record is preserved so they can join
+     * another organization later.
+     * @summary Leave organization
+     * @param req express request
+     */
+    @Middlewares([isAuthenticated, unauthorisedInDemo])
+    @Delete('/me/leaveOrganization')
+    @OperationId('LeaveOrganization')
+    async leaveOrganization(
+        @Request() req: express.Request,
+    ): Promise<ApiSuccessEmpty> {
+        assertRegisteredAccount(req.account);
+        await this.services
+            .getUserService()
+            .leaveOrganization(toSessionUser(req.account), {
+                ip: req.ip,
+                userAgent: req.get('user-agent'),
+            });
+
+        // Membership has already been removed and DB sessions wiped above.
+        // Soft-fail this in-memory session destroy so a callback error doesn't
+        // mask the successful leave from the client.
+        await new Promise<void>((resolve) => {
+            req.session.destroy((err) => {
+                if (err) {
+                    Logger.error(
+                        'Failed to destroy session after leaving organization',
+                        { error: err },
+                    );
                 }
                 resolve();
             });

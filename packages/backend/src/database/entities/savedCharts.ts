@@ -13,6 +13,7 @@ import {
     MetricFilterRule,
     MetricOverrides,
     MetricType,
+    PivotSortAnchor,
     TableCalculationTemplate,
     TableCalculationType,
 } from '@lightdash/common';
@@ -154,6 +155,7 @@ type DbSavedChartVersionSort = {
     descending: boolean;
     nulls_first: boolean | null;
     order: number;
+    pivot_values: PivotSortAnchor[] | null;
 };
 
 export type CreateDbSavedChartVersionSort = Pick<
@@ -163,7 +165,10 @@ export type CreateDbSavedChartVersionSort = Pick<
     | 'descending'
     | 'nulls_first'
     | 'order'
->;
+> & {
+    // Caller must JSON.stringify before insert — Knex doesn't auto-serialize JSONB.
+    pivot_values: string | null;
+};
 
 export const SavedChartVersionSortsTableName = 'saved_queries_version_sorts';
 export type SavedChartVersionSortsTable = Knex.CompositeTableType<
@@ -246,7 +251,7 @@ export type DbSavedChartAdditionalMetric = {
     filters: MetricFilterRule[] | null; // JSONB
     base_dimension_name: string | null;
     uuid: string;
-    format_options?: CustomFormat | null; // JSONB
+    format_options?: CustomFormat | string | null; // JSONB
     // PoP metadata (optional)
     generation_type?: string | null;
     base_metric_id?: string | null;

@@ -1,9 +1,21 @@
-import { useCallback, useEffect, useRef, type FC } from 'react';
+import { type DashboardFilters } from '@lightdash/common';
+import {
+    forwardRef,
+    useCallback,
+    useEffect,
+    useImperativeHandle,
+    useRef,
+} from 'react';
 import {
     useAppSdkBridge,
     type ElementSelectedEvent,
     type QueryEvent,
 } from './hooks/useAppSdkBridge';
+import { useIframeScreenshot } from './hooks/useIframeScreenshot';
+
+export type AppIframePreviewHandle = {
+    captureScreenshot: () => Promise<File>;
+};
 
 type Props = {
     src: string;
@@ -12,11 +24,12 @@ type Props = {
      *  (the configured preview-host), or the parent's own origin in the
      *  same-origin fallback case. */
     expectedPreviewOrigin: string;
-    /** Stable identity for the served bundle (e.g. `${appUuid}:${version}`).
-     *  Drives the inspector-availability reset — changes here mean a new
-     *  bundle whose SDK capabilities are unknown, so we re-await an announce.
-     *  A pure URL bump (e.g. the manual refresh counter) keeps this stable
-     *  so the Inspect button doesn't flash off and back on. */
+    /** Stable identity scope for the SDK capability handshake — typically the
+     *  app UUID. Drives the inspector/screenshot availability resets, so a
+     *  change here means a new app whose SDK capabilities are unknown and we
+     *  re-await the announces. Pure URL bumps (manual refresh counter) and
+     *  version switches within the same app keep this stable so the
+     *  Inspect/Screenshot buttons don't flicker off-then-back-on each time. */
     identityKey: string;
     onQueryEvent?: (event: QueryEvent) => void;
     onElementSelected?: (event: ElementSelectedEvent) => void;
@@ -29,11 +42,24 @@ type Props = {
      *  pre-inspector SDK) keep this `false` and let the parent hide the
      *  Inspect button. Resets to `false` on every `identityKey` change. */
     onInspectorAvailabilityChange?: (available: boolean) => void;
+    /** Same handshake as the inspector, for screenshot capture. The iframe
+     *  template that ships html2canvas-pro posts
+     *  `lightdash:sdk:screenshot-available` on mount; older templates in
+     *  resumed sandboxes never announce, so the Screenshot button stays
+     *  hidden for them. */
+    onScreenshotAvailabilityChange?: (available: boolean) => void;
     /** Called when the user presses Esc to leave inspect mode. The handler
      *  lives on the parent's window because that's where focus actually
      *  sits during inspect mode (the toolbar button before any click; the
      *  prompt editor after each click — TipTap yanks focus back on insert). */
     onInspectorCancelled?: () => void;
+    /** Dashboard filters to merge into every metric-query the iframe runs.
+     *  Set by `DashboardDataAppTile`; left undefined by `AppGenerate` where
+     *  there's no dashboard context. */
+    dashboardFilters?: DashboardFilters;
+    /** Fired on every iframe `onload` (including the initial about:blank).
+     *  Used by `MinimalApp` to gate the screenshot readiness signal. */
+    onIframeLoad?: () => void;
 };
 
 /**
@@ -46,83 +72,115 @@ type Props = {
  * already isolated from parent origin. The SDK inside the iframe routes all
  * API calls through postMessage, and this component's bridge executes them
  * using the current user's session.
+ *
+ * Exposes a `captureScreenshot()` imperative handle for the parent. The
+ * iframe rasterizes its own DOM with html2canvas-pro and posts the PNG
+ * blob back over postMessage — see `useIframeScreenshot` and
+ * `sandboxes/data-apps/template/src/screenshotHandler.js`.
  */
-const AppIframePreview: FC<Props> = ({
-    src,
-    expectedPreviewOrigin,
-    identityKey,
-    onQueryEvent,
-    onElementSelected,
-    inspectorEnabled,
-    onInspectorAvailabilityChange,
-    onInspectorCancelled,
-}) => {
-    const iframeRef = useRef<HTMLIFrameElement>(null);
-    // Memoized so the bridge's message listener doesn't re-attach on every
-    // parent render — AppGenerate re-renders on every keystroke (editor's
-    // `onUpdate` → `setIsPromptEmpty`) and we don't want to thrash listeners.
-    const handleAnnounce = useCallback(() => {
-        onInspectorAvailabilityChange?.(true);
-    }, [onInspectorAvailabilityChange]);
-    const { handleIframeLoad, enableInspector, disableInspector } =
-        useAppSdkBridge(
-            iframeRef,
+const AppIframePreview = forwardRef<AppIframePreviewHandle, Props>(
+    (
+        {
+            src,
             expectedPreviewOrigin,
+            identityKey,
             onQueryEvent,
             onElementSelected,
-            handleAnnounce,
-        );
+            inspectorEnabled,
+            onInspectorAvailabilityChange,
+            onScreenshotAvailabilityChange,
+            onInspectorCancelled,
+            dashboardFilters,
+            onIframeLoad,
+        },
+        ref,
+    ) => {
+        const iframeRef = useRef<HTMLIFrameElement>(null);
+        // Memoized so the bridge's message listener doesn't re-attach on every
+        // parent render — AppGenerate re-renders on every keystroke (editor's
+        // `onUpdate` → `setIsPromptEmpty`) and we don't want to thrash listeners.
+        const handleInspectorAnnounce = useCallback(() => {
+            onInspectorAvailabilityChange?.(true);
+        }, [onInspectorAvailabilityChange]);
+        const handleScreenshotAnnounce = useCallback(() => {
+            onScreenshotAvailabilityChange?.(true);
+        }, [onScreenshotAvailabilityChange]);
+        const { handleIframeLoad, enableInspector, disableInspector } =
+            useAppSdkBridge(
+                iframeRef,
+                expectedPreviewOrigin,
+                onQueryEvent,
+                onElementSelected,
+                handleInspectorAnnounce,
+                handleScreenshotAnnounce,
+                dashboardFilters,
+            );
+        const { captureScreenshot } = useIframeScreenshot(iframeRef);
 
-    // Reset availability to false when the served bundle changes (new app or
-    // new version). Fires before the browser starts loading the new content,
-    // so the new SDK's `available` announce will flip it back to true if it's
-    // wired up. Old SDKs in resumed sandboxes never announce, so it stays
-    // false. Keyed on `identityKey` rather than `src` so that pure URL bumps
-    // (manual preview refresh) don't reset — same bundle means same SDK
-    // capability, and resetting would briefly hide the Inspect button.
-    useEffect(() => {
-        onInspectorAvailabilityChange?.(false);
-    }, [identityKey, onInspectorAvailabilityChange]);
+        useImperativeHandle(ref, () => ({ captureScreenshot }), [
+            captureScreenshot,
+        ]);
 
-    // Toggling the prop while the iframe is alive — push the change through.
-    useEffect(() => {
-        if (inspectorEnabled) enableInspector();
-        else disableInspector();
-    }, [inspectorEnabled, enableInspector, disableInspector]);
+        // Reset availability to false when the served bundle changes (new app or
+        // new version). Fires before the browser starts loading the new content,
+        // so the new SDK's `available` announce will flip it back to true if it's
+        // wired up. Old SDKs in resumed sandboxes never announce, so it stays
+        // false. Keyed on `identityKey` rather than `src` so that pure URL bumps
+        // (manual preview refresh) don't reset — same bundle means same SDK
+        // capability, and resetting would briefly hide the Inspect/Screenshot
+        // buttons.
+        useEffect(() => {
+            onInspectorAvailabilityChange?.(false);
+            onScreenshotAvailabilityChange?.(false);
+        }, [
+            identityKey,
+            onInspectorAvailabilityChange,
+            onScreenshotAvailabilityChange,
+        ]);
 
-    // Esc-to-cancel. Lives on the parent's window because focus is on the
-    // parent (the toolbar button before any click; the editor afterwards) —
-    // the iframe never holds focus during inspect mode, so an iframe-side
-    // keydown listener would never fire.
-    useEffect(() => {
-        if (!inspectorEnabled) return;
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                onInspectorCancelled?.();
-            }
+        // Toggling the prop while the iframe is alive — push the change through.
+        useEffect(() => {
+            if (inspectorEnabled) enableInspector();
+            else disableInspector();
+        }, [inspectorEnabled, enableInspector, disableInspector]);
+
+        // Esc-to-cancel. Lives on the parent's window because focus is on the
+        // parent (the toolbar button before any click; the editor afterwards) —
+        // the iframe never holds focus during inspect mode, so an iframe-side
+        // keydown listener would never fire.
+        useEffect(() => {
+            if (!inspectorEnabled) return;
+            const onKey = (e: KeyboardEvent) => {
+                if (e.key === 'Escape') {
+                    onInspectorCancelled?.();
+                }
+            };
+            window.addEventListener('keydown', onKey);
+            return () => window.removeEventListener('keydown', onKey);
+        }, [inspectorEnabled, onInspectorCancelled]);
+
+        // The iframe reloads on every new app version. The useEffect above won't
+        // re-fire if `inspectorEnabled` was already true, so re-sync on load.
+        const handleLoad = () => {
+            handleIframeLoad();
+            if (inspectorEnabled) enableInspector();
+            onIframeLoad?.();
         };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [inspectorEnabled, onInspectorCancelled]);
 
-    // The iframe reloads on every new app version. The useEffect above won't
-    // re-fire if `inspectorEnabled` was already true, so re-sync on load.
-    const handleLoad = () => {
-        handleIframeLoad();
-        if (inspectorEnabled) enableInspector();
-    };
+        return (
+            <iframe
+                ref={iframeRef}
+                src={src}
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                title="App preview"
+                sandbox="allow-scripts allow-modals allow-popups"
+                allow=""
+                onLoad={handleLoad}
+            />
+        );
+    },
+);
 
-    return (
-        <iframe
-            ref={iframeRef}
-            src={src}
-            style={{ width: '100%', height: '100%', border: 'none' }}
-            title="App preview"
-            sandbox="allow-scripts allow-modals"
-            allow=""
-            onLoad={handleLoad}
-        />
-    );
-};
+AppIframePreview.displayName = 'AppIframePreview';
 
 export default AppIframePreview;

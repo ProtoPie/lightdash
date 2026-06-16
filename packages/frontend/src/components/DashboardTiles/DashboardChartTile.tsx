@@ -99,6 +99,7 @@ import { DateZoomInfoOnTile } from '../../features/dateZoom';
 import { ExportToGoogleSheet } from '../../features/export';
 import {
     getExpectedSeriesMap,
+    isPivotSeriesOrderDeterminedByQuery,
     mergeExistingAndExpectedSeries,
 } from '../../hooks/cartesianChartConfig/utils';
 import { useDashboardChartDownload } from '../../hooks/dashboard/useDashboardChartDownload';
@@ -224,14 +225,15 @@ const computeDashboardChartSeries = (
             xField: chart.chartConfig.config.layout.xField,
             yFields: chart.chartConfig.config.layout.yField,
             defaultLabel: firstSerie?.label,
+            defaultStackLabel: firstSerie?.stackLabel,
             itemsMap,
             columnLimit: chart.chartConfig.config.columnLimit,
         });
-        const sortedByPivot =
-            !!validPivotDimensions?.length &&
-            chart.metricQuery.sorts.some((sort) =>
-                validPivotDimensions.includes(sort.fieldId),
-            );
+        const sortedByPivot = isPivotSeriesOrderDeterminedByQuery(
+            validPivotDimensions,
+            chart.chartConfig.config.layout.yField,
+            chart.metricQuery.sorts,
+        );
 
         const newSeries = mergeExistingAndExpectedSeries({
             expectedSeriesMap,
@@ -543,7 +545,11 @@ interface DashboardChartTileMainProps extends Pick<
     tile: IDashboardChartTile;
     dashboardChartReadyQuery: DashboardChartReadyQuery;
     resultsData: InfiniteQueryResults;
-    onAddTiles?: (tiles: Dashboard['tiles'][number][]) => void;
+    onAddTiles?: (
+        tiles: Dashboard['tiles'][number][],
+        // Map of new tile UUID → source tile UUID, so dashboard filter `tileTargets` are copied from the source.
+        tileUuidMapping?: Record<string, string>,
+    ) => void;
     canExportCsv?: boolean;
     canExportImages?: boolean;
     canExportPagePdf?: boolean;
@@ -782,22 +788,25 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = memo(
 
         useEffect(() => {
             if (duplicatedChart && props.onAddTiles) {
-                // We duplicated a chart, we add it to the dashboard
-                props.onAddTiles([
-                    {
-                        uuid: uuid4(),
-                        properties: {
-                            savedChartUuid: duplicatedChart.uuid,
-                            chartName: duplicatedChart.name ?? '',
+                const newTileUuid = uuid4();
+                props.onAddTiles(
+                    [
+                        {
+                            uuid: newTileUuid,
+                            properties: {
+                                savedChartUuid: duplicatedChart.uuid,
+                                chartName: duplicatedChart.name ?? '',
+                            },
+                            type: DashboardTileTypes.SAVED_CHART,
+                            x: 0,
+                            y: 0,
+                            h: props.tile.h,
+                            w: props.tile.w,
+                            tabUuid: props.tile.tabUuid,
                         },
-                        type: DashboardTileTypes.SAVED_CHART,
-                        x: 0,
-                        y: 0,
-                        h: props.tile.h,
-                        w: props.tile.w,
-                        tabUuid: props.tile.tabUuid,
-                    },
-                ]);
+                    ],
+                    { [newTileUuid]: props.tile.uuid },
+                );
                 resetDuplicatedChart(); // Reset duplicated chart to avoid adding it multiple times
             }
         }, [props, duplicatedChart, resetDuplicatedChart]);
@@ -1057,6 +1066,7 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = memo(
             chart.spaceUuid,
             ability,
         ]);
+        const downloadPivotConfig = getPivotConfig(chart);
 
         // Use the custom hook for dashboard chart downloads
         const { getDownloadQueryUuid } = useDashboardChartDownload(
@@ -1065,6 +1075,7 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = memo(
             projectUuid,
             dashboardUuid,
             dashboardChartReadyQuery.executeQueryResponse.queryUuid,
+            !!downloadPivotConfig,
         );
 
         const closeDataExportModal = useCallback(
@@ -1777,7 +1788,7 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = memo(
                         chart.chartConfig.config,
                     )}
                     hiddenFields={getHiddenTableFields(chart.chartConfig)}
-                    pivotConfig={getPivotConfig(chart)}
+                    pivotConfig={downloadPivotConfig}
                 />
                 <ExportImageModal
                     echartRef={echartRef}
@@ -1928,11 +1939,13 @@ const DashboardChartTileMinimal: FC<DashboardChartTileMainProps> = (props) => {
         () => setIsDataExportModalOpen(false),
         [],
     );
+    const downloadPivotConfig = getPivotConfig(chart);
 
     const { getDownloadQueryUuid } = useEmbedDashboardChartDownload(
         tileUuid,
         projectUuid,
         dashboardChartReadyQuery.executeQueryResponse.queryUuid,
+        !!downloadPivotConfig,
     );
 
     const chartKind = useMemo(
@@ -2073,7 +2086,7 @@ const DashboardChartTileMinimal: FC<DashboardChartTileMainProps> = (props) => {
                         chart.chartConfig.config,
                     )}
                     hiddenFields={getHiddenTableFields(chart.chartConfig)}
-                    pivotConfig={getPivotConfig(chart)}
+                    pivotConfig={downloadPivotConfig}
                 />
             )}
             {canExportImages && (
@@ -2248,6 +2261,9 @@ export const GenericDashboardChartTile: FC<
                 dashboardChartReadyQuery.executeQueryResponse
                     .usedParametersValues
             }
+            resolvedTimezone={
+                dashboardChartReadyQuery.executeQueryResponse.resolvedTimezone
+            }
         >
             {minimal ? (
                 <DashboardChartTileMinimal
@@ -2299,19 +2315,15 @@ const DashboardChartTile: FC<DashboardChartTileProps> = (props) => {
         props.tile.properties?.savedChartUuid,
     );
 
-    // Use fresh chart data from useSavedQuery (which is properly cache-invalidated
-    // on verify/unverify) to keep verification status up-to-date without requiring
-    // a full page refresh.
-    const readyQueryDataWithFreshVerification = useMemo(() => {
+    // Use fresh chart data from useSavedQuery to keep dashboard tiles aligned
+    // with chart edits without requiring a full page refresh.
+    const readyQueryDataWithFreshChart = useMemo(() => {
         if (!readyQuery.data) return undefined;
         const freshChart = readyQuery.chartQuery?.data;
         if (!freshChart) return readyQuery.data;
         return {
             ...readyQuery.data,
-            chart: {
-                ...readyQuery.data.chart,
-                verification: freshChart.verification,
-            },
+            chart: freshChart,
         };
     }, [readyQuery.data, readyQuery.chartQuery?.data]);
 
@@ -2343,7 +2355,7 @@ const DashboardChartTile: FC<DashboardChartTileProps> = (props) => {
             {...props}
             isLoading={isLoading}
             resultsData={resultsData}
-            dashboardChartReadyQuery={readyQueryDataWithFreshVerification}
+            dashboardChartReadyQuery={readyQueryDataWithFreshChart}
             error={orphanedChartError ?? readyQuery.error ?? resultsData.error}
         />
     );

@@ -16,6 +16,7 @@ import LicenseClient from './clients/License/LicenseClient';
 import { ManagedAgentClient } from './clients/ManagedAgentClient';
 import OpenAi from './clients/OpenAi';
 import { CommercialSlackClient } from './clients/Slack/SlackClient';
+import { AiAgentDocumentModel } from './models/AiAgentDocumentModel';
 import { AiAgentModel } from './models/AiAgentModel';
 import { AiOrganizationSettingsModel } from './models/AiOrganizationSettingsModel';
 import { CommercialFeatureFlagModel } from './models/CommercialFeatureFlagModel';
@@ -28,7 +29,9 @@ import { enhanceExploresForPreAggregates } from './preAggregates/enhanceExplores
 import { preAggregatePostProcessor } from './preAggregates/postProcessor';
 import { CommercialSchedulerClient } from './scheduler/SchedulerClient';
 import { CommercialSchedulerWorker } from './scheduler/SchedulerWorker';
+import { AiAgentContentValidation } from './services/ai/utils/AiAgentContentValidation';
 import { AiAgentAdminService } from './services/AiAgentAdminService';
+import { AiAgentDocumentService } from './services/AiAgentDocumentService';
 import { AiAgentService } from './services/AiAgentService/AiAgentService';
 import { AiOrganizationSettingsService } from './services/AiOrganizationSettingsService';
 import { AiService } from './services/AiService/AiService';
@@ -150,6 +153,8 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     catalogModel: models.getCatalogModel(),
                     appModel: models.getAppModel(),
                     featureFlagModel: models.getFeatureFlagModel(),
+                    organizationDesignModel:
+                        models.getOrganizationDesignModel(),
                     pinnedListModel: models.getPinnedListModel(),
                     projectModel: models.getProjectModel(),
                     schedulerClient:
@@ -169,10 +174,12 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     }),
                     projectService: repository.getProjectService(),
                     asyncQueryService: repository.getAsyncQueryService(),
+                    permissionsService: repository.getPermissionsService(),
                     dashboardModel: models.getDashboardModel(),
                     embedModel: models.getEmbedModel(),
                     projectModel: models.getProjectModel(),
                     savedChartModel: models.getSavedChartModel(),
+                    savedSqlModel: models.getSavedSqlModel(),
                     userAttributesModel: models.getUserAttributesModel(),
                     featureFlagModel: models.getFeatureFlagModel(),
                     organizationModel: models.getOrganizationModel(),
@@ -199,8 +206,12 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     analytics: context.lightdashAnalytics,
                     userModel: models.getUserModel(),
                     aiAgentModel: models.getAiAgentModel(),
+                    aiAgentDocumentModel:
+                        models.getAiAgentDocumentModel<AiAgentDocumentModel>(),
                     changesetModel: models.getChangesetModel(),
                     catalogModel: models.getCatalogModel(),
+                    contentVerificationModel:
+                        models.getContentVerificationModel(),
                     groupsModel: models.getGroupsModel(),
                     featureFlagService: repository.getFeatureFlagService(),
                     slackClient: clients.getSlackClient(),
@@ -216,15 +227,28 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     openIdIdentityModel: models.getOpenIdIdentityModel(),
                     spaceService: repository.getSpaceService(),
                     projectModel: models.getProjectModel(),
+                    coderService: repository.getCoderService(),
                     savedChartService: repository.getSavedChartService(),
                     aiOrganizationSettingsService:
                         repository.getAiOrganizationSettingsService(),
                     shareService: repository.getShareService(),
+                    aiAgentContentValidation: new AiAgentContentValidation(),
                     prometheusMetrics,
                 }),
             aiAgentAdminService: ({ models, context }) =>
                 new AiAgentAdminService({
                     aiAgentModel: models.getAiAgentModel(),
+                    lightdashConfig: context.lightdashConfig,
+                }),
+            aiAgentDocumentService: ({ models, repository, context }) =>
+                new AiAgentDocumentService({
+                    analytics: context.lightdashAnalytics,
+                    aiAgentDocumentModel:
+                        models.getAiAgentDocumentModel<AiAgentDocumentModel>(),
+                    commercialFeatureFlagModel:
+                        models.getFeatureFlagModel() as CommercialFeatureFlagModel,
+                    aiAgentService:
+                        repository.getAiAgentService<AiAgentService>(),
                     lightdashConfig: context.lightdashConfig,
                 }),
             aiOrganizationSettingsService: ({ models, context }) =>
@@ -259,6 +283,7 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     serviceAccountModel: models.getServiceAccountModel(),
                     commercialFeatureFlagModel:
                         models.getFeatureFlagModel() as CommercialFeatureFlagModel,
+                    projectModel: models.getProjectModel(),
                 }),
             slackIntegrationService: ({ models, context, clients }) =>
                 new CommercialSlackIntegrationService({
@@ -446,6 +471,7 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     queryHistoryModel: models.getQueryHistoryModel(),
                     lightdashConfig: context.lightdashConfig,
                     storageClient: clients.getResultsFileStorageClient(),
+                    featureFlagModel: models.getFeatureFlagModel(),
                 }),
             mcpService: ({ context, repository, models }) =>
                 new McpService({
@@ -518,8 +544,14 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                 }),
         },
         modelProviders: {
-            aiAgentModel: ({ database }) =>
-                new AiAgentModel({ database, lightdashConfig }),
+            aiAgentModel: ({ database, utils }) =>
+                new AiAgentModel({
+                    database,
+                    lightdashConfig,
+                    encryptionUtil: utils.getEncryptionUtil(),
+                }),
+            aiAgentDocumentModel: ({ database }) =>
+                new AiAgentDocumentModel({ database }),
             aiOrganizationSettingsModel: ({ database }) =>
                 new AiOrganizationSettingsModel({ database }),
             embedModel: ({ database }) => new EmbedModel({ database }),
@@ -591,6 +623,7 @@ export async function getEnterpriseAppArguments(): Promise<EnterpriseAppArgument
                     context.serviceRepository.getManagedAgentService<ManagedAgentService>(),
                 appGenerateService:
                     context.serviceRepository.getAppGenerateService(),
+                workerHealth: context.workerHealth,
             }),
         clientProviders: {
             schedulerClient: ({ context, models }) =>

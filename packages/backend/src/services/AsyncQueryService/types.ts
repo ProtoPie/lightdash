@@ -51,6 +51,7 @@ export type DownloadAsyncQueryResultsArgs = Omit<
     columnOrder?: string[];
     hiddenFields?: string[];
     pivotConfig?: PivotConfig;
+    exportPivotedData?: boolean;
     attachmentDownloadName?: string;
     expirationSecondsOverride?: number;
 };
@@ -75,6 +76,7 @@ export type ExecuteAsyncMetricQueryArgs = CommonAsyncQueryArgs & {
     dateZoom?: DateZoom;
     pivotConfiguration?: PivotConfiguration;
     materializationRole?: UserAccessControls;
+    dashboardFilters?: DashboardFilters;
 };
 
 export type ExecuteAsyncSavedChartQueryArgs = CommonAsyncQueryArgs & {

@@ -21,12 +21,15 @@ import { DefaultAgentButton } from '../../features/aiCopilot/components/DefaultA
 import { usePendingPrompt } from '../../features/aiCopilot/components/PendingPromptContext/PendingPromptContext';
 import { PinnedContextCard } from '../../features/aiCopilot/components/PinnedContextCard/PinnedContextCard';
 import { SuggestedQuestions } from '../../features/aiCopilot/components/SuggestedQuestions/SuggestedQuestions';
+import { useAiAgentSqlModeAvailable } from '../../features/aiCopilot/hooks/useAiAgentSqlModeAvailable';
 import { useModelOptions } from '../../features/aiCopilot/hooks/useModelOptions';
 import { usePinnedContext } from '../../features/aiCopilot/hooks/usePinnedContext';
 import {
     useCreateAgentThreadMutation,
     useVerifiedQuestions,
 } from '../../features/aiCopilot/hooks/useProjectAiAgents';
+import { setThreadSqlMode } from '../../features/aiCopilot/store/aiAgentThreadModeSlice';
+import { useAiAgentStoreDispatch } from '../../features/aiCopilot/store/hooks';
 import { type AgentContext } from './AgentPage';
 
 const AiAgentNewThreadPage: FC = () => {
@@ -41,8 +44,23 @@ const AiAgentNewThreadPage: FC = () => {
         dashboardUuid,
     });
 
+    const sqlModeAvailable = useAiAgentSqlModeAvailable(projectUuid);
+    const [sqlMode, setSqlMode] = useState(false);
+    const dispatch = useAiAgentStoreDispatch();
+
     const { mutateAsync: createAgentThread, isLoading: isCreatingThread } =
-        useCreateAgentThreadMutation(agentUuid, projectUuid!);
+        useCreateAgentThreadMutation(agentUuid, projectUuid!, {
+            // Seed the per-thread slice with the user's choice so subsequent
+            // prompts in this thread default to the same state. Navigation
+            // still happens (we only override the slice, not the routing).
+            onCreated: (thread) =>
+                dispatch(
+                    setThreadSqlMode({
+                        threadUuid: thread.uuid,
+                        enabled: sqlModeAvailable && sqlMode,
+                    }),
+                ),
+        });
     const { agent } = useOutletContext<AgentContext>();
     const { data: verifiedQuestions } = useVerifiedQuestions(
         projectUuid,
@@ -88,13 +106,15 @@ const AiAgentNewThreadPage: FC = () => {
     const { pendingPrompt, setPendingPrompt } = usePendingPrompt();
 
     const onSubmit = useCallback(
-        (prompt: string) => {
+        ({ message, toolHints }: { message: string; toolHints: string[] }) => {
             setPendingPrompt('');
             void createAgentThread({
-                prompt,
+                prompt: message,
                 context: contextInput.length > 0 ? contextInput : undefined,
                 optimisticContext:
                     previewItems.length > 0 ? previewItems : undefined,
+                enableSqlMode: sqlModeAvailable && sqlMode,
+                toolHints,
                 modelConfig: selectedModel
                     ? {
                           modelName: selectedModel.name,
@@ -111,6 +131,8 @@ const AiAgentNewThreadPage: FC = () => {
             createAgentThread,
             contextInput,
             previewItems,
+            sqlModeAvailable,
+            sqlMode,
             selectedModel,
             showExtendedThinking,
             extendedThinking,
@@ -198,7 +220,9 @@ const AiAgentNewThreadPage: FC = () => {
                     {verifiedQuestions && (
                         <SuggestedQuestions
                             questions={verifiedQuestions}
-                            onQuestionClick={onSubmit}
+                            onQuestionClick={(question) =>
+                                onSubmit({ message: question, toolHints: [] })
+                            }
                             isLoading={isCreatingThread}
                         />
                     )}
@@ -228,6 +252,8 @@ const AiAgentNewThreadPage: FC = () => {
                         onSubmit={onSubmit}
                         loading={isCreatingThread}
                         placeholder={`Ask ${agent.name} anything about your data...`}
+                        projectUuid={projectUuid}
+                        agentUuid={agent.uuid}
                         models={modelOptions}
                         selectedModelId={selectedModelKey}
                         onModelChange={handleSelectedModelKeyChange}
@@ -238,6 +264,10 @@ const AiAgentNewThreadPage: FC = () => {
                             showExtendedThinking
                                 ? setExtendedThinking
                                 : undefined
+                        }
+                        sqlMode={sqlModeAvailable ? sqlMode : undefined}
+                        onSqlModeChange={
+                            sqlModeAvailable ? setSqlMode : undefined
                         }
                         defaultValue={pendingPrompt}
                         onValueChange={setPendingPrompt}

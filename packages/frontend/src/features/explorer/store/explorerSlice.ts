@@ -257,6 +257,19 @@ const explorerSlice = createSlice({
             action: PayloadAction<{ columns: string[] } | undefined>,
         ) => {
             state.unsavedChartVersion.pivotConfig = action.payload;
+            if (!action.payload?.columns.length) {
+                const seen = new Set<string>();
+                state.unsavedChartVersion.metricQuery.sorts =
+                    state.unsavedChartVersion.metricQuery.sorts.reduce<
+                        SortField[]
+                    >((acc, sort) => {
+                        if (seen.has(sort.fieldId)) return acc;
+                        seen.add(sort.fieldId);
+                        const { pivotValues: _pivotValues, ...rest } = sort;
+                        acc.push(rest);
+                        return acc;
+                    }, []);
+            }
         },
 
         setParameter: (
@@ -424,6 +437,12 @@ const explorerSlice = createSlice({
                 label: string;
                 description?: string;
                 fieldItem?: Item | AdditionalMetric;
+                tableMetadata?: {
+                    name: string;
+                    dbtPackageName?: string;
+                    ymlPath?: string;
+                    sqlPath?: string;
+                };
             }>,
         ) => {
             state.modals.itemDetail = {
@@ -432,6 +451,7 @@ const explorerSlice = createSlice({
                 label: action.payload.label,
                 description: action.payload.description,
                 fieldItem: action.payload.fieldItem,
+                tableMetadata: action.payload.tableMetadata,
             };
         },
         closeItemDetail: (state) => {
@@ -441,6 +461,7 @@ const explorerSlice = createSlice({
                 label: undefined,
                 description: undefined,
                 fieldItem: undefined,
+                tableMetadata: undefined,
             };
         },
 

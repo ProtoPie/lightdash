@@ -18,20 +18,28 @@ import {
     AiAgentSummary,
     AiAgentThreadSummary,
     AiAgentToolCall,
+    AiAgentToolCallMcpServer,
     AiAgentToolResult,
     AiAgentUser,
     AiAgentUserPreferences,
     AiArtifact,
     AiEvalRunResultAssessment,
+    AiMcpCredentialScope,
+    AiMcpServer,
+    AiMcpServerConnectionStatus,
+    AiMcpServerTool,
+    AiMcpServerToolInput,
     AiPromptContext,
     AiPromptContextInput,
     AiPromptContextItem,
     AiResultType,
     AiThread,
+    AiThreadCompaction,
     AiWebAppPrompt,
     AlreadyExistsError,
     ApiAppendEvaluationRequest,
     ApiCreateAiAgent,
+    ApiCreateAiMcpServer,
     ApiCreateEvaluationRequest,
     ApiUpdateAiAgent,
     ApiUpdateEvaluationRequest,
@@ -43,11 +51,14 @@ import {
     CreateWebAppPrompt,
     CreateWebAppThread,
     generateSlug,
+    isAiAgentMcpToolName,
+    isAiAgentToolName,
     isThreadPrompt,
-    isToolName,
     KnexPaginateArgs,
     KnexPaginatedData,
     NotFoundError,
+    NotImplementedError,
+    ParameterError,
     ProjectType,
     SlackPrompt,
     ToolName,
@@ -77,6 +88,7 @@ import { isUniqueConstraintViolation } from '../../database/errors';
 import KnexPaginate from '../../database/pagination';
 import Logger from '../../logging/logger';
 import { wrapSentryTransaction } from '../../utils';
+import { EncryptionUtil } from '../../utils/EncryptionUtil/EncryptionUtil';
 import {
     AiAgentToolCallTableName,
     AiAgentToolResultTableName,
@@ -85,6 +97,8 @@ import {
     AiPromptTableName,
     AiSlackPromptTableName,
     AiSlackThreadTableName,
+    AiSqlApprovalTableName,
+    AiThreadCompactionTableName,
     AiThreadTableName,
     AiWebAppPromptTableName,
     AiWebAppThreadTableName,
@@ -94,20 +108,34 @@ import {
     DbAiPromptContext,
     DbAiSlackPrompt,
     DbAiSlackThread,
+    DbAiSqlApproval,
     DbAiThread,
+    DbAiThreadCompaction,
     DbAiWebAppPrompt,
+    type AiSqlApprovalDecision,
 } from '../database/entities/ai';
 import {
     AiAgentGroupAccessTableName,
     AiAgentInstructionVersionsTableName,
     AiAgentIntegrationTableName,
+    AiAgentMcpServerTableName,
+    AiAgentMcpServerToolTableName,
     AiAgentSlackIntegrationTableName,
     AiAgentSpaceAccessTableName,
     AiAgentTableName,
     AiAgentUserAccessTableName,
+    AiMcpServerCredentialTableName,
+    AiMcpServerTableName,
+    AiMcpServerToolTableName,
     DbAiAgent,
     DbAiAgentIntegration,
+    DbAiAgentMcpServer,
+    DbAiAgentMcpServerTool,
+    DbAiAgentMcpServerToolPermissionMode,
     DbAiAgentSlackIntegration,
+    DbAiMcpServer,
+    DbAiMcpServerCredential,
+    DbAiMcpServerTool,
 } from '../database/entities/aiAgent';
 import { AiAgentUserPreferencesTableName } from '../database/entities/aiAgentUserPreferences';
 import {
@@ -132,10 +160,84 @@ import {
     DbAiEvalRunResult,
     DbAiEvalRunResultAssessment,
 } from '../database/entities/aiEvals';
+import { type SqlApprovalDecision } from '../services/ai/tools/sqlApprovals';
 
 type Dependencies = {
     database: Knex;
     lightdashConfig: LightdashConfig;
+    encryptionUtil: EncryptionUtil;
+};
+
+export const AI_AGENT_MCP_SERVER_TOOL_PERMISSION_MODE_ALWAYS_ALLOW: DbAiAgentMcpServerToolPermissionMode =
+    'always_allow';
+export const AI_AGENT_MCP_SERVER_TOOL_PERMISSION_MODE_ALWAYS_DENY: DbAiAgentMcpServerToolPermissionMode =
+    'always_deny';
+
+export type AiAgentMcpServerToolPermissionSetting = AiMcpServerTool & {
+    agentUuid: string;
+    permissionMode: DbAiAgentMcpServerToolPermissionMode;
+};
+
+export type AiAgentMcpServerToolPermissionSettingUpdate = Pick<
+    AiAgentMcpServerToolPermissionSetting,
+    'toolName' | 'permissionMode'
+>;
+
+export type AiMcpBearerCredentialPayload = {
+    type: 'bearer';
+    bearerToken: string;
+};
+
+export type AiMcpOAuthCredentialPayload = {
+    type: 'oauth';
+    credentialScope: AiMcpCredentialScope;
+    connectionStatus: AiMcpServerConnectionStatus;
+    tokens?: {
+        accessToken: string;
+        refreshToken?: string;
+        expiresAt?: string;
+        tokenType: string;
+        scope?: string;
+    };
+    clientInformation?: Record<string, unknown>;
+    clientMetadata?: Record<string, unknown>;
+    codeVerifier?: string;
+    state?: string;
+    authorizationServerUrl?: string;
+    resourceMetadataUrl?: string;
+    resourceMetadata?: Record<string, unknown>;
+    authorizationServerMetadata?: Record<string, unknown>;
+    lastError?: string;
+};
+
+export type AiMcpCredentialPayload =
+    | {
+          type: 'none';
+      }
+    | AiMcpBearerCredentialPayload
+    | AiMcpOAuthCredentialPayload;
+
+export type AiMcpCredential = {
+    uuid: string;
+    mcpServerUuid: string;
+    credentialScope: AiMcpCredentialScope;
+    userUuid: string | null;
+    createdByUserUuid: string | null;
+    updatedByUserUuid: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    credentials: AiMcpCredentialPayload;
+};
+
+export type AiMcpServerWithSensitiveData = AiMcpServer & {
+    resolvedCredential: AiMcpCredentialPayload | null;
+    resolvedCredentialScope: AiMcpCredentialScope | null;
+};
+
+type DbAiAgentToolCallWithMcpServer = DbAiAgentToolCall & {
+    mcp_server_uuid: string | null;
+    mcp_server_name: string | null;
+    mcp_server_icon_url: string | null;
 };
 
 export class AiAgentModel {
@@ -143,9 +245,12 @@ export class AiAgentModel {
 
     private lightdashConfig: LightdashConfig;
 
+    private encryptionUtil: EncryptionUtil;
+
     constructor(dependencies: Dependencies) {
         this.database = dependencies.database;
         this.lightdashConfig = dependencies.lightdashConfig;
+        this.encryptionUtil = dependencies.encryptionUtil;
     }
 
     static async withTrx<T>(
@@ -499,6 +604,922 @@ export class AiAgentModel {
         return slug;
     }
 
+    private static getMcpServerCredentialStatus(
+        row: DbAiMcpServer,
+        credential: AiMcpCredential | null,
+    ): Pick<
+        AiMcpServer,
+        | 'hasCredentials'
+        | 'credentialScope'
+        | 'connectionStatus'
+        | 'error'
+        | 'connectedByUserUuid'
+    > {
+        if (row.auth_type === 'none') {
+            return {
+                hasCredentials: false,
+                credentialScope: null,
+                connectionStatus: row.connection_status ?? 'connected',
+                error: row.error,
+                connectedByUserUuid: null,
+            };
+        }
+
+        if (!credential) {
+            return {
+                hasCredentials: false,
+                credentialScope: null,
+                connectionStatus: 'not_connected',
+                error: row.error,
+                connectedByUserUuid: null,
+            };
+        }
+
+        if (
+            row.auth_type === 'oauth' &&
+            credential.credentials.type === 'oauth'
+        ) {
+            return {
+                hasCredentials: true,
+                credentialScope: credential.credentialScope,
+                connectionStatus: credential.credentials.connectionStatus,
+                error: credential.credentials.lastError ?? null,
+                connectedByUserUuid:
+                    credential.updatedByUserUuid ??
+                    credential.createdByUserUuid ??
+                    null,
+            };
+        }
+
+        return {
+            hasCredentials: true,
+            credentialScope: credential.credentialScope,
+            connectionStatus: row.connection_status ?? 'connected',
+            error: row.error,
+            connectedByUserUuid:
+                credential.updatedByUserUuid ??
+                credential.createdByUserUuid ??
+                null,
+        };
+    }
+
+    private static toAiMcpServer(
+        row: DbAiMcpServer,
+        credential: AiMcpCredential | null = null,
+    ): AiMcpServer {
+        const credentialStatus = AiAgentModel.getMcpServerCredentialStatus(
+            row,
+            credential,
+        );
+
+        return {
+            uuid: row.ai_mcp_server_uuid,
+            projectUuid: row.project_uuid,
+            name: row.name,
+            url: row.url,
+            iconUrl: row.icon_url,
+            authType: row.auth_type,
+            ...credentialStatus,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+        };
+    }
+
+    private decryptMcpCredentialPayload(
+        encryptedCredentials: Buffer,
+    ): AiMcpCredentialPayload {
+        return JSON.parse(
+            this.encryptionUtil.decrypt(encryptedCredentials),
+        ) as AiMcpCredentialPayload;
+    }
+
+    private static createEmptyOauthCredentialPayload(
+        credentialScope: AiMcpCredentialScope,
+    ): AiMcpOAuthCredentialPayload {
+        return {
+            type: 'oauth',
+            credentialScope,
+            connectionStatus: 'not_connected',
+        };
+    }
+
+    private toAiMcpCredential(row: DbAiMcpServerCredential): AiMcpCredential {
+        return {
+            uuid: row.ai_mcp_server_credential_uuid,
+            mcpServerUuid: row.ai_mcp_server_uuid,
+            credentialScope: row.credential_scope,
+            userUuid: row.user_uuid,
+            createdByUserUuid: row.created_by_user_uuid,
+            updatedByUserUuid: row.updated_by_user_uuid,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+            credentials: this.decryptMcpCredentialPayload(
+                row.encrypted_credentials,
+            ),
+        };
+    }
+
+    private static toAiMcpServerWithSensitiveData(args: {
+        row: DbAiMcpServer;
+        resolvedCredential: AiMcpCredential | null;
+    }): AiMcpServerWithSensitiveData {
+        const { row, resolvedCredential } = args;
+
+        return {
+            ...AiAgentModel.toAiMcpServer(row, resolvedCredential),
+            resolvedCredential: resolvedCredential?.credentials ?? null,
+            resolvedCredentialScope:
+                resolvedCredential?.credentialScope ?? null,
+        };
+    }
+
+    private static toAiMcpServerTool(row: DbAiMcpServerTool): AiMcpServerTool {
+        return {
+            uuid: row.ai_mcp_server_tool_uuid,
+            mcpServerUuid: row.ai_mcp_server_uuid,
+            toolName: row.tool_name,
+            title: row.title,
+            description: row.description,
+            inputSchema: row.input_schema,
+            annotations: row.annotations,
+            meta: row.meta,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+        };
+    }
+
+    private static toAiAgentMcpServerToolPermissionSetting(args: {
+        agentUuid: string;
+        tool: DbAiMcpServerTool;
+        setting?: DbAiAgentMcpServerTool;
+    }): AiAgentMcpServerToolPermissionSetting {
+        return {
+            ...AiAgentModel.toAiMcpServerTool(args.tool),
+            agentUuid: args.agentUuid,
+            permissionMode:
+                args.setting?.permission_mode ??
+                AI_AGENT_MCP_SERVER_TOOL_PERMISSION_MODE_ALWAYS_DENY,
+        };
+    }
+
+    private static getMcpServerToolSelect(trx: Knex | Knex.Transaction) {
+        return {
+            ai_mcp_server_tool_uuid: `${AiMcpServerToolTableName}.ai_mcp_server_tool_uuid`,
+            ai_mcp_server_uuid: `${AiMcpServerToolTableName}.ai_mcp_server_uuid`,
+            tool_name: `${AiMcpServerToolTableName}.tool_name`,
+            title: `${AiMcpServerToolTableName}.title`,
+            description: `${AiMcpServerToolTableName}.description`,
+            input_schema: `${AiMcpServerToolTableName}.input_schema`,
+            annotations: `${AiMcpServerToolTableName}.annotations`,
+            meta: `${AiMcpServerToolTableName}.meta`,
+            created_at: `${AiMcpServerToolTableName}.created_at`,
+            updated_at: `${AiMcpServerToolTableName}.updated_at`,
+        } satisfies Record<keyof DbAiMcpServerTool, Knex.Value>;
+    }
+
+    private static getAgentMcpServerToolSelect(trx: Knex | Knex.Transaction) {
+        return {
+            ai_agent_uuid: `${AiAgentMcpServerToolTableName}.ai_agent_uuid`,
+            ai_mcp_server_uuid: `${AiAgentMcpServerToolTableName}.ai_mcp_server_uuid`,
+            ai_mcp_server_tool_uuid: `${AiAgentMcpServerToolTableName}.ai_mcp_server_tool_uuid`,
+            enabled: `${AiAgentMcpServerToolTableName}.enabled`,
+            permission_mode: `${AiAgentMcpServerToolTableName}.permission_mode`,
+            created_at: `${AiAgentMcpServerToolTableName}.created_at`,
+            updated_at: `${AiAgentMcpServerToolTableName}.updated_at`,
+        } satisfies Record<keyof DbAiAgentMcpServerTool, Knex.Value>;
+    }
+
+    private static getAgentMcpServerAttachmentSelect(
+        trx: Knex | Knex.Transaction,
+    ) {
+        return {
+            ai_agent_uuid: `${AiAgentMcpServerTableName}.ai_agent_uuid`,
+            ai_mcp_server_uuid: `${AiAgentMcpServerTableName}.ai_mcp_server_uuid`,
+            created_at: `${AiAgentMcpServerTableName}.created_at`,
+        } satisfies Record<keyof DbAiAgentMcpServer, Knex.Value>;
+    }
+
+    private async getAgentMcpServerAttachment(args: {
+        agentUuid: string;
+        serverUuid: string;
+        trx?: Knex;
+    }): Promise<DbAiAgentMcpServer | undefined> {
+        const trx = args.trx ?? this.database;
+
+        return trx(AiAgentMcpServerTableName)
+            .select<DbAiAgentMcpServer[]>(
+                AiAgentModel.getAgentMcpServerAttachmentSelect(trx),
+            )
+            .where('ai_agent_uuid', args.agentUuid)
+            .andWhere('ai_mcp_server_uuid', args.serverUuid)
+            .first();
+    }
+
+    private encryptMcpCredentialPayload(
+        credential: AiMcpCredentialPayload,
+    ): Buffer {
+        return this.encryptionUtil.encrypt(JSON.stringify(credential));
+    }
+
+    private static serializeMcpCredentialPayload(
+        authType: ApiCreateAiMcpServer['authType'],
+        credentialScope: AiMcpCredentialScope,
+        credentials: ApiCreateAiMcpServer['credentials'],
+    ): AiMcpCredentialPayload | null {
+        switch (authType) {
+            case 'none':
+                return null;
+            case 'bearer':
+                if (!credentials?.bearerToken) {
+                    throw new ParameterError(
+                        'Bearer MCP servers require a bearer token',
+                    );
+                }
+
+                return {
+                    type: 'bearer',
+                    bearerToken: credentials.bearerToken,
+                };
+            case 'oauth':
+                return AiAgentModel.createEmptyOauthCredentialPayload(
+                    credentialScope,
+                );
+            default:
+                return assertUnreachable(
+                    authType,
+                    `Unknown MCP auth type: ${authType}`,
+                );
+        }
+    }
+
+    async listMcpServers(projectUuid: string): Promise<AiMcpServer[]> {
+        const rows = await this.database(AiMcpServerTableName)
+            .select<DbAiMcpServer[]>({
+                ai_mcp_server_uuid: `${AiMcpServerTableName}.ai_mcp_server_uuid`,
+                project_uuid: `${AiMcpServerTableName}.project_uuid`,
+                name: `${AiMcpServerTableName}.name`,
+                url: `${AiMcpServerTableName}.url`,
+                icon_url: `${AiMcpServerTableName}.icon_url`,
+                auth_type: `${AiMcpServerTableName}.auth_type`,
+                connection_status: `${AiMcpServerTableName}.connection_status`,
+                error: `${AiMcpServerTableName}.error`,
+                created_at: `${AiMcpServerTableName}.created_at`,
+                updated_at: `${AiMcpServerTableName}.updated_at`,
+            })
+            .where('project_uuid', projectUuid)
+            .orderBy('created_at', 'asc');
+
+        const credentials = await this.database(AiMcpServerCredentialTableName)
+            .select<DbAiMcpServerCredential[]>({
+                ai_mcp_server_credential_uuid: `${AiMcpServerCredentialTableName}.ai_mcp_server_credential_uuid`,
+                ai_mcp_server_uuid: `${AiMcpServerCredentialTableName}.ai_mcp_server_uuid`,
+                credential_scope: `${AiMcpServerCredentialTableName}.credential_scope`,
+                user_uuid: `${AiMcpServerCredentialTableName}.user_uuid`,
+                encrypted_credentials: `${AiMcpServerCredentialTableName}.encrypted_credentials`,
+                created_by_user_uuid: `${AiMcpServerCredentialTableName}.created_by_user_uuid`,
+                updated_by_user_uuid: `${AiMcpServerCredentialTableName}.updated_by_user_uuid`,
+                created_at: `${AiMcpServerCredentialTableName}.created_at`,
+                updated_at: `${AiMcpServerCredentialTableName}.updated_at`,
+            })
+            .whereIn(
+                'ai_mcp_server_uuid',
+                rows.map((row) => row.ai_mcp_server_uuid),
+            )
+            .andWhere('credential_scope', 'shared');
+
+        const credentialMap = new Map(
+            credentials.map((row) => {
+                const credential = this.toAiMcpCredential(row);
+                return [credential.mcpServerUuid, credential];
+            }),
+        );
+
+        return rows.map((row) =>
+            AiAgentModel.toAiMcpServer(
+                row,
+                credentialMap.get(row.ai_mcp_server_uuid) ?? null,
+            ),
+        );
+    }
+
+    async getMcpServer(
+        serverUuid: string,
+        { trx = this.database }: { trx?: Knex } = {},
+    ): Promise<AiMcpServer | undefined> {
+        const row = await trx(AiMcpServerTableName)
+            .select<DbAiMcpServer>({
+                ai_mcp_server_uuid: `${AiMcpServerTableName}.ai_mcp_server_uuid`,
+                project_uuid: `${AiMcpServerTableName}.project_uuid`,
+                name: `${AiMcpServerTableName}.name`,
+                url: `${AiMcpServerTableName}.url`,
+                icon_url: `${AiMcpServerTableName}.icon_url`,
+                auth_type: `${AiMcpServerTableName}.auth_type`,
+                connection_status: `${AiMcpServerTableName}.connection_status`,
+                error: `${AiMcpServerTableName}.error`,
+                created_at: `${AiMcpServerTableName}.created_at`,
+                updated_at: `${AiMcpServerTableName}.updated_at`,
+            })
+            .where('ai_mcp_server_uuid', serverUuid)
+            .first();
+
+        if (!row) {
+            return undefined;
+        }
+
+        const credential = await this.getCredential(serverUuid, 'shared', {
+            trx,
+        });
+
+        return AiAgentModel.toAiMcpServer(row, credential ?? null);
+    }
+
+    async listMcpServerTools(args: {
+        projectUuid: string;
+        serverUuid: string;
+        trx?: Knex;
+    }): Promise<AiMcpServerTool[]> {
+        const trx = args.trx ?? this.database;
+
+        const server = await trx(AiMcpServerTableName)
+            .select('ai_mcp_server_uuid')
+            .where('ai_mcp_server_uuid', args.serverUuid)
+            .andWhere('project_uuid', args.projectUuid)
+            .first();
+
+        if (!server) {
+            throw new NotFoundError('MCP server not found for this project');
+        }
+
+        const rows = await trx(AiMcpServerToolTableName)
+            .select<DbAiMcpServerTool[]>(
+                AiAgentModel.getMcpServerToolSelect(trx),
+            )
+            .where('ai_mcp_server_uuid', args.serverUuid)
+            .orderBy('tool_name', 'asc');
+
+        return rows.map(AiAgentModel.toAiMcpServerTool);
+    }
+
+    async upsertDiscoveredMcpServerTools(args: {
+        serverUuid: string;
+        tools: AiMcpServerToolInput[];
+        defaultPermissionModeForExistingAttachments?: DbAiAgentMcpServerToolPermissionMode;
+        trx?: Knex;
+    }): Promise<AiMcpServerTool[]> {
+        const trx = args.trx ?? this.database;
+        const toolMap = new Map(
+            args.tools.map((tool) => [tool.toolName, tool] as const),
+        );
+        const tools = [...toolMap.values()];
+        const toolNames = tools.map((tool) => tool.toolName);
+
+        const server = await trx(AiMcpServerTableName)
+            .select('ai_mcp_server_uuid', 'project_uuid')
+            .where('ai_mcp_server_uuid', args.serverUuid)
+            .first();
+
+        if (!server) {
+            throw new NotFoundError('MCP server not found');
+        }
+
+        if (tools.length > 0) {
+            await trx(AiMcpServerToolTableName)
+                .insert(
+                    tools.map((tool) => ({
+                        ai_mcp_server_uuid: args.serverUuid,
+                        tool_name: tool.toolName,
+                        title: tool.title,
+                        description: tool.description,
+                        input_schema: tool.inputSchema,
+                        annotations: tool.annotations,
+                        meta: tool.meta,
+                        created_at: trx.fn.now(),
+                        updated_at: trx.fn.now(),
+                    })),
+                )
+                .onConflict(['ai_mcp_server_uuid', 'tool_name'])
+                .merge({
+                    title: trx.raw('excluded.title'),
+                    description: trx.raw('excluded.description'),
+                    input_schema: trx.raw('excluded.input_schema'),
+                    annotations: trx.raw('excluded.annotations'),
+                    meta: trx.raw('excluded.meta'),
+                    updated_at: trx.fn.now(),
+                });
+        }
+
+        const removedToolsQuery = trx(AiMcpServerToolTableName).where(
+            'ai_mcp_server_uuid',
+            args.serverUuid,
+        );
+
+        if (toolNames.length > 0) {
+            void removedToolsQuery.whereNotIn('tool_name', toolNames);
+        }
+
+        await removedToolsQuery.delete();
+
+        if (toolNames.length > 0) {
+            const discoveredToolRows = await trx(AiMcpServerToolTableName)
+                .select<DbAiMcpServerTool[]>(
+                    AiAgentModel.getMcpServerToolSelect(trx),
+                )
+                .where('ai_mcp_server_uuid', args.serverUuid)
+                .whereIn('tool_name', toolNames);
+
+            const attachmentRows = await trx(AiAgentMcpServerTableName)
+                .select<DbAiAgentMcpServer[]>(
+                    AiAgentModel.getAgentMcpServerAttachmentSelect(trx),
+                )
+                .where('ai_mcp_server_uuid', args.serverUuid);
+
+            if (attachmentRows.length > 0 && discoveredToolRows.length > 0) {
+                await trx(AiAgentMcpServerToolTableName)
+                    .insert(
+                        attachmentRows.flatMap((row) =>
+                            discoveredToolRows.map((tool) => ({
+                                ai_agent_uuid: row.ai_agent_uuid,
+                                ai_mcp_server_uuid: row.ai_mcp_server_uuid,
+                                ai_mcp_server_tool_uuid:
+                                    tool.ai_mcp_server_tool_uuid,
+                                permission_mode:
+                                    args.defaultPermissionModeForExistingAttachments ??
+                                    AI_AGENT_MCP_SERVER_TOOL_PERMISSION_MODE_ALWAYS_DENY,
+                                created_at: trx.fn.now(),
+                                updated_at: trx.fn.now(),
+                            })),
+                        ),
+                    )
+                    .onConflict([
+                        'ai_agent_uuid',
+                        'ai_mcp_server_uuid',
+                        'ai_mcp_server_tool_uuid',
+                    ])
+                    .ignore();
+            }
+        }
+
+        return this.listMcpServerTools({
+            projectUuid: server.project_uuid,
+            serverUuid: args.serverUuid,
+            trx,
+        });
+    }
+
+    async listAgentMcpServerTools(args: {
+        agentUuid: string;
+        serverUuid: string;
+        trx?: Knex;
+    }): Promise<AiAgentMcpServerToolPermissionSetting[]> {
+        const trx = args.trx ?? this.database;
+
+        const attachment = await this.getAgentMcpServerAttachment({
+            agentUuid: args.agentUuid,
+            serverUuid: args.serverUuid,
+            trx,
+        });
+
+        if (!attachment) {
+            throw new NotFoundError('MCP server is not attached to this agent');
+        }
+
+        const toolRows = await trx(AiMcpServerToolTableName)
+            .select<DbAiMcpServerTool[]>(
+                AiAgentModel.getMcpServerToolSelect(trx),
+            )
+            .where('ai_mcp_server_uuid', args.serverUuid)
+            .orderBy('tool_name', 'asc');
+
+        const settingRows = await trx(AiAgentMcpServerToolTableName)
+            .select<DbAiAgentMcpServerTool[]>(
+                AiAgentModel.getAgentMcpServerToolSelect(trx),
+            )
+            .where('ai_agent_uuid', attachment.ai_agent_uuid)
+            .andWhere('ai_mcp_server_uuid', attachment.ai_mcp_server_uuid)
+            .whereIn(
+                'ai_mcp_server_tool_uuid',
+                toolRows.map((tool) => tool.ai_mcp_server_tool_uuid),
+            );
+
+        const settingMap = new Map(
+            settingRows.map(
+                (row) => [row.ai_mcp_server_tool_uuid, row] as const,
+            ),
+        );
+
+        return toolRows.map((tool) =>
+            AiAgentModel.toAiAgentMcpServerToolPermissionSetting({
+                agentUuid: args.agentUuid,
+                tool,
+                setting: settingMap.get(tool.ai_mcp_server_tool_uuid),
+            }),
+        );
+    }
+
+    async upsertAgentMcpServerToolSettings(args: {
+        agentUuid: string;
+        serverUuid: string;
+        toolSettings: AiAgentMcpServerToolPermissionSettingUpdate[];
+        trx?: Knex;
+    }): Promise<AiAgentMcpServerToolPermissionSetting[]> {
+        const trx = args.trx ?? this.database;
+        const settingMap = new Map(
+            args.toolSettings.map((tool) => [tool.toolName, tool] as const),
+        );
+        const toolSettings = [...settingMap.values()];
+
+        const attachment = await this.getAgentMcpServerAttachment({
+            agentUuid: args.agentUuid,
+            serverUuid: args.serverUuid,
+            trx,
+        });
+
+        if (!attachment) {
+            throw new NotFoundError('MCP server is not attached to this agent');
+        }
+
+        if (toolSettings.length === 0) {
+            return this.listAgentMcpServerTools({
+                agentUuid: args.agentUuid,
+                serverUuid: args.serverUuid,
+                trx,
+            });
+        }
+
+        const toolNames = toolSettings.map((tool) => tool.toolName);
+        const existingTools = await trx(AiMcpServerToolTableName)
+            .select<DbAiMcpServerTool[]>(
+                AiAgentModel.getMcpServerToolSelect(trx),
+            )
+            .where('ai_mcp_server_uuid', args.serverUuid)
+            .whereIn('tool_name', toolNames);
+
+        if (existingTools.length !== toolNames.length) {
+            throw new NotFoundError('One or more MCP tools were not found');
+        }
+
+        const toolUuidByName = new Map(
+            existingTools.map(
+                (tool) =>
+                    [tool.tool_name, tool.ai_mcp_server_tool_uuid] as const,
+            ),
+        );
+
+        await trx(AiAgentMcpServerToolTableName)
+            .insert(
+                toolSettings.map((tool) => ({
+                    ai_agent_uuid: attachment.ai_agent_uuid,
+                    ai_mcp_server_uuid: attachment.ai_mcp_server_uuid,
+                    ai_mcp_server_tool_uuid: toolUuidByName.get(tool.toolName)!,
+                    permission_mode: tool.permissionMode,
+                    created_at: trx.fn.now(),
+                    updated_at: trx.fn.now(),
+                })),
+            )
+            .onConflict([
+                'ai_agent_uuid',
+                'ai_mcp_server_uuid',
+                'ai_mcp_server_tool_uuid',
+            ])
+            .merge({
+                permission_mode: trx.raw('excluded.permission_mode'),
+                updated_at: trx.fn.now(),
+            });
+
+        return this.listAgentMcpServerTools({
+            agentUuid: args.agentUuid,
+            serverUuid: args.serverUuid,
+            trx,
+        });
+    }
+
+    async initializeAgentMcpServerToolSettings(args: {
+        agentUuid: string;
+        serverUuid: string;
+        permissionMode: DbAiAgentMcpServerToolPermissionMode;
+        trx?: Knex;
+    }): Promise<void> {
+        const trx = args.trx ?? this.database;
+        const attachment = await this.getAgentMcpServerAttachment({
+            agentUuid: args.agentUuid,
+            serverUuid: args.serverUuid,
+            trx,
+        });
+
+        if (!attachment) {
+            throw new NotFoundError('MCP server is not attached to this agent');
+        }
+
+        const tools = await trx(AiMcpServerToolTableName)
+            .select<DbAiMcpServerTool[]>(
+                AiAgentModel.getMcpServerToolSelect(trx),
+            )
+            .where('ai_mcp_server_uuid', args.serverUuid);
+
+        if (tools.length === 0) {
+            return;
+        }
+
+        await trx(AiAgentMcpServerToolTableName)
+            .insert(
+                tools.map((tool) => ({
+                    ai_agent_uuid: attachment.ai_agent_uuid,
+                    ai_mcp_server_uuid: attachment.ai_mcp_server_uuid,
+                    ai_mcp_server_tool_uuid: tool.ai_mcp_server_tool_uuid,
+                    permission_mode: args.permissionMode,
+                    created_at: trx.fn.now(),
+                    updated_at: trx.fn.now(),
+                })),
+            )
+            .onConflict([
+                'ai_agent_uuid',
+                'ai_mcp_server_uuid',
+                'ai_mcp_server_tool_uuid',
+            ])
+            .ignore();
+    }
+
+    async getEnabledMcpServerToolNames(args: {
+        agentUuid: string;
+        serverUuid: string;
+        trx?: Knex;
+    }): Promise<string[]> {
+        const trx = args.trx ?? this.database;
+        const attachment = await this.getAgentMcpServerAttachment({
+            agentUuid: args.agentUuid,
+            serverUuid: args.serverUuid,
+            trx,
+        });
+
+        if (!attachment) {
+            throw new NotFoundError('MCP server is not attached to this agent');
+        }
+
+        const rows = await trx(AiAgentMcpServerToolTableName)
+            .innerJoin(AiMcpServerToolTableName, function joinMcpToolRows() {
+                this.on(
+                    `${AiAgentMcpServerToolTableName}.ai_mcp_server_tool_uuid`,
+                    '=',
+                    `${AiMcpServerToolTableName}.ai_mcp_server_tool_uuid`,
+                );
+            })
+            .select<{ tool_name: string }[]>({
+                tool_name: `${AiMcpServerToolTableName}.tool_name`,
+            })
+            .where(
+                `${AiAgentMcpServerToolTableName}.ai_agent_uuid`,
+                attachment.ai_agent_uuid,
+            )
+            .andWhere(
+                `${AiAgentMcpServerToolTableName}.ai_mcp_server_uuid`,
+                attachment.ai_mcp_server_uuid,
+            )
+            .andWhere(
+                `${AiAgentMcpServerToolTableName}.permission_mode`,
+                AI_AGENT_MCP_SERVER_TOOL_PERMISSION_MODE_ALWAYS_ALLOW,
+            )
+            .orderBy(`${AiMcpServerToolTableName}.tool_name`, 'asc');
+
+        return rows.map((row) => row.tool_name);
+    }
+
+    async getCredential(
+        serverUuid: string,
+        scope: AiMcpCredentialScope,
+        {
+            userUuid,
+            trx = this.database,
+        }: {
+            userUuid?: string;
+            trx?: Knex;
+        } = {},
+    ): Promise<AiMcpCredential | undefined> {
+        const row = await trx(AiMcpServerCredentialTableName)
+            .select<DbAiMcpServerCredential>({
+                ai_mcp_server_credential_uuid: `${AiMcpServerCredentialTableName}.ai_mcp_server_credential_uuid`,
+                ai_mcp_server_uuid: `${AiMcpServerCredentialTableName}.ai_mcp_server_uuid`,
+                credential_scope: `${AiMcpServerCredentialTableName}.credential_scope`,
+                user_uuid: `${AiMcpServerCredentialTableName}.user_uuid`,
+                encrypted_credentials: `${AiMcpServerCredentialTableName}.encrypted_credentials`,
+                created_by_user_uuid: `${AiMcpServerCredentialTableName}.created_by_user_uuid`,
+                updated_by_user_uuid: `${AiMcpServerCredentialTableName}.updated_by_user_uuid`,
+                created_at: `${AiMcpServerCredentialTableName}.created_at`,
+                updated_at: `${AiMcpServerCredentialTableName}.updated_at`,
+            })
+            .where('ai_mcp_server_uuid', serverUuid)
+            .andWhere('credential_scope', scope)
+            .modify((query) => {
+                if (scope === 'user') {
+                    void query.andWhere('user_uuid', userUuid ?? null);
+                }
+            })
+            .first();
+
+        return row ? this.toAiMcpCredential(row) : undefined;
+    }
+
+    async upsertCredential(args: {
+        serverUuid: string;
+        scope: AiMcpCredentialScope;
+        credentials: AiMcpCredentialPayload;
+        userUuid?: string | null;
+        actorUserUuid?: string | null;
+        trx?: Knex;
+    }): Promise<AiMcpCredential> {
+        const trx = args.trx ?? this.database;
+        const existing = await this.getCredential(args.serverUuid, args.scope, {
+            userUuid: args.userUuid ?? undefined,
+            trx,
+        });
+
+        if (existing) {
+            const [row] = await trx(AiMcpServerCredentialTableName)
+                .where('ai_mcp_server_credential_uuid', existing.uuid)
+                .update({
+                    encrypted_credentials: this.encryptMcpCredentialPayload(
+                        args.credentials,
+                    ),
+                    updated_by_user_uuid: args.actorUserUuid ?? null,
+                    updated_at: trx.fn.now(),
+                })
+                .returning('*');
+
+            return this.toAiMcpCredential(row);
+        }
+
+        const [row] = await trx(AiMcpServerCredentialTableName)
+            .insert({
+                ai_mcp_server_uuid: args.serverUuid,
+                credential_scope: args.scope,
+                user_uuid:
+                    args.scope === 'user' ? (args.userUuid ?? null) : null,
+                encrypted_credentials: this.encryptMcpCredentialPayload(
+                    args.credentials,
+                ),
+                created_by_user_uuid: args.actorUserUuid ?? null,
+                updated_by_user_uuid: args.actorUserUuid ?? null,
+            })
+            .returning('*');
+
+        return this.toAiMcpCredential(row);
+    }
+
+    async deleteCredential(args: {
+        serverUuid: string;
+        scope: AiMcpCredentialScope;
+        userUuid?: string;
+        trx?: Knex;
+    }): Promise<void> {
+        const trx = args.trx ?? this.database;
+
+        await trx(AiMcpServerCredentialTableName)
+            .where('ai_mcp_server_uuid', args.serverUuid)
+            .andWhere('credential_scope', args.scope)
+            .modify((query) => {
+                if (args.scope === 'user') {
+                    void query.andWhere('user_uuid', args.userUuid ?? null);
+                }
+            })
+            .delete();
+    }
+
+    async resolveCredential(
+        serverUuid: string,
+        userUuid: string,
+        { trx = this.database }: { trx?: Knex } = {},
+    ): Promise<AiMcpCredential | undefined> {
+        const userCredential = await this.getCredential(serverUuid, 'user', {
+            userUuid,
+            trx,
+        });
+
+        if (userCredential) {
+            return userCredential;
+        }
+
+        return this.getCredential(serverUuid, 'shared', { trx });
+    }
+
+    async createMcpServer(args: {
+        projectUuid: string;
+        name: string;
+        url: string;
+        iconUrl?: string | null;
+        authType: ApiCreateAiMcpServer['authType'];
+        credentialScope: AiMcpCredentialScope;
+        credentials: ApiCreateAiMcpServer['credentials'];
+        actorUserUuid?: string | null;
+    }): Promise<AiMcpServer> {
+        return this.database.transaction(async (trx) => {
+            const [row] = await trx(AiMcpServerTableName)
+                .insert({
+                    project_uuid: args.projectUuid,
+                    name: args.name,
+                    url: args.url,
+                    icon_url: args.iconUrl ?? null,
+                    auth_type: args.authType,
+                    connection_status:
+                        args.authType === 'oauth' ? null : 'connected',
+                    error: null,
+                })
+                .returning('*');
+
+            const credentialPayload =
+                AiAgentModel.serializeMcpCredentialPayload(
+                    args.authType,
+                    args.credentialScope,
+                    args.credentials,
+                );
+
+            const credential =
+                credentialPayload === null
+                    ? null
+                    : await this.upsertCredential({
+                          serverUuid: row.ai_mcp_server_uuid,
+                          scope: args.credentialScope,
+                          credentials: credentialPayload,
+                          actorUserUuid: args.actorUserUuid ?? null,
+                          trx,
+                      });
+
+            return AiAgentModel.toAiMcpServer(row, credential);
+        });
+    }
+
+    async updateMcpServerRuntimeState(args: {
+        serverUuid: string;
+        connectionStatus: AiMcpServerConnectionStatus;
+        error: string | null;
+        iconUrl?: string | null;
+        actorUserUuid?: string | null;
+        trx?: Knex;
+    }): Promise<void> {
+        const trx = args.trx ?? this.database;
+        const row = await trx(AiMcpServerTableName)
+            .select<Pick<DbAiMcpServer, 'auth_type'>>({
+                auth_type: `${AiMcpServerTableName}.auth_type`,
+            })
+            .where('ai_mcp_server_uuid', args.serverUuid)
+            .first();
+
+        if (!row) {
+            throw new NotFoundError('MCP server not found');
+        }
+
+        if (row.auth_type === 'oauth') {
+            if (args.iconUrl !== undefined) {
+                await trx(AiMcpServerTableName)
+                    .where('ai_mcp_server_uuid', args.serverUuid)
+                    .update({
+                        icon_url: args.iconUrl,
+                        updated_at: trx.fn.now(),
+                    });
+            }
+
+            const credential = await this.getCredential(
+                args.serverUuid,
+                'shared',
+                {
+                    trx,
+                },
+            );
+
+            if (credential?.credentials.type !== 'oauth') {
+                throw new NotFoundError(
+                    'Shared OAuth credential was not found',
+                );
+            }
+
+            await this.upsertCredential({
+                serverUuid: args.serverUuid,
+                scope: 'shared',
+                credentials: {
+                    ...credential.credentials,
+                    connectionStatus: args.connectionStatus,
+                    lastError: args.error ?? undefined,
+                },
+                actorUserUuid:
+                    args.actorUserUuid ??
+                    credential.updatedByUserUuid ??
+                    credential.createdByUserUuid ??
+                    null,
+                trx,
+            });
+            return;
+        }
+
+        await trx(AiMcpServerTableName)
+            .where('ai_mcp_server_uuid', args.serverUuid)
+            .update({
+                connection_status: args.connectionStatus,
+                error: args.error,
+                ...(args.iconUrl !== undefined
+                    ? { icon_url: args.iconUrl }
+                    : {}),
+                updated_at: trx.fn.now(),
+            });
+    }
+
     async createAgent(
         args: Pick<
             ApiCreateAiAgent,
@@ -514,6 +1535,7 @@ export class AiAgentModel {
             | 'enableDataAccess'
             | 'enableSelfImprovement'
             | 'version'
+            | 'mcpServerUuids'
         > & {
             organizationUuid: string;
         },
@@ -607,6 +1629,13 @@ export class AiAgentModel {
             const spaceAccess = await this.setAndGetSpaceAccess(
                 agent.ai_agent_uuid,
                 args.spaceAccess ?? undefined,
+                { trx },
+            );
+
+            await this.setAndGetAgentMcpServers(
+                agent.ai_agent_uuid,
+                agent.project_uuid,
+                args.mcpServerUuids,
                 { trx },
             );
 
@@ -775,6 +1804,13 @@ export class AiAgentModel {
                 { trx },
             );
 
+            await this.setAndGetAgentMcpServers(
+                agent.ai_agent_uuid,
+                agent.project_uuid,
+                args.mcpServerUuids,
+                { trx },
+            );
+
             return {
                 uuid: agent.ai_agent_uuid,
                 name: agent.name,
@@ -933,6 +1969,239 @@ export class AiAgentModel {
             await this.setSpaceAccess(agentUuid, spaceAccess, { trx });
         }
         return this.getSpaceAccess(agentUuid, { trx });
+    }
+
+    private async getAgentMcpServers(
+        agentUuid: AiAgent['uuid'],
+        { trx = this.database }: { trx?: Knex } = {},
+    ): Promise<AiMcpServer[]> {
+        const rows = await trx(AiAgentMcpServerTableName)
+            .innerJoin(
+                AiMcpServerTableName,
+                `${AiAgentMcpServerTableName}.ai_mcp_server_uuid`,
+                `${AiMcpServerTableName}.ai_mcp_server_uuid`,
+            )
+            .select<DbAiMcpServer[]>({
+                ai_mcp_server_uuid: `${AiMcpServerTableName}.ai_mcp_server_uuid`,
+                project_uuid: `${AiMcpServerTableName}.project_uuid`,
+                name: `${AiMcpServerTableName}.name`,
+                url: `${AiMcpServerTableName}.url`,
+                icon_url: `${AiMcpServerTableName}.icon_url`,
+                auth_type: `${AiMcpServerTableName}.auth_type`,
+                connection_status: `${AiMcpServerTableName}.connection_status`,
+                error: `${AiMcpServerTableName}.error`,
+                created_at: `${AiMcpServerTableName}.created_at`,
+                updated_at: `${AiMcpServerTableName}.updated_at`,
+            })
+            .where(`${AiAgentMcpServerTableName}.ai_agent_uuid`, agentUuid)
+            .orderBy(`${AiMcpServerTableName}.created_at`, 'asc');
+
+        const credentials = await trx(AiMcpServerCredentialTableName)
+            .select<DbAiMcpServerCredential[]>({
+                ai_mcp_server_credential_uuid: `${AiMcpServerCredentialTableName}.ai_mcp_server_credential_uuid`,
+                ai_mcp_server_uuid: `${AiMcpServerCredentialTableName}.ai_mcp_server_uuid`,
+                credential_scope: `${AiMcpServerCredentialTableName}.credential_scope`,
+                user_uuid: `${AiMcpServerCredentialTableName}.user_uuid`,
+                encrypted_credentials: `${AiMcpServerCredentialTableName}.encrypted_credentials`,
+                created_by_user_uuid: `${AiMcpServerCredentialTableName}.created_by_user_uuid`,
+                updated_by_user_uuid: `${AiMcpServerCredentialTableName}.updated_by_user_uuid`,
+                created_at: `${AiMcpServerCredentialTableName}.created_at`,
+                updated_at: `${AiMcpServerCredentialTableName}.updated_at`,
+            })
+            .whereIn(
+                'ai_mcp_server_uuid',
+                rows.map((row) => row.ai_mcp_server_uuid),
+            )
+            .andWhere('credential_scope', 'shared');
+
+        const credentialMap = new Map(
+            credentials.map((row) => {
+                const credential = this.toAiMcpCredential(row);
+                return [credential.mcpServerUuid, credential];
+            }),
+        );
+
+        return rows.map((row) =>
+            AiAgentModel.toAiMcpServer(
+                row,
+                credentialMap.get(row.ai_mcp_server_uuid) ?? null,
+            ),
+        );
+    }
+
+    async getAgentMcpServersWithSensitiveData(
+        agentUuid: AiAgent['uuid'],
+        userUuid: string,
+        { trx = this.database }: { trx?: Knex } = {},
+    ): Promise<AiMcpServerWithSensitiveData[]> {
+        const rows = await trx(AiAgentMcpServerTableName)
+            .innerJoin(
+                AiMcpServerTableName,
+                `${AiAgentMcpServerTableName}.ai_mcp_server_uuid`,
+                `${AiMcpServerTableName}.ai_mcp_server_uuid`,
+            )
+            .select<DbAiMcpServer[]>({
+                ai_mcp_server_uuid: `${AiMcpServerTableName}.ai_mcp_server_uuid`,
+                project_uuid: `${AiMcpServerTableName}.project_uuid`,
+                name: `${AiMcpServerTableName}.name`,
+                url: `${AiMcpServerTableName}.url`,
+                icon_url: `${AiMcpServerTableName}.icon_url`,
+                auth_type: `${AiMcpServerTableName}.auth_type`,
+                connection_status: `${AiMcpServerTableName}.connection_status`,
+                error: `${AiMcpServerTableName}.error`,
+                created_at: `${AiMcpServerTableName}.created_at`,
+                updated_at: `${AiMcpServerTableName}.updated_at`,
+            })
+            .where(`${AiAgentMcpServerTableName}.ai_agent_uuid`, agentUuid)
+            .orderBy(`${AiMcpServerTableName}.created_at`, 'asc');
+
+        const resolvedCredentials = await Promise.all(
+            rows.map((row) =>
+                this.resolveCredential(row.ai_mcp_server_uuid, userUuid, {
+                    trx,
+                }),
+            ),
+        );
+
+        return rows.map((row, index) =>
+            AiAgentModel.toAiMcpServerWithSensitiveData({
+                row,
+                resolvedCredential: resolvedCredentials[index] ?? null,
+            }),
+        );
+    }
+
+    private async setAgentMcpServers(
+        agentUuid: AiAgent['uuid'],
+        projectUuid: AiAgent['projectUuid'],
+        mcpServerUuids: string[],
+        { trx = this.database }: { trx?: Knex } = {},
+    ): Promise<AiMcpServer[]> {
+        const uniqueMcpServerUuids = [...new Set(mcpServerUuids)];
+
+        if (uniqueMcpServerUuids.length === 0) {
+            await trx(AiAgentMcpServerTableName)
+                .where('ai_agent_uuid', agentUuid)
+                .delete();
+            return [];
+        }
+
+        const rows = await trx(AiMcpServerTableName)
+            .select<DbAiMcpServer[]>({
+                ai_mcp_server_uuid: `${AiMcpServerTableName}.ai_mcp_server_uuid`,
+                project_uuid: `${AiMcpServerTableName}.project_uuid`,
+                name: `${AiMcpServerTableName}.name`,
+                url: `${AiMcpServerTableName}.url`,
+                icon_url: `${AiMcpServerTableName}.icon_url`,
+                auth_type: `${AiMcpServerTableName}.auth_type`,
+                connection_status: `${AiMcpServerTableName}.connection_status`,
+                error: `${AiMcpServerTableName}.error`,
+                created_at: `${AiMcpServerTableName}.created_at`,
+                updated_at: `${AiMcpServerTableName}.updated_at`,
+            })
+            .where('project_uuid', projectUuid)
+            .whereIn('ai_mcp_server_uuid', uniqueMcpServerUuids);
+
+        if (rows.length !== uniqueMcpServerUuids.length) {
+            throw new NotFoundError(
+                'One or more MCP servers were not found for this project',
+            );
+        }
+
+        const existingRows = await trx(AiAgentMcpServerTableName)
+            .select<DbAiAgentMcpServer[]>(
+                AiAgentModel.getAgentMcpServerAttachmentSelect(trx),
+            )
+            .where('ai_agent_uuid', agentUuid);
+
+        const existingServerUuids = new Set(
+            existingRows.map((row) => row.ai_mcp_server_uuid),
+        );
+        const nextServerUuids = new Set(uniqueMcpServerUuids);
+
+        const serverUuidsToDetach = [...existingServerUuids].filter(
+            (serverUuid) => !nextServerUuids.has(serverUuid),
+        );
+        const serverUuidsToAttach = uniqueMcpServerUuids.filter(
+            (serverUuid) => !existingServerUuids.has(serverUuid),
+        );
+
+        if (serverUuidsToDetach.length > 0) {
+            await trx(AiAgentMcpServerTableName)
+                .where('ai_agent_uuid', agentUuid)
+                .whereIn('ai_mcp_server_uuid', serverUuidsToDetach)
+                .delete();
+        }
+
+        if (serverUuidsToAttach.length > 0) {
+            await trx(AiAgentMcpServerTableName).insert(
+                serverUuidsToAttach.map((mcpServerUuid) => ({
+                    ai_agent_uuid: agentUuid,
+                    ai_mcp_server_uuid: mcpServerUuid,
+                })),
+            );
+
+            await Promise.all(
+                serverUuidsToAttach.map((serverUuid) =>
+                    this.initializeAgentMcpServerToolSettings({
+                        agentUuid,
+                        serverUuid,
+                        permissionMode:
+                            AI_AGENT_MCP_SERVER_TOOL_PERMISSION_MODE_ALWAYS_ALLOW,
+                        trx,
+                    }),
+                ),
+            );
+        }
+
+        const rowMap = new Map(
+            rows.map((row) => [row.ai_mcp_server_uuid, row]),
+        );
+        const credentials = await trx(AiMcpServerCredentialTableName)
+            .select<DbAiMcpServerCredential[]>({
+                ai_mcp_server_credential_uuid: `${AiMcpServerCredentialTableName}.ai_mcp_server_credential_uuid`,
+                ai_mcp_server_uuid: `${AiMcpServerCredentialTableName}.ai_mcp_server_uuid`,
+                credential_scope: `${AiMcpServerCredentialTableName}.credential_scope`,
+                user_uuid: `${AiMcpServerCredentialTableName}.user_uuid`,
+                encrypted_credentials: `${AiMcpServerCredentialTableName}.encrypted_credentials`,
+                created_by_user_uuid: `${AiMcpServerCredentialTableName}.created_by_user_uuid`,
+                updated_by_user_uuid: `${AiMcpServerCredentialTableName}.updated_by_user_uuid`,
+                created_at: `${AiMcpServerCredentialTableName}.created_at`,
+                updated_at: `${AiMcpServerCredentialTableName}.updated_at`,
+            })
+            .whereIn('ai_mcp_server_uuid', uniqueMcpServerUuids)
+            .andWhere('credential_scope', 'shared');
+        const credentialMap = new Map(
+            credentials.map((row) => {
+                const credential = this.toAiMcpCredential(row);
+                return [credential.mcpServerUuid, credential];
+            }),
+        );
+
+        return uniqueMcpServerUuids.map((mcpServerUuid) =>
+            AiAgentModel.toAiMcpServer(
+                rowMap.get(mcpServerUuid)!,
+                credentialMap.get(mcpServerUuid) ?? null,
+            ),
+        );
+    }
+
+    private async setAndGetAgentMcpServers(
+        agentUuid: AiAgent['uuid'],
+        projectUuid: AiAgent['projectUuid'],
+        mcpServerUuids: string[] | undefined,
+        { trx = this.database }: { trx?: Knex } = {},
+    ): Promise<AiMcpServer[]> {
+        if (mcpServerUuids !== undefined) {
+            return this.setAgentMcpServers(
+                agentUuid,
+                projectUuid,
+                mcpServerUuids,
+                { trx },
+            );
+        }
+
+        return this.getAgentMcpServers(agentUuid, { trx });
     }
 
     async getAgentLastInstruction(
@@ -1551,21 +2820,8 @@ export class AiAgentModel {
                 referencedArtifacts: referencedArtifacts ?? null,
                 modelConfig: row.model_config,
                 toolCalls: toolCalls
-                    .filter(
-                        (
-                            tc,
-                        ): tc is DbAiAgentToolCall & {
-                            tool_name: ToolName;
-                        } => isToolName(tc.tool_name),
-                    )
-                    .map((tc) => ({
-                        uuid: tc.ai_agent_tool_call_uuid,
-                        promptUuid: tc.ai_prompt_uuid,
-                        toolCallId: tc.tool_call_id,
-                        createdAt: tc.created_at,
-                        toolName: tc.tool_name,
-                        toolArgs: tc.tool_args,
-                    })),
+                    .filter((tc) => isAiAgentToolName(tc.tool_name))
+                    .map((tc) => this.parseToolCall(tc)),
                 toolResults,
                 reasoning,
                 savedQueryUuid: row.saved_query_uuid,
@@ -1575,6 +2831,79 @@ export class AiAgentModel {
         });
 
         return (await Promise.all(messagesPromises)).flat();
+    }
+
+    async findThreadCompactions({
+        organizationUuid,
+        threadUuid,
+    }: {
+        organizationUuid: string;
+        threadUuid: string;
+    }): Promise<AiThreadCompaction[]> {
+        const rows = await this.database(AiThreadCompactionTableName)
+            .join(
+                AiThreadTableName,
+                `${AiThreadCompactionTableName}.ai_thread_uuid`,
+                `${AiThreadTableName}.ai_thread_uuid`,
+            )
+            .select<DbAiThreadCompaction[]>(
+                `${AiThreadCompactionTableName}.ai_thread_compaction_uuid`,
+                `${AiThreadCompactionTableName}.ai_thread_uuid`,
+                `${AiThreadCompactionTableName}.compacted_through_ai_prompt_uuid`,
+                `${AiThreadCompactionTableName}.triggering_ai_prompt_uuid`,
+                `${AiThreadCompactionTableName}.serialized_input`,
+                `${AiThreadCompactionTableName}.summary`,
+                `${AiThreadCompactionTableName}.created_at`,
+            )
+            .where(`${AiThreadCompactionTableName}.ai_thread_uuid`, threadUuid)
+            .andWhere(
+                `${AiThreadTableName}.organization_uuid`,
+                organizationUuid,
+            )
+            .orderBy(`${AiThreadCompactionTableName}.created_at`, 'asc');
+
+        return rows.map((row) => ({
+            uuid: row.ai_thread_compaction_uuid,
+            threadUuid: row.ai_thread_uuid,
+            compactedThroughPromptUuid: row.compacted_through_ai_prompt_uuid,
+            triggeringPromptUuid: row.triggering_ai_prompt_uuid,
+            createdAt: row.created_at.toISOString(),
+        }));
+    }
+
+    async findLatestThreadCompaction(
+        threadUuid: string,
+    ): Promise<DbAiThreadCompaction | undefined> {
+        return this.database(AiThreadCompactionTableName)
+            .select<DbAiThreadCompaction[]>(
+                'ai_thread_compaction_uuid',
+                'ai_thread_uuid',
+                'compacted_through_ai_prompt_uuid',
+                'triggering_ai_prompt_uuid',
+                'serialized_input',
+                'summary',
+                'created_at',
+            )
+            .where('ai_thread_uuid', threadUuid)
+            .orderBy('created_at', 'desc')
+            .first();
+    }
+
+    async findThreadCompactionByTriggeringPrompt(
+        triggeringPromptUuid: string,
+    ): Promise<DbAiThreadCompaction | undefined> {
+        return this.database(AiThreadCompactionTableName)
+            .select<DbAiThreadCompaction[]>(
+                'ai_thread_compaction_uuid',
+                'ai_thread_uuid',
+                'compacted_through_ai_prompt_uuid',
+                'triggering_ai_prompt_uuid',
+                'serialized_input',
+                'summary',
+                'created_at',
+            )
+            .where('triggering_ai_prompt_uuid', triggeringPromptUuid)
+            .first();
     }
 
     async findThreadArtifacts({
@@ -2215,21 +3544,8 @@ export class AiAgentModel {
                     referencedArtifacts,
                     modelConfig: row.model_config,
                     toolCalls: toolCalls
-                        .filter(
-                            (
-                                tc,
-                            ): tc is DbAiAgentToolCall & {
-                                tool_name: ToolName;
-                            } => isToolName(tc.tool_name),
-                        )
-                        .map((tc) => ({
-                            uuid: tc.ai_agent_tool_call_uuid,
-                            promptUuid: tc.ai_prompt_uuid,
-                            toolCallId: tc.tool_call_id,
-                            createdAt: tc.created_at,
-                            toolName: tc.tool_name,
-                            toolArgs: tc.tool_args,
-                        })),
+                        .filter((tc) => isAiAgentToolName(tc.tool_name))
+                        .map((tc) => this.parseToolCall(tc)),
                     toolResults,
                     reasoning,
                     savedQueryUuid: row.saved_query_uuid,
@@ -2525,16 +3841,86 @@ export class AiAgentModel {
         await this.database(AiPromptTableName)
             .update({
                 responded_at: this.database.fn.now(),
-                ...(data.response ? { response: data.response } : {}),
+                ...('response' in data
+                    ? { response: data.response ?? null }
+                    : {}),
                 ...(data.errorMessage
                     ? { error_message: data.errorMessage }
                     : {}),
-                ...(data.humanScore ? { human_score: data.humanScore } : {}),
+                ...(data.humanScore !== undefined
+                    ? { human_score: data.humanScore }
+                    : {}),
+                ...(data.tokenUsage !== undefined
+                    ? { token_usage: data.tokenUsage }
+                    : {}),
             })
             .where({
                 ai_prompt_uuid: data.promptUuid,
             })
             .returning('ai_prompt_uuid');
+    }
+
+    async createThreadCompaction(data: {
+        threadUuid: string;
+        compactedThroughPromptUuid: string;
+        triggeringPromptUuid: string;
+        serializedInput: string;
+        summary: string;
+    }): Promise<DbAiThreadCompaction> {
+        const [row] = await this.database(AiThreadCompactionTableName)
+            .insert({
+                ai_thread_uuid: data.threadUuid,
+                compacted_through_ai_prompt_uuid:
+                    data.compactedThroughPromptUuid,
+                triggering_ai_prompt_uuid: data.triggeringPromptUuid,
+                serialized_input: data.serializedInput,
+                summary: data.summary,
+            })
+            .returning<DbAiThreadCompaction[]>([
+                'ai_thread_compaction_uuid',
+                'ai_thread_uuid',
+                'compacted_through_ai_prompt_uuid',
+                'triggering_ai_prompt_uuid',
+                'serialized_input',
+                'summary',
+                'created_at',
+            ]);
+
+        if (row === undefined) {
+            throw new Error('Failed to create thread compaction');
+        }
+
+        return row;
+    }
+
+    async findPreviousPromptInThread(
+        threadUuid: string,
+        currentPromptUuid: string,
+    ): Promise<
+        | Pick<
+              DbAiPrompt,
+              'ai_prompt_uuid' | 'created_at' | 'token_usage' | 'prompt'
+          >
+        | undefined
+    > {
+        return this.database(AiPromptTableName)
+            .select<
+                Pick<
+                    DbAiPrompt,
+                    'ai_prompt_uuid' | 'created_at' | 'token_usage' | 'prompt'
+                >[]
+            >('ai_prompt_uuid', 'created_at', 'token_usage', 'prompt')
+            .where('ai_thread_uuid', threadUuid)
+            .whereNot('ai_prompt_uuid', currentPromptUuid)
+            .where(
+                'created_at',
+                '<',
+                this.database(AiPromptTableName)
+                    .select('created_at')
+                    .where('ai_prompt_uuid', currentPromptUuid),
+            )
+            .orderBy('created_at', 'desc')
+            .first();
     }
 
     async updateHumanScore(data: {
@@ -2952,7 +4338,7 @@ export class AiAgentModel {
         const chartUuids = rows
             .filter((r) => r.entity_type === 'chart')
             .map((r) => r.entity_uuid);
-        const chartKindByUuid = new Map(
+        const chartDataByUuid = new Map(
             (
                 await this.database(SavedChartsTableName)
                     .whereIn('saved_query_uuid', chartUuids)
@@ -2961,21 +4347,45 @@ export class AiAgentModel {
                         {
                             saved_query_uuid: string;
                             last_version_chart_kind: string | null;
+                            slug: string;
                         }[]
-                    >('saved_query_uuid', 'last_version_chart_kind')
+                    >('saved_query_uuid', 'last_version_chart_kind', 'slug')
             ).map(
                 (r) =>
                     [
                         r.saved_query_uuid,
-                        (r.last_version_chart_kind as ChartKind | null) ?? null,
+                        {
+                            chartKind:
+                                (r.last_version_chart_kind as ChartKind | null) ??
+                                null,
+                            slug: r.slug,
+                        },
                     ] as const,
             ),
+        );
+        const dashboardUuids = rows
+            .filter((r) => r.entity_type === 'dashboard')
+            .map((r) => r.entity_uuid);
+        const dashboardSlugByUuid = new Map(
+            (
+                await this.database(DashboardsTableName)
+                    .whereIn('dashboard_uuid', dashboardUuids)
+                    .whereNull('deleted_at')
+                    .select<{ dashboard_uuid: string; slug: string }[]>(
+                        'dashboard_uuid',
+                        'slug',
+                    )
+            ).map((r) => [r.dashboard_uuid, r.slug] as const),
         );
 
         for (const row of rows) {
             const existing = grouped.get(row.ai_prompt_uuid) ?? [];
             existing.push(
-                AiAgentModel.toAiPromptContextItem(row, chartKindByUuid),
+                AiAgentModel.toAiPromptContextItem(
+                    row,
+                    chartDataByUuid,
+                    dashboardSlugByUuid,
+                ),
             );
             grouped.set(row.ai_prompt_uuid, existing);
         }
@@ -2985,22 +4395,31 @@ export class AiAgentModel {
 
     private static toAiPromptContextItem(
         row: DbAiPromptContext,
-        chartKindByUuid: Map<string, ChartKind | null>,
+        chartDataByUuid: Map<
+            string,
+            { chartKind: ChartKind | null; slug: string }
+        >,
+        dashboardSlugByUuid: Map<string, string>,
     ): AiPromptContextItem {
         switch (row.entity_type) {
-            case 'chart':
+            case 'chart': {
+                const chartData = chartDataByUuid.get(row.entity_uuid);
                 return {
                     type: 'chart',
                     chartUuid: row.entity_uuid,
+                    chartSlug: chartData?.slug ?? null,
                     pinnedVersionUuid: row.pinned_version_uuid,
                     displayName: row.display_name,
                     runtimeOverrides: row.runtime_overrides,
-                    chartKind: chartKindByUuid.get(row.entity_uuid) ?? null,
+                    chartKind: chartData?.chartKind ?? null,
                 };
+            }
             case 'dashboard':
                 return {
                     type: 'dashboard',
                     dashboardUuid: row.entity_uuid,
+                    dashboardSlug:
+                        dashboardSlugByUuid.get(row.entity_uuid) ?? null,
                     pinnedVersionUuid: row.pinned_version_uuid,
                     displayName: row.display_name,
                 };
@@ -3126,6 +4545,8 @@ export class AiAgentModel {
         toolCallId: string;
         toolName: string;
         toolArgs: object;
+        mcpServerUuid?: string | null;
+        parentToolCallId: string | null;
     }): Promise<string> {
         const [toolCall] = await this.database(AiAgentToolCallTableName)
             .insert({
@@ -3133,6 +4554,8 @@ export class AiAgentModel {
                 tool_call_id: data.toolCallId,
                 tool_name: data.toolName,
                 tool_args: data.toolArgs,
+                ai_mcp_server_uuid: data.mcpServerUuid ?? null,
+                parent_tool_call_id: data.parentToolCallId,
             })
             .returning('ai_agent_tool_call_uuid');
 
@@ -3140,16 +4563,88 @@ export class AiAgentModel {
     }
 
     // eslint-disable-next-line class-methods-use-this
-    private parseToolResult(row: DbAiAgentToolResult): AiAgentToolResult {
-        const toolName = ToolNameSchema.parse(row.tool_name);
+    private parseMcpServerForToolCall(
+        row: DbAiAgentToolCall | DbAiAgentToolCallWithMcpServer,
+    ): AiAgentToolCallMcpServer | null {
+        if (!row.ai_mcp_server_uuid) {
+            return null;
+        }
 
-        switch (toolName) {
+        return {
+            uuid: row.ai_mcp_server_uuid,
+            name:
+                'mcp_server_name' in row && row.mcp_server_name
+                    ? row.mcp_server_name
+                    : 'MCP',
+            iconUrl:
+                'mcp_server_icon_url' in row ? row.mcp_server_icon_url : null,
+        };
+    }
+
+    private parseToolCall(
+        row: DbAiAgentToolCall | DbAiAgentToolCallWithMcpServer,
+    ): AiAgentToolCall {
+        const parsedToolName = ToolNameSchema.safeParse(row.tool_name);
+
+        if (parsedToolName.success) {
+            return {
+                uuid: row.ai_agent_tool_call_uuid,
+                promptUuid: row.ai_prompt_uuid,
+                toolCallId: row.tool_call_id,
+                parentToolCallId: row.parent_tool_call_id,
+                createdAt: row.created_at,
+                toolType: 'built-in',
+                toolName: parsedToolName.data,
+                toolArgs: row.tool_args,
+            };
+        }
+
+        if (isAiAgentMcpToolName(row.tool_name)) {
+            return {
+                uuid: row.ai_agent_tool_call_uuid,
+                promptUuid: row.ai_prompt_uuid,
+                toolCallId: row.tool_call_id,
+                parentToolCallId: row.parent_tool_call_id,
+                createdAt: row.created_at,
+                toolType: 'mcp',
+                toolName: row.tool_name,
+                mcpServer: this.parseMcpServerForToolCall(row),
+                toolArgs: row.tool_args,
+            };
+        }
+
+        throw new Error(`Unknown tool name: ${row.tool_name}`);
+    }
+
+    // eslint-disable-next-line class-methods-use-this
+    private parseToolResult(row: DbAiAgentToolResult): AiAgentToolResult {
+        const parsedToolName = ToolNameSchema.safeParse(row.tool_name);
+
+        if (!parsedToolName.success) {
+            if (isAiAgentMcpToolName(row.tool_name)) {
+                return {
+                    uuid: row.ai_agent_tool_result_uuid,
+                    promptUuid: row.ai_prompt_uuid,
+                    toolCallId: row.tool_call_id,
+                    toolType: 'mcp',
+                    toolName: row.tool_name,
+                    result: row.result,
+                    metadata: row.metadata as Record<string, unknown> | null,
+                    createdAt: row.created_at,
+                };
+            }
+
+            throw new Error(`Unknown tool result name: ${row.tool_name}`);
+        }
+
+        switch (parsedToolName.data) {
             case 'proposeChange':
                 return {
                     uuid: row.ai_agent_tool_result_uuid,
                     promptUuid: row.ai_prompt_uuid,
                     toolCallId: row.tool_call_id,
-                    toolName,
+                    toolType: 'built-in',
+                    toolName: parsedToolName.data,
                     result: row.result,
                     metadata:
                         toolProposeChangeOutputSchema.shape.metadata.parse(
@@ -3162,7 +4657,8 @@ export class AiAgentModel {
                     uuid: row.ai_agent_tool_result_uuid,
                     promptUuid: row.ai_prompt_uuid,
                     toolCallId: row.tool_call_id,
-                    toolName,
+                    toolType: 'built-in',
+                    toolName: parsedToolName.data,
                     result: row.result,
                     metadata: row.metadata as AgentToolOutput['metadata'],
                     createdAt: row.created_at,
@@ -3199,19 +4695,16 @@ export class AiAgentModel {
                 `${AiAgentToolResultTableName}.tool_call_id`,
             )
             .where(`${AiAgentToolCallTableName}.ai_prompt_uuid`, promptUuid)
+            // Subagent children are stored with `parent_tool_call_id` set so the
+            // thread viewer can render them nested. Exclude them from rebuilt
+            // model history — the parent tool's compact result is the handoff.
+            .whereNull(`${AiAgentToolCallTableName}.parent_tool_call_id`)
             .orderBy(`${AiAgentToolCallTableName}.created_at`, 'asc');
 
         return rows
             .filter((row) => row.result !== null)
             .map((row) => {
-                const toolCall = {
-                    uuid: row.ai_agent_tool_call_uuid,
-                    promptUuid: row.ai_prompt_uuid,
-                    toolCallId: row.tool_call_id,
-                    toolName: row.tool_name,
-                    toolArgs: row.tool_args,
-                    createdAt: row.created_at,
-                } satisfies AiAgentToolCall;
+                const toolCall = this.parseToolCall(row);
 
                 const toolResult = this.parseToolResult({
                     ai_agent_tool_result_uuid: row.ai_agent_tool_result_uuid!,
@@ -3232,10 +4725,146 @@ export class AiAgentModel {
 
     async getToolCallsForPrompt(
         promptUuid: string,
-    ): Promise<DbAiAgentToolCall[]> {
+    ): Promise<DbAiAgentToolCallWithMcpServer[]> {
         return this.database(AiAgentToolCallTableName)
-            .where('ai_prompt_uuid', promptUuid)
-            .orderBy('created_at', 'asc');
+            .leftJoin(
+                AiMcpServerTableName,
+                `${AiAgentToolCallTableName}.ai_mcp_server_uuid`,
+                `${AiMcpServerTableName}.ai_mcp_server_uuid`,
+            )
+            .select<DbAiAgentToolCallWithMcpServer[]>(
+                `${AiAgentToolCallTableName}.*`,
+                `${AiMcpServerTableName}.ai_mcp_server_uuid as mcp_server_uuid`,
+                `${AiMcpServerTableName}.name as mcp_server_name`,
+                `${AiMcpServerTableName}.icon_url as mcp_server_icon_url`,
+            )
+            .where(`${AiAgentToolCallTableName}.ai_prompt_uuid`, promptUuid)
+            .orderBy(`${AiAgentToolCallTableName}.created_at`, 'asc');
+    }
+
+    async findSqlApprovalContext(toolCallId: string): Promise<
+        | {
+              promptUuid: string;
+              threadUuid: string;
+              agentUuid: string | null;
+              toolName: string;
+              hasResult: boolean;
+          }
+        | undefined
+    > {
+        const row = await this.database(AiAgentToolCallTableName)
+            .where(`${AiAgentToolCallTableName}.tool_call_id`, toolCallId)
+            .innerJoin(
+                AiPromptTableName,
+                `${AiAgentToolCallTableName}.ai_prompt_uuid`,
+                `${AiPromptTableName}.ai_prompt_uuid`,
+            )
+            .innerJoin(
+                AiThreadTableName,
+                `${AiPromptTableName}.ai_thread_uuid`,
+                `${AiThreadTableName}.ai_thread_uuid`,
+            )
+            .leftJoin(AiAgentToolResultTableName, function joinResult() {
+                this.on(
+                    `${AiAgentToolResultTableName}.tool_call_id`,
+                    '=',
+                    `${AiAgentToolCallTableName}.tool_call_id`,
+                ).andOn(
+                    `${AiAgentToolResultTableName}.ai_prompt_uuid`,
+                    '=',
+                    `${AiAgentToolCallTableName}.ai_prompt_uuid`,
+                );
+            })
+            .select<
+                Array<{
+                    promptUuid: string;
+                    threadUuid: string;
+                    agentUuid: string | null;
+                    toolName: string;
+                    resultUuid: string | null;
+                }>
+            >(
+                `${AiAgentToolCallTableName}.ai_prompt_uuid as promptUuid`,
+                `${AiAgentToolCallTableName}.tool_name as toolName`,
+                `${AiThreadTableName}.ai_thread_uuid as threadUuid`,
+                `${AiThreadTableName}.agent_uuid as agentUuid`,
+                `${AiAgentToolResultTableName}.ai_agent_tool_result_uuid as resultUuid`,
+            )
+            .first();
+
+        if (!row) {
+            return undefined;
+        }
+        return {
+            promptUuid: row.promptUuid,
+            threadUuid: row.threadUuid,
+            agentUuid: row.agentUuid,
+            toolName: row.toolName,
+            hasResult: row.resultUuid !== null,
+        };
+    }
+
+    // ---------------------------------------------------------------
+    // SQL approval bus — DB-backed so it works across pods and
+    // survives restarts. See `ai_sql_approval` migration.
+    // ---------------------------------------------------------------
+
+    /**
+     * Records a user's decision for a pending SQL approval. First write
+     * wins — `ON CONFLICT (tool_call_id) DO NOTHING` means double-clicks
+     * (or a race between Slack and the web UI) are safely ignored.
+     *
+     * @returns `true` if this call recorded the decision; `false` if a
+     *   decision was already in place.
+     */
+    async recordSqlApproval(
+        toolCallId: string,
+        decision: AiSqlApprovalDecision,
+        decidedByUserUuid: string | null,
+    ): Promise<boolean> {
+        const inserted = await this.database<DbAiSqlApproval>(
+            AiSqlApprovalTableName,
+        )
+            .insert({
+                tool_call_id: toolCallId,
+                decision,
+                decided_by_user_uuid: decidedByUserUuid,
+            })
+            .onConflict('tool_call_id')
+            .ignore()
+            .returning('tool_call_id');
+        return inserted.length > 0;
+    }
+
+    /**
+     * Polls `ai_sql_approval` for a decision keyed by `toolCallId`.
+     * Resolves to the decision once one is recorded, or `'timeout'`
+     * after `timeoutMs` of no activity.
+     */
+    async waitForSqlApproval(
+        toolCallId: string,
+        timeoutMs: number = 5 * 60 * 1000,
+        pollIntervalMs: number = 500,
+    ): Promise<SqlApprovalDecision> {
+        const deadline = Date.now() + timeoutMs;
+        /* eslint-disable no-await-in-loop -- polling is intentional and
+           sequential; we want to wait between queries, not fire in parallel. */
+        while (Date.now() < deadline) {
+            const row = await this.database<DbAiSqlApproval>(
+                AiSqlApprovalTableName,
+            )
+                .where({ tool_call_id: toolCallId })
+                .select('decision')
+                .first();
+            if (row) return row.decision;
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) break;
+            await new Promise<void>((resolve) => {
+                setTimeout(resolve, Math.min(pollIntervalMs, remaining));
+            });
+        }
+        /* eslint-enable no-await-in-loop */
+        return 'timeout';
     }
 
     async getToolResultsForPrompt(
@@ -3263,7 +4892,10 @@ export class AiAgentModel {
             toolCallId: string;
             toolName: string;
             result: string;
-            metadata?: AgentToolOutput['metadata'];
+            metadata?:
+                | AgentToolOutput['metadata']
+                | Record<string, unknown>
+                | null;
         }>,
     ): Promise<string[]> {
         if (data.length === 0) return [];
@@ -4641,6 +6273,8 @@ export class AiAgentModel {
                         'tool_call_id',
                         'tool_name',
                         'tool_args',
+                        'ai_mcp_server_uuid',
+                        'parent_tool_call_id',
                         'created_at',
                     )
                     .where('ai_prompt_uuid', sourcePromptUuid);
@@ -4650,6 +6284,8 @@ export class AiAgentModel {
                     tool_call_id: toolCall.tool_call_id,
                     tool_name: toolCall.tool_name,
                     tool_args: toolCall.tool_args,
+                    ai_mcp_server_uuid: toolCall.ai_mcp_server_uuid,
+                    parent_tool_call_id: toolCall.parent_tool_call_id,
                 }));
 
                 // Clone tool results

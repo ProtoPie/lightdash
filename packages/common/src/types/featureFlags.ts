@@ -107,11 +107,98 @@ export enum FeatureFlags {
     AiAutopilot = 'ai-autopilot',
 
     /**
+     * Enable AI agent revamp features including built-in skills, the
+     * loadSkill tool, and content editing tools like readContent/editContent.
+     * When enabled, these replace older dashboard-specific content lookup
+     * tools in the agent tool surface.
+     */
+    AiAgentRevamp = 'ai-agent-revamp',
+
+    /**
      * Enable the Hexbin (H3 hexagonal binning) layer type for Map charts.
      * Gates the option in the Map Type segmented control. Existing charts
      * already saved with the hexbin layer continue to render either way.
      */
     HexbinMap = 'hexbin-map',
+
+    /**
+     * Show the per-organization Single Sign-On settings panel (Azure AD and
+     * future SSO providers). Off by default while the domain-claim trust
+     * model is hardened — see security review notes. Enable per-org for
+     * vetted customers on shared multi-org instances.
+     */
+    SsoOrganizationSettings = 'sso-organization-settings',
+
+    /**
+     * Expose the "Leave organization" action in the General settings danger
+     * zone and accept the corresponding API call. When disabled the panel is
+     * hidden and the endpoint returns a 403 — protects against accidental
+     * self-removal during early rollout and lets us disable the feature
+     * per-org if it causes operational issues.
+     */
+    LeaveOrganization = 'leave-organization',
+
+    /**
+     * Enable query results caching. DB value (user/org override or flag
+     * default) takes precedence; falls back to the RESULTS_CACHE_ENABLED env
+     * var when no DB row is set. Lets shared-instance customers (eu1/app)
+     * opt in per-org without a redeploy.
+     */
+    ResultsCacheEnabled = 'results-cache-enabled',
+
+    /**
+     * Allow dashboard editors to mark individual dashboard filters as locked.
+     * Locked filters are visible to viewers but cannot be edited from view
+     * mode, and URL/embed filter overrides targeting a locked filter's field
+     * are ignored. Gates the authoring UI; the override-stripping behaviour
+     * always runs regardless of the flag so saved-locked filters stay safe
+     * if the flag is later turned off.
+     */
+    LockDashboardFilters = 'lock-dashboard-filters',
+
+    /**
+     * Show empty-state suggestion chips above the AI agent chat input. Each
+     * chip carries a tool hint that biases the agent toward the implied tool
+     * on the first turn. Gated for staged rollout while we tune the Haiku
+     * prompt and measure click-through.
+     */
+    AiAgentSuggestions = 'ai-agent-suggestions',
+
+    /**
+     * Enable the new pivot-column-sort UI: per-pivot-column sort menu on
+     * pivot table headers, sort-direction indicators, and the pinned
+     * pivot-column entries in the Sort popover. Backend support
+     * (per-metric anchor CTE, pivot_values persistence) is always on;
+     * this flag only gates the UI/UX so we can validate with design
+     * partners before announcing GA.
+     */
+    PivotColumnSort = 'pivot-column-sort',
+
+    /**
+     * Gate the "Schedule delivery" entry point for data apps. Disabled by
+     * default while the screenshot pipeline is producing blank pages in
+     * production. Enable per-org once the underlying rendering issue is
+     * fixed.
+     */
+    DataAppsScheduledDeliveries = 'data-apps-scheduled-deliveries',
+
+    /**
+     * Enable UI for hiding dimensions in pivot table charts (so a dimension
+     * can drive sort order without rendering or leaking into CSV/XLSX).
+     * Off by default while we validate with design partners before GA.
+     */
+    HidePivotDimensions = 'hide-pivot-dimensions',
+
+    /**
+     * Enable AI thread context compaction for streamed web-app conversations.
+     */
+    AiContextCompaction = 'ai-context-compaction',
+
+    /**
+     * Show a persistent trial warning banner for an organization on shared
+     * instances. This does not block product access.
+     */
+    OrganizationTrialWarning = 'organization-trial-warning',
 }
 
 export type FeatureFlag = {

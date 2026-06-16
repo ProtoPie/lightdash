@@ -40,7 +40,6 @@ export default function mockHealthResponse(
         staticIp: '',
         signupUrl: undefined,
         helpMenuUrl: undefined,
-        posthog: undefined,
         query: {
             maxPageSize: 2500,
             maxLimit: 1000000,
@@ -51,9 +50,6 @@ export default function mockHealthResponse(
         dashboard: {
             maxTilesPerTab: 50,
             maxTabsPerDashboard: 20,
-            versionHistory: {
-                daysLimit: 3,
-            },
             disableSentryTracking: false,
         },
         pivotTable: {
@@ -101,7 +97,6 @@ export default function mockHealthResponse(
         hasGithub: false,
         hasGitlab: false,
         hasCacheAutocompleResults: false,
-        hasResultsCaching: false,
         hasMicrosoftTeams: false,
         appearance: {
             overrideColorPalette: undefined,
@@ -138,7 +133,6 @@ export default function mockHealthResponse(
             enabled: false,
         },
         dataApps: {
-            enabled: false,
             previewOrigin: null,
         },
         ...overrides,

@@ -96,6 +96,7 @@ const convertTimezone = (
         case SupportedDbtAdapter.DUCKDB:
             return timestampSql;
         case SupportedDbtAdapter.DATABRICKS:
+        case SupportedDbtAdapter.SPARK:
             return timestampSql;
         // Athena uses Trino SQL, timestamps return in server timezone
         case SupportedDbtAdapter.TRINO:
@@ -1031,6 +1032,11 @@ export const convertTable = (
         ...(meta.parameters ? { parameters: meta.parameters } : {}),
         ...(meta.sets ? { sets: meta.sets } : {}),
         ...(tableWarnings.length > 0 ? { warnings: tableWarnings } : {}),
+        ...(model.package_name ? { dbtPackageName: model.package_name } : {}),
+        ...(model.patch_path
+            ? { ymlPath: patchPathParts(model.patch_path).path }
+            : {}),
+        ...(model.path ? { sqlPath: model.path } : {}),
     };
 };
 

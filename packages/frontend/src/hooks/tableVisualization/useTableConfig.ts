@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useEmbed from '../../ee/providers/Embed/useEmbed';
 import { useCalculateSubtotals } from '../useCalculateSubtotals';
 import { useCalculateTotal } from '../useCalculateTotal';
+import { useIsHidePivotDimsEnabled } from '../useIsHidePivotDimsEnabled';
 import { type InfiniteQueryResults } from '../useQueryResults';
 import getDataAndColumns from './getDataAndColumns';
 
@@ -75,6 +76,9 @@ const useTableConfig = (
     );
     const [showSubtotals, setShowSubtotals] = useState<boolean>(
         tableChartConfig?.showSubtotals ?? false,
+    );
+    const [showSubtotalsExpanded, setShowSubtotalsExpanded] = useState<boolean>(
+        tableChartConfig?.showSubtotalsExpanded ?? false,
     );
     const [hideRowNumbers, setHideRowNumbers] = useState<boolean>(
         tableChartConfig?.hideRowNumbers === undefined
@@ -155,23 +159,30 @@ const useTableConfig = (
         [getFieldLabelOverride, getFieldLabelDefault],
     );
 
-    // This is controlled by the state in this component.
-    // User configures the names and visibilty of these in the config panel
+    // PROD-2108 flag gate. When off, preserve the legacy short-circuit that
+    // forced dimensions to always render while pivoting — it guarded against
+    // an older pivot reducer bug where filtering an index dim corrupted
+    // metric values. The PR 2 indexDimensionsForGrouping/ForDisplay split
+    // fixes that root cause, but we only honor the persisted dim visibility
+    // when the flag is on, so existing charts that have an unintentional
+    // `columnProperties[dim].visible: false` (set by clicks during the era of
+    // the buggy guard) keep rendering the dim. Flag-on opts into the new
+    // behavior.
+    const isHidePivotDimsEnabled = useIsHidePivotDimsEnabled();
+
     const isColumnVisible = useCallback(
         (fieldId: string) => {
-            // we should always show dimensions when pivoting
-            // hiding a dimension randomly removes values from all metrics
             if (
+                !isHidePivotDimsEnabled &&
                 pivotDimensions &&
                 pivotDimensions.length > 0 &&
                 isDimension(getField(fieldId))
             ) {
                 return true;
             }
-
             return columnProperties[fieldId]?.visible ?? true;
         },
-        [pivotDimensions, getField, columnProperties],
+        [columnProperties, isHidePivotDimsEnabled, pivotDimensions, getField],
     );
     const isColumnFrozen = useCallback(
         (fieldId: string) => columnProperties[fieldId]?.frozen === true,
@@ -355,11 +366,29 @@ const useTableConfig = (
             );
         });
 
+        // Only populate the dim-side hidden list when the flag is on. Without
+        // it, isColumnVisible still applies the legacy short-circuit for dims
+        // and we keep the pre-PROD-2108 contract (no dim filtering downstream).
+        const hiddenDimensionFieldIds = isHidePivotDimsEnabled
+            ? selectedItemIds?.filter((fieldId) => {
+                  const field = getField(fieldId);
+                  if (!field || isColumnVisible(fieldId)) return false;
+                  // Custom SQL dimensions are not `Field`s but still behave
+                  // as dims in the pivot (driving sort order via
+                  // sortOnlyDimensions).
+                  return (
+                      (isField(field) && isDimension(field)) ||
+                      isCustomDimension(field)
+                  );
+              })
+            : undefined;
+
         const pivotConfig: PivotConfig = {
             pivotDimensions,
             metricsAsRows,
             columnOrder,
             hiddenMetricFieldIds,
+            hiddenDimensionFieldIds,
             columnTotals: tableChartConfig?.showColumnCalculation,
             rowTotals: tableChartConfig?.showRowCalculation,
         };
@@ -373,6 +402,7 @@ const useTableConfig = (
                     getField,
                     getFieldLabel,
                     groupedSubtotals,
+                    parameters,
                 })
                 .then((data) => {
                     setPivotTableData({
@@ -400,6 +430,7 @@ const useTableConfig = (
                     },
                     getField,
                     getFieldLabel,
+                    parameters,
                 })
                 .then((data) => {
                     setPivotTableData({
@@ -423,6 +454,7 @@ const useTableConfig = (
         metricsAsRows,
         selectedItemIds,
         isColumnVisible,
+        isHidePivotDimsEnabled,
         getField,
         getFieldLabel,
         tableChartConfig?.showColumnCalculation,
@@ -430,6 +462,7 @@ const useTableConfig = (
         worker,
         pivotTableMaxColumnLimit,
         groupedSubtotals,
+        parameters,
     ]);
 
     // Remove columnProperties from map if the column has been removed from results
@@ -459,18 +492,17 @@ const useTableConfig = (
 
     const updateColumnProperty = useCallback(
         (field: string, properties: Partial<ColumnProperties>) => {
-            const newProperties =
-                field in columnProperties
-                    ? { ...columnProperties[field], ...properties }
-                    : {
-                          ...properties,
-                      };
-            setColumnProperties({
-                ...columnProperties,
-                [field]: newProperties,
-            });
+            // functional setter so consecutive calls compose correctly
+
+            setColumnProperties((prev) => ({
+                ...prev,
+                [field]:
+                    field in prev
+                        ? { ...prev[field], ...properties }
+                        : { ...properties },
+            }));
         },
-        [columnProperties],
+        [],
     );
 
     const handleSetConditionalFormattings = useCallback(
@@ -624,6 +656,7 @@ const useTableConfig = (
             showTableNames,
             showResultsTotal,
             showSubtotals,
+            showSubtotalsExpanded,
             columns: columnProperties,
             hideRowNumbers,
             conditionalFormattings,
@@ -637,6 +670,7 @@ const useTableConfig = (
             showTableNames,
             showResultsTotal,
             showSubtotals,
+            showSubtotalsExpanded,
             columnProperties,
             conditionalFormattings,
             metricsAsRows,
@@ -661,6 +695,8 @@ const useTableConfig = (
             setShowResultsTotal,
             showSubtotals,
             setShowSubtotals,
+            showSubtotalsExpanded,
+            setShowSubtotalsExpanded,
 
             columnProperties: exposedColumnProperties,
             setColumnProperties,
@@ -700,6 +736,8 @@ const useTableConfig = (
             setShowResultsTotal,
             showSubtotals,
             setShowSubtotals,
+            showSubtotalsExpanded,
+            setShowSubtotalsExpanded,
 
             exposedColumnProperties,
             setColumnProperties,

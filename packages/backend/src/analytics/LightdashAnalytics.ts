@@ -26,6 +26,7 @@ import {
     TableSelectionType,
     ValidateProjectPayload,
     WarehouseTypes,
+    type DataAppClaudeModel,
 } from '@lightdash/common';
 import Analytics, {
     Track as AnalyticsTrack,
@@ -1205,6 +1206,7 @@ export type DataAppCreatedEvent = BaseTrack & {
         version: number;
         promptLength: number;
         imageCount: number;
+        claudeModel: DataAppClaudeModel;
     };
 };
 
@@ -1219,6 +1221,7 @@ export type DataAppIteratedEvent = BaseTrack & {
         iterationNumber: number;
         promptLength: number;
         imageCount: number;
+        claudeModel: DataAppClaudeModel;
         previousVersionStatus: string | null;
         msSinceLastVersion: number | null;
     };
@@ -1246,6 +1249,7 @@ export type DataAppVersionCompletedEvent = BaseTrack & {
         appUuid: string;
         version: number;
         isIteration: boolean;
+        claudeModel: DataAppClaudeModel;
         wasResumed: boolean;
         totalDurationMs: number;
         sandboxMs?: number;
@@ -1277,6 +1281,7 @@ export type DataAppVersionFailedEvent = BaseTrack & {
         appUuid: string;
         version: number;
         isIteration: boolean;
+        claudeModel: DataAppClaudeModel;
         failureStage:
             | 'sandbox'
             | 'catalog'
@@ -1320,6 +1325,30 @@ export type DataAppViewedEvent = BaseTrack & {
     };
 };
 
+export type DataAppVersionRestoredEvent = BaseTrack & {
+    event: 'data_app.version.restored';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        appUuid: string;
+        version: number;
+        restoredFromVersion: number;
+    };
+};
+
+export type DataAppDuplicatedEvent = BaseTrack & {
+    event: 'data_app.duplicated';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        appUuid: string;
+        duplicatedFromAppUuid: string;
+        duplicatedFromVersion: number;
+    };
+};
+
 export type DataAppEvent =
     | DataAppCreatedEvent
     | DataAppIteratedEvent
@@ -1327,7 +1356,9 @@ export type DataAppEvent =
     | DataAppVersionCompletedEvent
     | DataAppVersionFailedEvent
     | DataAppImageUploadedEvent
-    | DataAppViewedEvent;
+    | DataAppViewedEvent
+    | DataAppVersionRestoredEvent
+    | DataAppDuplicatedEvent;
 
 export type CommentsEvent = BaseTrack & {
     event: 'comment.created' | 'comment.deleted' | 'comment.resolved';
@@ -1739,6 +1770,29 @@ export type AiAgentUpdatedEvent = BaseTrack & {
     };
 };
 
+export type AiAgentDocumentCreatedEvent = BaseTrack & {
+    event: 'ai_agent_document.created';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string | null;
+        documentId: string;
+        mimeType: string;
+        contentSizeBytes: number;
+        agentAccessCount: number;
+    };
+};
+
+export type AiAgentDocumentDeletedEvent = BaseTrack & {
+    event: 'ai_agent_document.deleted';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string | null;
+        documentId: string;
+    };
+};
+
 export type AiAgentPromptCreatedEvent = BaseTrack & {
     event: 'ai_agent_prompt.created';
     userId: string;
@@ -1915,6 +1969,74 @@ export type AiAgentArtifactsRetrievedEvent = BaseTrack & {
     };
 };
 
+export type AiAgentFindContentCoverageEvent = BaseTrack & {
+    event: 'ai_agent.find_content_coverage';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        aiAgentId: string;
+        agentName: string;
+        threadId: string;
+        promptId: string;
+        searchQuery: string;
+        totalResultCount: number;
+        verifiedResultCount: number;
+        topResultVerified: boolean;
+    };
+};
+
+export type AiAgentSuggestionsGeneratedEvent = BaseTrack & {
+    event: 'ai_agent.suggestions_generated';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        agentId: string;
+        chipCount: number;
+        exploreCount: number;
+        verifiedQuestionsCount: number;
+        latencyMs: number;
+        modelId: string;
+        usingFallback: boolean;
+    };
+};
+
+export type AiAgentSuggestionImpressionEvent = BaseTrack & {
+    event: 'ai_agent.suggestion_impression';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        agentId: string;
+        chipCount: number;
+    };
+};
+
+export type AiAgentSuggestionClickEvent = BaseTrack & {
+    event: 'ai_agent.suggestion_click';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        agentId: string;
+        chipLabel: string;
+        chipTool: string;
+        chipIndex: number;
+    };
+};
+
+export type AiAgentSuggestionSubmitEvent = BaseTrack & {
+    event: 'ai_agent.suggestion_submit';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        agentId: string;
+        toolHints: string[];
+    };
+};
+
 export type SchedulerOwnershipReassignedEvent = BaseTrack & {
     event: 'scheduler.ownership_reassigned';
     properties: {
@@ -2043,6 +2165,8 @@ type TypedEvent =
     | AiAgentCreatedEvent
     | AiAgentDeletedEvent
     | AiAgentUpdatedEvent
+    | AiAgentDocumentCreatedEvent
+    | AiAgentDocumentDeletedEvent
     | AiAgentPromptCreatedEvent
     | AiAgentPromptFeedbackEvent
     | AiAgentEvalCreatedEvent
@@ -2052,6 +2176,11 @@ type TypedEvent =
     | AiAgentToolCallEvent
     | AiAgentArtifactVersionVerifiedEvent
     | AiAgentArtifactsRetrievedEvent
+    | AiAgentFindContentCoverageEvent
+    | AiAgentSuggestionsGeneratedEvent
+    | AiAgentSuggestionImpressionEvent
+    | AiAgentSuggestionClickEvent
+    | AiAgentSuggestionSubmitEvent
     | ContentVerificationEvent
     | SchedulerOwnershipReassignedEvent
     | ImpersonationEvent;

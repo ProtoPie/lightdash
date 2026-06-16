@@ -123,6 +123,11 @@ export const dateTruncTimezoneConversions: Record<
             `from_utc_timestamp(to_utc_timestamp(${sql}, current_timezone()), '${tz}')`,
         toUTC: (sql, tz) => `to_utc_timestamp(${sql}, '${tz}')`,
     },
+    [SupportedDbtAdapter.SPARK]: {
+        toProjectTz: (sql, tz) =>
+            `from_utc_timestamp(to_utc_timestamp(${sql}, current_timezone()), '${tz}')`,
+        toUTC: (sql, tz) => `to_utc_timestamp(${sql}, '${tz}')`,
+    },
     // Trino returns `timestamp with time zone` values as strings like
     // "2024-01-14 00:00:00.000 America/New_York", which dayjs/moment can't
     // parse — so `toUTC` casts the UTC-shifted result back to a naive
@@ -184,6 +189,10 @@ export const dateExtractsTimezoneConversions: Record<
             `(${sql})::timestamptz AT TIME ZONE '${tz}'`,
     },
     [SupportedDbtAdapter.DATABRICKS]: {
+        toExtractInputTz: (sql, tz) =>
+            `from_utc_timestamp(to_utc_timestamp(${sql}, current_timezone()), '${tz}')`,
+    },
+    [SupportedDbtAdapter.SPARK]: {
         toExtractInputTz: (sql, tz) =>
             `from_utc_timestamp(to_utc_timestamp(${sql}, current_timezone()), '${tz}')`,
     },
@@ -669,6 +678,7 @@ const warehouseConfigs: Record<SupportedDbtAdapter, WarehouseConfig> = {
     [SupportedDbtAdapter.POSTGRES]: postgresConfig,
     [SupportedDbtAdapter.DUCKDB]: postgresConfig,
     [SupportedDbtAdapter.DATABRICKS]: databricksConfig,
+    [SupportedDbtAdapter.SPARK]: databricksConfig, // Spark uses same SQL dialect as Databricks
     [SupportedDbtAdapter.TRINO]: trinoConfig,
     [SupportedDbtAdapter.ATHENA]: trinoConfig, // Athena uses Trino SQL dialect
     [SupportedDbtAdapter.CLICKHOUSE]: clickhouseConfig,
@@ -679,6 +689,28 @@ const warehouseConfigs: Record<SupportedDbtAdapter, WarehouseConfig> = {
  * performed in the project TZ and the result is converted back to a proper
  * UTC instant so downstream consumers apply .tz(project_tz) uniformly.
  */
+// Source defaults to UTC when unset (matches `getColumnTimezone`). A wrap when
+// target equals source is semantically a no-op and defeats partition pruning
+// on warehouses like BigQuery — every wrap site (dim trunc, extract, format,
+// filter literal) shares this predicate so symmetry is enforced centrally.
+export const isTimezoneRoundTripNoOp = (
+    timezone: string,
+    sourceTimezone?: string,
+): boolean => timezone === (sourceTimezone ?? 'UTC');
+
+// Returns the resolved (timezone, sourceTimezone) when the dim needs a tz
+// wrap, else null. Wrap conditions: TIMESTAMP-typed dim AND a target timezone
+// AND target != source.
+const resolveTimezoneWrap = (
+    type: DimensionType,
+    timezone?: string,
+    sourceTimezone?: string,
+): { timezone: string; sourceTimezone?: string } | null => {
+    if (type !== DimensionType.TIMESTAMP || !timezone) return null;
+    if (isTimezoneRoundTripNoOp(timezone, sourceTimezone)) return null;
+    return { timezone, sourceTimezone };
+};
+
 export const getSqlForTruncatedDate = (
     adapterType: SupportedDbtAdapter,
     timeFrame: TimeFrames,
@@ -688,7 +720,8 @@ export const getSqlForTruncatedDate = (
     timezone?: string,
     sourceTimezone?: string,
 ): string => {
-    if (!timezone || type !== DimensionType.TIMESTAMP) {
+    const wrap = resolveTimezoneWrap(type, timezone, sourceTimezone);
+    if (!wrap) {
         return warehouseConfigs[adapterType].getSqlForTruncatedDate(
             timeFrame,
             originalSql,
@@ -698,15 +731,15 @@ export const getSqlForTruncatedDate = (
     }
 
     const { toProjectTz, toUTC } = dateTruncTimezoneConversions[adapterType];
-    const input = toProjectTz(originalSql, timezone, sourceTimezone);
+    const input = toProjectTz(originalSql, wrap.timezone, wrap.sourceTimezone);
     const truncated = warehouseConfigs[adapterType].getSqlForTruncatedDate(
         timeFrame,
         input,
         type,
         startOfWeek,
-        timezone,
+        wrap.timezone,
     );
-    return toUTC(truncated, timezone);
+    return toUTC(truncated, wrap.timezone);
 };
 
 // DATE base dimensions short-circuit: no time component to shift.
@@ -719,14 +752,14 @@ export const getSqlForDatePart = (
     timezone?: string,
     sourceTimezone?: string,
 ): string => {
-    const wrappedSql =
-        timezone && type === DimensionType.TIMESTAMP
-            ? dateExtractsTimezoneConversions[adapterType].toExtractInputTz(
-                  originalSql,
-                  timezone,
-                  sourceTimezone,
-              )
-            : originalSql;
+    const wrap = resolveTimezoneWrap(type, timezone, sourceTimezone);
+    const wrappedSql = wrap
+        ? dateExtractsTimezoneConversions[adapterType].toExtractInputTz(
+              originalSql,
+              wrap.timezone,
+              wrap.sourceTimezone,
+          )
+        : originalSql;
     return warehouseConfigs[adapterType].getSqlForDatePart(
         timeFrame,
         wrappedSql,
@@ -747,7 +780,8 @@ export const getSqlForDatePartName = (
     timezone?: string,
     sourceTimezone?: string,
 ): string => {
-    if (!timezone || type !== DimensionType.TIMESTAMP) {
+    const wrap = resolveTimezoneWrap(type, timezone, sourceTimezone);
+    if (!wrap) {
         return warehouseConfigs[adapterType].getSqlForDatePartName(
             timeFrame,
             originalSql,
@@ -758,8 +792,8 @@ export const getSqlForDatePartName = (
         timeFrame,
         originalSql,
         type,
-        timezone,
-        sourceTimezone,
+        wrap.timezone,
+        wrap.sourceTimezone,
     );
 };
 

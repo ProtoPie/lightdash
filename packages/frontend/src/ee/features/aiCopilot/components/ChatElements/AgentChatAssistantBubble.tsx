@@ -1,14 +1,18 @@
 import {
+    type AiAgentToolName,
     type AiAgentMessageAssistant,
+    type AiMcpServer,
+    isToolProposeChangeResult,
     type ToolProposeChangeArgs,
 } from '@lightdash/common';
 import {
     ActionIcon,
     Alert,
+    Box,
     Button,
+    Code,
     CopyButton,
     Group,
-    Loader,
     Paper,
     Popover,
     Stack,
@@ -23,26 +27,32 @@ import {
     IconCopy,
     IconExclamationCircle,
     IconMessageX,
+    IconPlug,
     IconRefresh,
+    IconTerminal2,
     IconTestPipe,
     IconThumbDown,
     IconThumbDownFilled,
     IconThumbUp,
     IconThumbUpFilled,
 } from '@tabler/icons-react';
-import MDEditor from '@uiw/react-md-editor';
-import { memo, useCallback, useState, type FC } from 'react';
+import { memo, useCallback, useMemo, useState, type FC } from 'react';
+import { Link } from 'react-router';
+import remarkEmoji from 'remark-emoji';
+import remarkGfm from 'remark-gfm';
+// streamdown is a streaming-aware drop-in for react-markdown — used for the
+// final answer + intermediate text chunks in the AI bubble.
+import { Streamdown, type CustomRendererProps } from 'streamdown';
+import 'streamdown/styles.css';
 import MantineIcon from '../../../../../components/common/MantineIcon';
-import {
-    mdEditorComponents,
-    rehypeRemoveHeaderLinks,
-    useMdEditorStyle,
-} from '../../../../../utils/markdownUtils';
+import { useMdEditorStyle } from '../../../../../utils/markdownUtils';
+import { useAiAgentPermission } from '../../hooks/useAiAgentPermission';
 import {
     useRetryAiAgentThreadMessageMutation,
     useUpdatePromptFeedbackMutation,
 } from '../../hooks/useProjectAiAgents';
-import { setArtifact } from '../../store/aiArtifactSlice';
+import { type StreamPart } from '../../store/aiAgentThreadStreamSlice';
+import { clearArtifact, setArtifact } from '../../store/aiArtifactSlice';
 import {
     useAiAgentStoreDispatch,
     useAiAgentStoreSelector,
@@ -55,19 +65,257 @@ import styles from './AgentChatAssistantBubble.module.css';
 import AgentChatDebugDrawer from './AgentChatDebugDrawer';
 import { AiArtifactInline } from './AiArtifactInline';
 import { AiArtifactButton } from './ArtifactButton/AiArtifactButton';
-import { ContentLink } from './ContentLink';
+import { ContentLink, type SqlRunnerLinkState } from './ContentLink';
 import { MessageModelIndicator } from './MessageModelIndicator';
 import { rehypeAiAgentContentLinks } from './rehypeContentLinks';
-import { AiChartToolCalls } from './ToolCalls/AiChartToolCalls';
 import { AiProposeChangeToolCall } from './ToolCalls/AiProposeChangeToolCall';
-import { AiReasoning } from './ToolCalls/AiReasoning';
+import { ImproveContextToolCall } from './ToolCalls/ImproveContextToolCall';
+import {
+    LiveActivityCard,
+    ReasoningHistoryRow,
+    type LiveActivityToolGroup,
+} from './ToolCalls/LiveActivityCard';
+import { toReasoningTexts } from './ToolCalls/reasoningHelpers';
+import { SqlApprovalCard } from './ToolCalls/SqlApprovalCard';
+import { type ToolCallSummary } from './ToolCalls/utils/types';
+import { TypingDots } from './TypingDots';
+
+type ToolGroup = {
+    kind: 'toolGroup';
+    toolName: AiAgentToolName;
+    calls: ToolCallSummary[];
+    keyId: string;
+};
+type TextSegment = { kind: 'text'; text: string; idx: number };
+type SqlApprovalSegment = {
+    kind: 'sqlApproval';
+    toolCallId: string;
+    sql: string;
+    limit?: number;
+};
+type StreamSegment = TextSegment | ToolGroup | SqlApprovalSegment;
+
+const segmentStreamParts = (
+    parts: StreamPart[],
+    decidedToolCallIds: string[],
+): StreamSegment[] => {
+    const segments: StreamSegment[] = [];
+    parts.forEach((part, idx) => {
+        if (part.type === 'text') {
+            segments.push({ kind: 'text', text: part.text, idx });
+            return;
+        }
+        if (
+            part.toolName === 'improveContext' ||
+            part.toolName === 'proposeChange'
+        ) {
+            return;
+        }
+        if (
+            part.toolName === 'runSql' &&
+            !decidedToolCallIds.includes(part.toolCallId)
+        ) {
+            const args = part.toolArgs as { sql: string; limit?: number };
+            segments.push({
+                kind: 'sqlApproval',
+                toolCallId: part.toolCallId,
+                sql: args.sql,
+                limit: args.limit,
+            });
+            return;
+        }
+        const call: ToolCallSummary = {
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            toolArgs: part.toolArgs,
+            toolOutput: part.toolOutput,
+            isPreliminary: part.isPreliminary,
+        };
+        const last = segments[segments.length - 1];
+        if (
+            last &&
+            last.kind === 'toolGroup' &&
+            last.toolName === part.toolName
+        ) {
+            last.calls.push(call);
+        } else {
+            segments.push({
+                kind: 'toolGroup',
+                toolName: part.toolName,
+                calls: [call],
+                keyId: part.toolCallId,
+            });
+        }
+    });
+    return segments;
+};
+
+const groupPersistedToolCalls = (
+    calls: ToolCallSummary[],
+): { toolName: AiAgentToolName; calls: ToolCallSummary[]; keyId: string }[] => {
+    const groups: {
+        toolName: AiAgentToolName;
+        calls: ToolCallSummary[];
+        keyId: string;
+    }[] = [];
+    for (const tc of calls) {
+        const last = groups[groups.length - 1];
+        if (last && last.toolName === tc.toolName) {
+            last.calls.push(tc);
+        } else {
+            groups.push({
+                toolName: tc.toolName,
+                calls: [tc],
+                keyId: tc.toolCallId,
+            });
+        }
+    }
+    return groups;
+};
+
+const getToolOutputStatus = (toolOutput: unknown) => {
+    const metadata = (toolOutput as { metadata?: unknown } | undefined)
+        ?.metadata;
+
+    if (!metadata || typeof metadata !== 'object' || !('status' in metadata)) {
+        return undefined;
+    }
+
+    const status = (metadata as { status?: unknown }).status;
+    return typeof status === 'string' ? status : undefined;
+};
+
+const getRunSqlLinkStateFromArgs = (
+    toolArgs: unknown,
+): SqlRunnerLinkState | null => {
+    if (!toolArgs || typeof toolArgs !== 'object' || !('sql' in toolArgs)) {
+        return null;
+    }
+
+    const { sql, limit } = toolArgs as { sql?: unknown; limit?: unknown };
+
+    if (typeof sql !== 'string') {
+        return null;
+    }
+
+    return typeof limit === 'number' ? { sql, limit } : { sql };
+};
+
+const getLatestSuccessfulRunSqlLinkState = ({
+    message,
+    streamParts,
+}: {
+    message: AiAgentMessageAssistant;
+    streamParts?: StreamPart[];
+}): SqlRunnerLinkState | null => {
+    if (streamParts) {
+        for (let idx = streamParts.length - 1; idx >= 0; idx -= 1) {
+            const part = streamParts[idx];
+
+            if (
+                part.type !== 'toolCall' ||
+                part.toolName !== 'runSql' ||
+                part.isPreliminary === true ||
+                getToolOutputStatus(part.toolOutput) !== 'success'
+            ) {
+                continue;
+            }
+
+            const linkState = getRunSqlLinkStateFromArgs(part.toolArgs);
+            if (linkState) return linkState;
+        }
+    }
+
+    const successfulRunSqlToolCallIds = new Set(
+        message.toolResults
+            .filter(
+                (result) =>
+                    result.toolName === 'runSql' &&
+                    getToolOutputStatus(result) === 'success',
+            )
+            .map((result) => result.toolCallId),
+    );
+
+    for (let idx = message.toolCalls.length - 1; idx >= 0; idx -= 1) {
+        const toolCall = message.toolCalls[idx];
+
+        if (
+            toolCall.toolName !== 'runSql' ||
+            !successfulRunSqlToolCallIds.has(toolCall.toolCallId)
+        ) {
+            continue;
+        }
+
+        const linkState = getRunSqlLinkStateFromArgs(toolCall.toolArgs);
+        if (linkState) return linkState;
+    }
+
+    return null;
+};
+
+const SqlMarkdownCodeBlock: FC<
+    CustomRendererProps & { projectUuid: string; canOpenSqlRunner: boolean }
+> = ({ code, isIncomplete, projectUuid, canOpenSqlRunner }) => {
+    const sql = code.trim();
+    const canOpen = canOpenSqlRunner && !isIncomplete && sql.length > 0;
+
+    return (
+        <Box className={styles.sqlMarkdownCodeBlock}>
+            <Group
+                justify="space-between"
+                align="center"
+                gap="xs"
+                className={styles.sqlMarkdownCodeHeader}
+            >
+                <Text size="xs" fw={600} c="dimmed">
+                    SQL
+                </Text>
+                {canOpen ? (
+                    <Button
+                        component={Link}
+                        to={{
+                            pathname: `/projects/${projectUuid}/sql-runner`,
+                        }}
+                        state={{ sql }}
+                        data-content-link="true"
+                        size="compact-xs"
+                        variant="default"
+                        className={styles.sqlRunnerLinkButton}
+                        leftSection={
+                            <MantineIcon icon={IconTerminal2} size={12} />
+                        }
+                    >
+                        Open in SQL Runner
+                    </Button>
+                ) : null}
+            </Group>
+            <Code block className={styles.sqlMarkdownCodeBody}>
+                {code}
+            </Code>
+        </Box>
+    );
+};
 
 const AssistantBubbleContent: FC<{
     message: AiAgentMessageAssistant;
     projectUuid: string;
     agentUuid: string;
-}> = ({ message, projectUuid, agentUuid }) => {
-    const streamingState = useAiAgentThreadStreamQuery(message.threadUuid);
+    mcpServers?: AiMcpServer[];
+}> = ({ message, projectUuid, agentUuid, mcpServers }) => {
+    const canManageAgents = useAiAgentPermission({
+        action: 'manage',
+        projectUuid,
+    });
+    const threadStreamingState = useAiAgentThreadStreamQuery(
+        message.threadUuid,
+    );
+    // The thread-level streaming state is shared across all messages on the
+    // thread. We must only use it for *this* message's bubble — otherwise the
+    // previous bubble would mirror the next prompt's parts.
+    const streamingState =
+        threadStreamingState?.messageUuid === message.uuid
+            ? threadStreamingState
+            : null;
     const isStreaming = useAiAgentThreadMessageStreaming(
         message.threadUuid,
         message.uuid,
@@ -77,8 +325,32 @@ const AssistantBubbleContent: FC<{
 
     const isPending = message.status === 'pending';
     const hasError = message.status === 'error';
-    const hasNoResponse = !isStreaming && !message.message && !isPending;
-    const shouldShowRetry = hasError || hasNoResponse;
+    const streamingError = streamingState?.error;
+    const sqlRunnerLinkState = getLatestSuccessfulRunSqlLinkState({
+        message,
+        streamParts: streamingState?.parts,
+    });
+    const canOpenSqlRunner = !!sqlRunnerLinkState;
+    const markdownPlugins = useMemo(
+        () => ({
+            renderers: [
+                {
+                    language: ['sql', 'postgresql', 'bigquery', 'snowflake'],
+                    component: (props: CustomRendererProps) => (
+                        <SqlMarkdownCodeBlock
+                            {...props}
+                            projectUuid={projectUuid}
+                            canOpenSqlRunner={canOpenSqlRunner}
+                        />
+                    ),
+                },
+            ],
+        }),
+        [canOpenSqlRunner, projectUuid],
+    );
+    const hasNoResponse =
+        !isStreaming && !streamingError && !message.message && !isPending;
+    const shouldShowRetry = hasError || hasNoResponse || !!streamingError;
 
     const baseMessageContent =
         isStreaming && streamingState
@@ -107,12 +379,9 @@ const AssistantBubbleContent: FC<{
               ?.toolArgs as ToolProposeChangeArgs); // TODO: fix message type, it's `object` now
 
     const proposeChangeToolResult = message.toolResults.find(
-        (result) => result.toolName === 'proposeChange',
+        isToolProposeChangeResult,
     );
-
-    const toolCalls = isStreaming
-        ? (streamingState?.toolCalls ?? [])
-        : message.toolCalls;
+    const mcpUnavailableNotices = streamingState?.mcpUnavailableNotices ?? [];
 
     return (
         <>
@@ -143,7 +412,8 @@ const AssistantBubbleContent: FC<{
                                     Something went wrong
                                 </Text>
                                 <Text size="xs" c="dimmed">
-                                    {message.errorMessage ||
+                                    {streamingError ||
+                                        message.errorMessage ||
                                         'Failed to generate response. Please try again.'}
                                 </Text>
                             </Stack>
@@ -174,58 +444,310 @@ const AssistantBubbleContent: FC<{
                 </Paper>
             )}
 
-            {isStreaming && streamingState?.reasoning && (
-                <AiReasoning
-                    reasoning={streamingState.reasoning}
-                    type="streaming"
-                />
-            )}
-            {!isStreaming && message.reasoning.length > 0 && (
-                <AiReasoning reasoning={message.reasoning} type="persisted" />
-            )}
-            {toolCalls.length > 0 ? (
-                <AiChartToolCalls
-                    toolCalls={toolCalls}
-                    type={isStreaming || isPending ? 'streaming' : 'persisted'}
-                    projectUuid={projectUuid}
-                    agentUuid={agentUuid}
-                    threadUuid={message.threadUuid}
-                    promptUuid={message.uuid}
-                />
-            ) : null}
-            {messageContent.length > 0 ? (
-                <MDEditor.Markdown
-                    rehypeRewrite={rehypeRemoveHeaderLinks}
-                    source={messageContent}
-                    style={{ ...mdStyle, padding: `0.5rem 0` }}
-                    rehypePlugins={[rehypeAiAgentContentLinks]}
-                    components={{
-                        ...mdEditorComponents,
-                        a: ({ node, children, ...props }) => {
-                            const contentType =
-                                'data-content-type' in props &&
-                                typeof props['data-content-type'] === 'string'
-                                    ? props['data-content-type']
-                                    : undefined;
-
-                            return (
-                                <ContentLink
-                                    contentType={contentType}
-                                    props={props}
-                                    message={message}
-                                    projectUuid={projectUuid}
-                                    agentUuid={agentUuid}
+            {mcpUnavailableNotices.map((notice) => (
+                <Box
+                    key={notice.serverUuid}
+                    className={styles.mcpUnavailableNotice}
+                >
+                    <Group
+                        gap={8}
+                        align="flex-start"
+                        wrap="nowrap"
+                        className={styles.mcpUnavailableNoticeHeader}
+                    >
+                        <Box className={styles.mcpUnavailableNoticeIconChip}>
+                            <MantineIcon
+                                icon={IconPlug}
+                                size={12}
+                                stroke={1.7}
+                                className={styles.mcpUnavailableNoticeIcon}
+                            />
+                        </Box>
+                        <Stack
+                            gap={2}
+                            className={styles.mcpUnavailableNoticeBody}
+                        >
+                            <Text
+                                size="xs"
+                                fw={500}
+                                className={styles.mcpUnavailableNoticeLabel}
+                            >
+                                Couldn&apos;t connect to {notice.serverName} MCP
+                            </Text>
+                            <Group gap={8} align="center" wrap="wrap">
+                                <Text
+                                    size="xs"
+                                    className={
+                                        styles.mcpUnavailableNoticeMessage
+                                    }
                                 >
-                                    {children}
-                                </ContentLink>
-                            );
-                        },
-                    }}
-                />
-            ) : null}
-            {isStreaming || isPending ? (
-                <Loader type="dots" color="gray" />
-            ) : null}
+                                    {canManageAgents
+                                        ? 'Check connection settings.'
+                                        : 'Reach out to an agent administrator to update this MCP connection.'}
+                                </Text>
+                                {canManageAgents && (
+                                    <Button
+                                        component={Link}
+                                        to={`/projects/${projectUuid}/ai-agents/${agentUuid}/edit`}
+                                        variant="subtle"
+                                        color="gray"
+                                        size="compact-xs"
+                                        px={0}
+                                        className={
+                                            styles.mcpUnavailableNoticeAction
+                                        }
+                                    >
+                                        Open settings
+                                    </Button>
+                                )}
+                            </Group>
+                        </Stack>
+                    </Group>
+                </Box>
+            ))}
+
+            {/* Reasoning lives inside the LiveActivityCard at all times, so
+             *  there is one unified bento for the agent's process. */}
+            {(() => {
+                const segments = streamingState?.parts
+                    ? segmentStreamParts(
+                          streamingState.parts,
+                          streamingState.decidedToolCallIds,
+                      )
+                    : [];
+
+                if (segments.length > 0) {
+                    // Tool segments are extracted into a single LiveActivityCard
+                    // pinned below the texts. Texts keep their interleaved order
+                    // with intermediates collapsed; the latest text stays open.
+                    const liveToolGroups: LiveActivityToolGroup[] = segments
+                        .filter(
+                            (
+                                s,
+                            ): s is Extract<typeof s, { kind: 'toolGroup' }> =>
+                                s.kind === 'toolGroup',
+                        )
+                        .map((s) => ({
+                            toolName: s.toolName,
+                            calls: s.calls,
+                            keyId: s.keyId,
+                        }));
+                    const sqlApprovals = segments.filter(
+                        (s): s is Extract<typeof s, { kind: 'sqlApproval' }> =>
+                            s.kind === 'sqlApproval',
+                    );
+                    const textSegments = segments.filter(
+                        (s): s is Extract<typeof s, { kind: 'text' }> =>
+                            s.kind === 'text',
+                    );
+                    const latestTextSeg = textSegments[textSegments.length - 1];
+                    // bridges the gap between artifact landing and closing text.
+                    const showFinishingUp =
+                        isStreaming &&
+                        !!message.artifacts?.length &&
+                        segments[segments.length - 1]?.kind !== 'text';
+                    const finalAnswerMd = latestTextSeg ? (
+                        <Box
+                            className={`${styles.aiMarkdown} ${
+                                isStreaming ? styles.streamingNarration : ''
+                            }`}
+                            style={mdStyle}
+                        >
+                            <Streamdown
+                                parseIncompleteMarkdown
+                                controls={false}
+                                caret="block"
+                                isAnimating={isStreaming}
+                                mode={isStreaming ? 'streaming' : 'static'}
+                                remarkPlugins={[remarkGfm, remarkEmoji]}
+                                rehypePlugins={[rehypeAiAgentContentLinks]}
+                                plugins={markdownPlugins}
+                                components={{
+                                    a: ({ node, children, ...props }) => {
+                                        const contentType =
+                                            'data-content-type' in props &&
+                                            typeof props[
+                                                'data-content-type'
+                                            ] === 'string'
+                                                ? props['data-content-type']
+                                                : undefined;
+                                        return (
+                                            <ContentLink
+                                                contentType={contentType}
+                                                props={props}
+                                                message={message}
+                                                projectUuid={projectUuid}
+                                                agentUuid={agentUuid}
+                                                sqlRunnerLinkState={
+                                                    sqlRunnerLinkState
+                                                }
+                                            >
+                                                {children}
+                                            </ContentLink>
+                                        );
+                                    },
+                                }}
+                            >
+                                {latestTextSeg.text}
+                            </Streamdown>
+                        </Box>
+                    ) : null;
+                    const pendingApprovalContent =
+                        sqlApprovals.length > 0 ? (
+                            <Stack gap={6}>
+                                {sqlApprovals.map((seg) => (
+                                    <SqlApprovalCard
+                                        key={seg.toolCallId}
+                                        projectUuid={projectUuid}
+                                        agentUuid={agentUuid}
+                                        threadUuid={message.threadUuid}
+                                        toolCallId={seg.toolCallId}
+                                        toolArgs={{
+                                            sql: seg.sql,
+                                            limit: seg.limit,
+                                        }}
+                                    />
+                                ))}
+                            </Stack>
+                        ) : null;
+                    return (
+                        <Stack gap={4} pt="xs">
+                            {/* Activity card sits ABOVE the rolling preview /
+                             *  final answer so tool work reads top-to-bottom:
+                             *  what was done → the answer. After streaming we
+                             *  fold reasoning into the activity card so the
+                             *  answer remains the focal point. SQL approvals
+                             *  drop into the card's body, auto-expanded. */}
+                            {(() => {
+                                const reasoningTexts = toReasoningTexts(
+                                    !isStreaming
+                                        ? message.reasoning
+                                        : undefined,
+                                    isStreaming
+                                        ? streamingState?.reasoning
+                                        : undefined,
+                                );
+                                return reasoningTexts.length > 0 ? (
+                                    <ReasoningHistoryRow
+                                        texts={reasoningTexts}
+                                        isLive={isStreaming}
+                                    />
+                                ) : null;
+                            })()}
+                            {(liveToolGroups.length > 0 ||
+                                pendingApprovalContent) && (
+                                <LiveActivityCard
+                                    toolGroups={liveToolGroups}
+                                    isLive={isStreaming}
+                                    toolResults={message.toolResults}
+                                    toolCalls={message.toolCalls}
+                                    mcpServers={mcpServers}
+                                    pendingContent={pendingApprovalContent}
+                                />
+                            )}
+                            {latestTextSeg ? (
+                                <Box className={styles.streamPart}>
+                                    {finalAnswerMd}
+                                </Box>
+                            ) : null}
+                            {showFinishingUp && (
+                                <TypingDots label="Finishing up" />
+                            )}
+                        </Stack>
+                    );
+                }
+
+                // Fallback (page reload, no streamingState): activity card ON
+                // TOP showing what the agent did + reasoning folded in, then
+                // the final markdown answer below as the hero.
+                const renderableToolCalls = message.toolCalls.filter(
+                    (tc) =>
+                        tc.toolName !== 'improveContext' &&
+                        tc.toolName !== 'proposeChange' &&
+                        // Subagent children render nested under their parent's row, not as top-level siblings.
+                        tc.parentToolCallId === null,
+                );
+                const persistedToolGroups: LiveActivityToolGroup[] =
+                    groupPersistedToolCalls(renderableToolCalls);
+                return (
+                    <>
+                        <ImproveContextToolCall
+                            projectUuid={projectUuid}
+                            agentUuid={agentUuid}
+                            threadUuid={message.threadUuid}
+                            promptUuid={message.uuid}
+                        />
+                        {persistedToolGroups.length > 0 && (
+                            <LiveActivityCard
+                                toolGroups={persistedToolGroups}
+                                isLive={isStreaming || isPending}
+                                toolResults={message.toolResults}
+                                toolCalls={message.toolCalls}
+                                mcpServers={mcpServers}
+                            />
+                        )}
+                        {message.reasoning && message.reasoning.length > 0 && (
+                            <ReasoningHistoryRow
+                                texts={toReasoningTexts(
+                                    message.reasoning,
+                                    undefined,
+                                )}
+                                isLive={false}
+                            />
+                        )}
+                        {messageContent.length > 0 ? (
+                            <Box
+                                className={styles.aiMarkdown}
+                                style={{ ...mdStyle, paddingBlock: '0.5rem' }}
+                            >
+                                <Streamdown
+                                    parseIncompleteMarkdown
+                                    controls={false}
+                                    animated
+                                    mode="static"
+                                    remarkPlugins={[remarkGfm, remarkEmoji]}
+                                    rehypePlugins={[rehypeAiAgentContentLinks]}
+                                    plugins={markdownPlugins}
+                                    components={{
+                                        a: ({ node, children, ...props }) => {
+                                            const contentType =
+                                                'data-content-type' in props &&
+                                                typeof props[
+                                                    'data-content-type'
+                                                ] === 'string'
+                                                    ? props['data-content-type']
+                                                    : undefined;
+
+                                            return (
+                                                <ContentLink
+                                                    contentType={contentType}
+                                                    props={props}
+                                                    message={message}
+                                                    projectUuid={projectUuid}
+                                                    agentUuid={agentUuid}
+                                                    sqlRunnerLinkState={
+                                                        sqlRunnerLinkState
+                                                    }
+                                                >
+                                                    {children}
+                                                </ContentLink>
+                                            );
+                                        },
+                                    }}
+                                >
+                                    {messageContent}
+                                </Streamdown>
+                            </Box>
+                        ) : null}
+                    </>
+                );
+            })()}
+            {/* TypingDots fill the gap until the first visible output lands —
+             *  any tool call or text part. Reasoning alone doesn't count: it
+             *  collapses by default and would otherwise leave the bubble silent.
+             *  Once a part exists, the bento + rolling preview take over. */}
+            {(isStreaming || (isPending && !streamingError)) &&
+                (streamingState?.parts?.length ?? 0) === 0 && <TypingDots />}
             {proposeChangeToolCall && (
                 <AiProposeChangeToolCall
                     change={proposeChangeToolCall.change}
@@ -250,6 +772,7 @@ type Props = {
     onAddToEvals?: (promptUuid: string) => void;
     renderArtifactsInline?: boolean;
     showAddToEvalsButton?: boolean;
+    mcpServers?: AiMcpServer[];
 };
 
 export const AssistantBubble: FC<Props> = memo(
@@ -262,6 +785,7 @@ export const AssistantBubble: FC<Props> = memo(
         onAddToEvals,
         renderArtifactsInline = false,
         showAddToEvalsButton = false,
+        mcpServers,
     }) => {
         const artifact = useAiAgentStoreSelector(
             (state) => state.aiArtifact.artifact,
@@ -334,8 +858,10 @@ export const AssistantBubble: FC<Props> = memo(
                 message.uuid,
             ) || isPending;
 
-        const isArtifactAvailable =
-            !!(message.artifacts && message.artifacts.length > 0) && !isPending;
+        // status flips to 'idle' only at stream end; artifacts land earlier.
+        const isArtifactAvailable = !!(
+            message.artifacts && message.artifacts.length > 0
+        );
 
         return (
             <Stack
@@ -352,6 +878,7 @@ export const AssistantBubble: FC<Props> = memo(
                     message={message}
                     projectUuid={projectUuid}
                     agentUuid={agentUuid}
+                    mcpServers={mcpServers}
                 />
 
                 {isArtifactAvailable && projectUuid && agentUuid && (
@@ -372,12 +899,13 @@ export const AssistantBubble: FC<Props> = memo(
                                   <AiArtifactButton
                                       key={`${messageArtifact.artifactUuid}-${messageArtifact.versionUuid}`}
                                       onClick={() => {
-                                          if (
+                                          const isThisArtifactOpen =
                                               artifact?.artifactUuid ===
                                                   messageArtifact.artifactUuid &&
                                               artifact?.versionUuid ===
-                                                  messageArtifact.versionUuid
-                                          ) {
+                                                  messageArtifact.versionUuid;
+                                          if (isThisArtifactOpen) {
+                                              dispatch(clearArtifact());
                                               return;
                                           }
                                           dispatch(

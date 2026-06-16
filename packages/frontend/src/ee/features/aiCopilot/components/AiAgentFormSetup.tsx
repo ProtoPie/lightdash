@@ -21,7 +21,7 @@ import {
     Title,
     Tooltip,
 } from '@mantine-8/core';
-import type { useForm } from '@mantine/form';
+import { type useForm } from '@mantine/form';
 import { useDisclosure } from '@mantine/hooks';
 import {
     IconAdjustmentsAlt,
@@ -48,10 +48,9 @@ import { UserAccessMultiSelect } from '../../../components/UserAccessMultiSelect
 import AiExploreAccessTree from '../../../pages/AiAgents/AiExploreAccessTree';
 import { useDeleteAiAgentMutation } from '../hooks/useProjectAiAgents';
 import { useGetAgentExploreAccessSummary } from '../hooks/useUserAgentPreferences';
-import {
-    InstructionsGuidelines,
-    InstructionsTemplates,
-} from './InstructionsSupport';
+import { AiAgentKnowledgeFilesSection } from './AiAgentKnowledgeFilesSection';
+import { AiAgentMcpServersInput } from './AiAgentMcpServersInput';
+import { InstructionsGuidelines } from './InstructionsSupport';
 import { SpaceAccessSelect } from './SpaceAccessSelect';
 
 const formSchema = z.object({
@@ -69,6 +68,7 @@ const formSchema = z.object({
     groupAccess: z.array(z.string()),
     userAccess: z.array(z.string()),
     spaceAccess: z.array(z.string()),
+    mcpServerUuids: z.array(z.string()),
     enableDataAccess: z.boolean(),
     enableSelfImprovement: z.boolean(),
     version: z.number(),
@@ -79,11 +79,15 @@ export const AiAgentFormSetup = ({
     form,
     projectUuid,
     agentUuid,
+    isSavingAgent,
+    persistedMcpServerUuids,
 }: {
     mode: 'create' | 'edit';
     form: ReturnType<typeof useForm<z.infer<typeof formSchema>>>;
     projectUuid: string;
-    agentUuid: string;
+    agentUuid?: string;
+    isSavingAgent?: boolean;
+    persistedMcpServerUuids?: string[];
 }) => {
     const { data: project } = useProject(projectUuid);
     const exploreAccessSummaryQuery = useGetAgentExploreAccessSummary(
@@ -253,27 +257,6 @@ export const AiAgentFormSetup = ({
                                 </Text>
                             </Stack>
                             <Stack gap="sm">
-                                <Title
-                                    order={6}
-                                    c="ldGray.7"
-                                    size="sm"
-                                    fw={500}
-                                >
-                                    Quick Templates
-                                </Title>
-
-                                <InstructionsTemplates
-                                    onSelect={(instruction: string) => {
-                                        form.setFieldValue(
-                                            'instruction',
-                                            form.values.instruction
-                                                ? `${form.values.instruction}\n\n${instruction}`
-                                                : instruction,
-                                        );
-                                    }}
-                                />
-                            </Stack>
-                            <Stack gap="sm">
                                 <Box>
                                     <Title
                                         order={6}
@@ -301,6 +284,28 @@ export const AiAgentFormSetup = ({
                                     to learn more about instructions and how
                                     they work.
                                 </Text>
+                            </Stack>
+                            {agentUuid && (
+                                <AiAgentKnowledgeFilesSection
+                                    agentUuid={agentUuid}
+                                    projectUuid={projectUuid}
+                                />
+                            )}
+                            <Stack gap="sm">
+                                <Box>
+                                    <Title
+                                        order={6}
+                                        c="ldGray.7"
+                                        size="sm"
+                                        fw={500}
+                                    >
+                                        Configuration
+                                    </Title>
+                                    <Text c="dimmed" size="xs">
+                                        Control how this agent interacts with
+                                        your data and semantic layer.
+                                    </Text>
+                                </Box>
                             </Stack>
                             <Switch
                                 variant="subtle"
@@ -401,6 +406,17 @@ export const AiAgentFormSetup = ({
                             />
                         </Stack>
                     </Paper>
+
+                    <AiAgentMcpServersInput
+                        agentUuid={agentUuid}
+                        isSavingAgent={isSavingAgent}
+                        persistedMcpServerUuids={persistedMcpServerUuids}
+                        projectUuid={projectUuid}
+                        value={form.values.mcpServerUuids}
+                        onChange={(value) => {
+                            form.setFieldValue('mcpServerUuids', value);
+                        }}
+                    />
 
                     <Paper p="xl">
                         <Group align="center" gap="xs" mb="md">
