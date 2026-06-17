@@ -18,6 +18,7 @@ import {
 import { IconArrowLeft } from '@tabler/icons-react';
 import { useCallback, useMemo } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
+import Callout from '../components/common/Callout';
 import MantineIcon from '../components/common/MantineIcon';
 import EChartsReact, {
     type EChartsOption,
@@ -211,6 +212,33 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
     const { score, config, factors, eventUsage } = details.data;
     const dateFromValue = dateFrom ?? eventUsage.dateFrom;
     const dateToValue = dateTo ?? eventUsage.dateTo;
+    const { minSelectableDate, maxSelectableDate } = eventUsage;
+    // Native <input type="date"> enforces min/max in its picker but still lets
+    // users type out-of-range values, so we keep an explicit warning as a net.
+    const dateRangeWarning = ((): string | null => {
+        const toMs = (value: string) =>
+            new Date(`${value}T00:00:00.000Z`).getTime();
+        const dayMs = 24 * 60 * 60 * 1000;
+        const windowDays =
+            Math.round(
+                (toMs(maxSelectableDate) - toMs(minSelectableDate)) / dayMs,
+            ) + 1;
+        if (dateFromValue > dateToValue) {
+            return 'Start date must be on or before the end date.';
+        }
+        if (
+            dateFromValue < minSelectableDate ||
+            dateToValue > maxSelectableDate
+        ) {
+            return `Only the most recent ${windowDays} days are available. Pick dates between ${minSelectableDate} and ${maxSelectableDate}.`;
+        }
+        const spanDays =
+            Math.round((toMs(dateToValue) - toMs(dateFromValue)) / dayMs) + 1;
+        if (spanDays > windowDays) {
+            return `You can view at most ${windowDays} days of event usage at a time.`;
+        }
+        return null;
+    })();
     const topEventCount = Math.max(
         ...eventUsage.events.map((event) => event.eventCount),
         1,
@@ -426,6 +454,8 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                                     label="From"
                                     type="date"
                                     value={dateFromValue}
+                                    min={minSelectableDate}
+                                    max={dateToValue}
                                     onChange={(event) =>
                                         updateDateFilter(
                                             'dateFrom',
@@ -437,6 +467,8 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                                     label="To"
                                     type="date"
                                     value={dateToValue}
+                                    min={dateFromValue}
+                                    max={maxSelectableDate}
                                     onChange={(event) =>
                                         updateDateFilter(
                                             'dateTo',
@@ -455,6 +487,10 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                             </Group>
                         </Stack>
                     </Group>
+
+                    {dateRangeWarning && (
+                        <Callout variant="warning">{dateRangeWarning}</Callout>
+                    )}
 
                     {eventUsage.totalEvents > 0 && chartOption ? (
                         <EChartsReact

@@ -75,6 +75,8 @@ type ChurnScoreAccountEventUsageRow = {
 type ChurnScoreEventUsageDateRange = {
     dateFrom: string;
     dateTo: string;
+    minSelectableDate: string;
+    maxSelectableDate: string;
 };
 
 export class ChurnScoreService extends BaseService {
@@ -497,12 +499,9 @@ export class ChurnScoreService extends BaseService {
             accountUrl: score.cloudUrl ?? trimmedAccountKey,
             config,
             factors,
-            dateRange: ChurnScoreService.resolveEventUsageDateRange({
-                scoredForDate: score.scoredForDate,
-                lookbackDays: config.lookbackDays,
-                dateFrom,
-                dateTo,
-            }),
+            scoredForDate: score.scoredForDate,
+            dateFrom,
+            dateTo,
         });
 
         return {
@@ -835,13 +834,17 @@ export class ChurnScoreService extends BaseService {
         accountUrl,
         config,
         factors,
-        dateRange,
+        scoredForDate,
+        dateFrom,
+        dateTo,
     }: {
         projectUuid: string;
         accountUrl: string;
         config: ProtopieChurnScoreConfigRecord;
         factors: ProtopieChurnScoreFactorRecord[];
-        dateRange: ChurnScoreEventUsageDateRange;
+        scoredForDate: string;
+        dateFrom?: string;
+        dateTo?: string;
     }): Promise<Protopie.ChurnScoreAccountEventUsage> {
         const selectedEventNames = Array.from(
             new Set(
@@ -853,29 +856,58 @@ export class ChurnScoreService extends BaseService {
             ),
         ).filter(Boolean);
 
-        if (selectedEventNames.length === 0) {
-            return {
-                lookbackDays: config.lookbackDays,
-                dateFrom: dateRange.dateFrom,
-                dateTo: dateRange.dateTo,
-                totalEvents: 0,
-                selectedEventNames,
-                events: [],
-                daily: [],
-            };
-        }
-
         const credentials =
             await this.projectModel.getWarehouseCredentialsForProject(
                 projectUuid,
             );
         const schema = ChurnScoreService.getWarehouseSchema(credentials);
-        const values = [accountUrl, dateRange.dateFrom, dateRange.dateTo];
-        const eventPlaceholders = selectedEventNames.map((eventName) => {
-            values.push(eventName);
-            return `$${values.length}`;
-        });
-        const sql = `
+        const { warehouseClient, sshTunnel } =
+            await this.projectService._getWarehouseClient(
+                projectUuid,
+                credentials,
+            );
+
+        try {
+            // Selectable bounds are anchored to the mart-wide latest event_date
+            // (across all accounts), not this account's data or the score date.
+            const martMaxResult = await warehouseClient.runQuery(
+                `SELECT max(event_date) AS mart_max FROM ${schema}.protopie_account_event_usage`,
+                {
+                    project_uuid: projectUuid,
+                    query_context: QueryExecutionContext.API,
+                },
+                credentials.dataTimezone,
+                [],
+            );
+            const martMaxRaw = (
+                martMaxResult.rows[0] as
+                    | { mart_max?: Date | string | null }
+                    | undefined
+            )?.mart_max;
+            const martMax = martMaxRaw
+                ? ChurnScoreService.toDateString(martMaxRaw)
+                : scoredForDate;
+            const dateRange = ChurnScoreService.resolveEventUsageDateRange({
+                martMax,
+                dateFrom,
+                dateTo,
+            });
+
+            if (selectedEventNames.length === 0) {
+                return ChurnScoreService.toAccountEventUsage({
+                    lookbackDays: config.lookbackDays,
+                    dateRange,
+                    selectedEventNames,
+                    rows: [],
+                });
+            }
+
+            const values = [accountUrl, dateRange.dateFrom, dateRange.dateTo];
+            const eventPlaceholders = selectedEventNames.map((eventName) => {
+                values.push(eventName);
+                return `$${values.length}`;
+            });
+            const sql = `
             WITH account_usage AS (
                 SELECT
                     event_date,
@@ -923,13 +955,6 @@ export class ChurnScoreService extends BaseService {
                 ON d.event_name = s.event_name
             ORDER BY d.event_date, d.event_name
         `;
-        const { warehouseClient, sshTunnel } =
-            await this.projectService._getWarehouseClient(
-                projectUuid,
-                credentials,
-            );
-
-        try {
             const results = await warehouseClient.runQuery(
                 sql,
                 {
@@ -1110,48 +1135,56 @@ export class ChurnScoreService extends BaseService {
     }
 
     private static resolveEventUsageDateRange({
-        scoredForDate,
-        lookbackDays,
+        martMax,
         dateFrom,
         dateTo,
     }: {
-        scoredForDate: string;
-        lookbackDays: number;
+        martMax: string;
         dateFrom?: string;
         dateTo?: string;
     }): ChurnScoreEventUsageDateRange {
-        const resolvedDateTo = dateTo?.trim() || scoredForDate;
-        ChurnScoreService.validateDateString(resolvedDateTo, 'dateTo');
+        ChurnScoreService.validateDateString(martMax, 'martMax');
+        // The selectable window is the most recent N days of the mart, anchored
+        // to its latest event_date across all accounts.
+        const maxSelectableDate = martMax;
+        const minSelectableDate = ChurnScoreService.addDays(
+            martMax,
+            -(Protopie.CHURN_SCORE_EVENT_USAGE_WINDOW_DAYS - 1),
+        );
 
-        const resolvedDateFrom =
-            dateFrom?.trim() ||
-            ChurnScoreService.addDays(
-                resolvedDateTo,
-                -(Math.max(Math.floor(lookbackDays), 1) - 1),
-            );
+        const resolvedDateTo = dateTo?.trim() || maxSelectableDate;
+        ChurnScoreService.validateDateString(resolvedDateTo, 'dateTo');
+        const resolvedDateFrom = dateFrom?.trim() || minSelectableDate;
         ChurnScoreService.validateDateString(resolvedDateFrom, 'dateFrom');
 
-        const fromDate = new Date(`${resolvedDateFrom}T00:00:00.000Z`);
-        const toDate = new Date(`${resolvedDateTo}T00:00:00.000Z`);
-        if (fromDate > toDate) {
+        // Validated YYYY-MM-DD strings compare chronologically as strings.
+        if (
+            resolvedDateFrom < minSelectableDate ||
+            resolvedDateFrom > maxSelectableDate
+        ) {
             throw new ParameterError(
-                'dateFrom must be before or equal to dateTo.',
+                `dateFrom must be between ${minSelectableDate} and ${maxSelectableDate}.`,
             );
         }
-
-        const days =
-            Math.floor(
-                (toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000),
-            ) + 1;
-        if (days > 366) {
+        if (
+            resolvedDateTo < minSelectableDate ||
+            resolvedDateTo > maxSelectableDate
+        ) {
             throw new ParameterError(
-                'Event usage date range cannot exceed 366 days.',
+                `dateTo must be between ${minSelectableDate} and ${maxSelectableDate}.`,
+            );
+        }
+        if (resolvedDateFrom > resolvedDateTo) {
+            throw new ParameterError(
+                'dateFrom must be before or equal to dateTo.',
             );
         }
 
         return {
             dateFrom: resolvedDateFrom,
             dateTo: resolvedDateTo,
+            minSelectableDate,
+            maxSelectableDate,
         };
     }
 
@@ -1274,6 +1307,8 @@ export class ChurnScoreService extends BaseService {
             lookbackDays,
             dateFrom: dateRange.dateFrom,
             dateTo: dateRange.dateTo,
+            minSelectableDate: dateRange.minSelectableDate,
+            maxSelectableDate: dateRange.maxSelectableDate,
             totalEvents,
             selectedEventNames,
             events: eventSummaries,

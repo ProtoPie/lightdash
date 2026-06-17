@@ -168,6 +168,13 @@ export type ChurnScoreAccountEventUsage = {
     lookbackDays: number;
     dateFrom: string;
     dateTo: string;
+    /**
+     * Inclusive bounds of the selectable date window for this account's Event
+     * usage explorer, derived from the mart-wide latest `event_date` and the
+     * 90-day window. The UI clamps the date pickers to this range.
+     */
+    minSelectableDate: string;
+    maxSelectableDate: string;
     totalEvents: number;
     selectedEventNames: string[];
     events: ChurnScoreAccountEventSummary[];

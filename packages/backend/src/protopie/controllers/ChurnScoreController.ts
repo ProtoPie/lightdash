@@ -87,6 +87,8 @@ type ApiChurnScoreAccountEventUsage = {
     lookbackDays: number;
     dateFrom: string;
     dateTo: string;
+    minSelectableDate: string;
+    maxSelectableDate: string;
     totalEvents: number;
     selectedEventNames: string[];
     events: ApiChurnScoreAccountEventSummary[];
