@@ -35,7 +35,8 @@ module "lightdash_db" {
   port                        = local.envs["PGPORT"]
 
   iam_database_authentication_enabled = true
-  skip_final_snapshot                 = true
+  skip_final_snapshot                 = false
+  deletion_protection                 = true
   vpc_security_group_ids              = [aws_security_group.database_sg.id]
 
   # maintenance_window = "Mon:00:00-Mon:03:00"
