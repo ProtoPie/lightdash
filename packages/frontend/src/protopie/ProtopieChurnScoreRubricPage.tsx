@@ -10,6 +10,7 @@ import {
     Loader,
     MultiSelect,
     NumberInput,
+    SegmentedControl,
     Select,
     Stack,
     Table,
@@ -104,6 +105,8 @@ const rubricLabels = {
     aggregation:
         'How the backend calculates actual before scoring: percent of users with selected events, total event count, events per user, or active days.',
     events: 'Product event names included in this factor. Selected events are combined with OR. Active days ignores this list and counts distinct event dates.',
+    scoreFunction:
+        'How points are awarded. Stepwise (ChurnZero parity) gives integer point buckets per factor (e.g. 51%+ = full points, 26-50% = 66%, 1-25% = 33%); buckets are generated from each factor weight on save. Linear gives proportional partial credit: min(actual / goal, 1) * weight.',
     actions:
         'Remove this factor from the rubric. After removing factors, the remaining weights still must total 100.',
 };
@@ -122,6 +125,31 @@ const toFactorInput = (
     windowDays: factor.windowDays ?? null,
     sortOrder: factor.sortOrder,
 });
+
+const scoreFunctionOptions = [
+    { value: 'stepwise', label: 'Stepwise (ChurnZero)' },
+    { value: 'linear', label: 'Linear' },
+];
+
+// ChurnZero parity uses integer step buckets. When a config is saved as
+// stepwise, regenerate every factor's bucket from its current weight +
+// aggregation so the allocation always matches the weights (and passes the
+// backend's stepwise validation, which requires stepThresholds).
+const withDerivedBuckets = (
+    factors: Protopie.ChurnScoreFactorInput[],
+    scoreFunction: Protopie.ChurnScoreFunction,
+): Protopie.ChurnScoreFactorInput[] =>
+    scoreFunction === 'stepwise'
+        ? factors.map((factor) => ({
+              ...factor,
+              stepThresholds: Protopie.deriveStepThresholds(
+                  factor.aggregation,
+                  factor.maxPoints,
+                  factor.goalValue,
+                  factor.factorKey,
+              ),
+          }))
+        : factors;
 
 const ProtopieChurnScoreRubricPage = () => {
     const projectUuid = useProjectUuid();
@@ -149,6 +177,8 @@ const ProtopieChurnScoreRubricPage = () => {
     const [lookbackDays, setLookbackDays] = useState(90);
     const [lowThreshold, setLowThreshold] = useState(0.75);
     const [mediumThreshold, setMediumThreshold] = useState(0.5);
+    const [scoreFunction, setScoreFunction] =
+        useState<Protopie.ChurnScoreFunction>('stepwise');
     const [factors, setFactors] = useState<Protopie.ChurnScoreFactorInput[]>(
         [],
     );
@@ -163,6 +193,7 @@ const ProtopieChurnScoreRubricPage = () => {
         setLookbackDays(configQuery.data.config.lookbackDays);
         setLowThreshold(configQuery.data.config.riskBandThresholds.low);
         setMediumThreshold(configQuery.data.config.riskBandThresholds.medium);
+        setScoreFunction(configQuery.data.config.scoreFunction);
         setFactors(configQuery.data.factors.map(toFactorInput));
     }, [configQuery.data]);
 
@@ -360,12 +391,12 @@ const ProtopieChurnScoreRubricPage = () => {
         updateConfig.mutate({
             name,
             lookbackDays,
-            scoreFunction: 'linear',
+            scoreFunction,
             riskBandThresholds: {
                 low: lowThreshold,
                 medium: mediumThreshold,
             },
-            factors,
+            factors: withDerivedBuckets(factors, scoreFunction),
         });
     };
 
@@ -378,12 +409,12 @@ const ProtopieChurnScoreRubricPage = () => {
             {
                 name: trimmedNewRubricName,
                 lookbackDays,
-                scoreFunction: 'linear',
+                scoreFunction,
                 riskBandThresholds: {
                     low: lowThreshold,
                     medium: mediumThreshold,
                 },
-                factors,
+                factors: withDerivedBuckets(factors, scoreFunction),
             },
             {
                 onSuccess: (response) => {
@@ -549,6 +580,30 @@ const ProtopieChurnScoreRubricPage = () => {
                         />
                     </Group>
 
+                    <Stack gap={4}>
+                        <RubricHelpLabel
+                            label="Scoring method"
+                            description={rubricLabels.scoreFunction}
+                        />
+                        <SegmentedControl
+                            w="fit-content"
+                            data={scoreFunctionOptions}
+                            value={scoreFunction}
+                            onChange={(value) =>
+                                setScoreFunction(
+                                    value as Protopie.ChurnScoreFunction,
+                                )
+                            }
+                        />
+                        {scoreFunction === 'stepwise' && (
+                            <Text size="xs" c="dimmed">
+                                ChurnZero-style integer point buckets are
+                                generated from each factor&apos;s weight on
+                                save.
+                            </Text>
+                        )}
+                    </Stack>
+
                     <Group justify="flex-end">
                         <Button
                             variant="default"
@@ -637,6 +692,30 @@ const ProtopieChurnScoreRubricPage = () => {
                                                     })
                                                 }
                                             />
+                                            {scoreFunction === 'stepwise' && (
+                                                <Tooltip
+                                                    withinPortal
+                                                    label="Stepwise point buckets (top→bottom): full / 66% / 33% / 0"
+                                                >
+                                                    <Text
+                                                        size="xs"
+                                                        c="dimmed"
+                                                        mt={4}
+                                                    >
+                                                        {Protopie.deriveStepThresholds(
+                                                            factor.aggregation,
+                                                            factor.maxPoints,
+                                                            factor.goalValue,
+                                                            factor.factorKey,
+                                                        )
+                                                            .ranges.map(
+                                                                (range) =>
+                                                                    range.points,
+                                                            )
+                                                            .join(' · ')}
+                                                    </Text>
+                                                </Tooltip>
+                                            )}
                                         </Table.Td>
                                         <Table.Td>
                                             <NumberInput

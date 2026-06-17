@@ -1,8 +1,21 @@
-import { type ChurnScoreFactorInput, type ChurnScoreFunction } from './types';
+import assertUnreachable from '../../utils/assertUnreachable';
+import {
+    type ChurnScoreAggregation,
+    type ChurnScoreFactorInput,
+    type ChurnScoreFunction,
+    type ChurnScoreStepThresholds,
+} from './types';
 
 export const DEFAULT_CHURN_SCORE_CONFIG_NAME = 'Default Churn Score';
 
 export const DEFAULT_CHURN_SCORE_LOOKBACK_DAYS = 90;
+
+/**
+ * Width of the Event usage explorer's selectable date window, anchored to the
+ * mart-wide latest `event_date` (NOT per-account, NOT the rubric lookback).
+ * Sales can only browse the most recent 90 days of `protopie_account_event_usage`.
+ */
+export const CHURN_SCORE_EVENT_USAGE_WINDOW_DAYS = 90;
 
 /**
  * Scoring function for the default rubric. ChurnZero parity uses integer
@@ -15,6 +28,13 @@ export const DEFAULT_CHURN_SCORE_FUNCTION: ChurnScoreFunction = 'stepwise';
  * factor over 120 days (all other factors use 90).
  */
 export const ACTIVATED_FACTOR_WINDOW_DAYS = 120;
+
+/**
+ * Factor key of the `% activated/logged-in` factor. ChurnZero scores this one
+ * with a special 2-step bucket (51+%→100%, 1-50%→50%), unlike the standard
+ * 4-step percentage bucket, so `deriveStepThresholds` special-cases it.
+ */
+export const ACTIVATED_FACTOR_KEY = 'pct_activated_logged_in_users';
 
 /**
  * Risk-band cutoffs on the engagement-health fraction (scorePercent, 0-1).
@@ -41,6 +61,18 @@ const pctRanges = (max: number) => ({
 });
 
 /**
+ * ChurnZero "% activated/logged-in" special 2-step bucket:
+ * 51+%→100%, 1-50%→50%, 0→0 (no 26-50 / 1-25 split).
+ */
+const activatedRanges = (max: number): ChurnScoreStepThresholds => ({
+    ranges: [
+        { bottom: 51, top: null, points: max },
+        { bottom: 1, top: 50, points: Math.ceil(max * 0.5) },
+        { bottom: 0, top: 0, points: 0 },
+    ],
+});
+
+/**
  * Standard ChurnZero "per user" bucket (count per user):
  * 21+→100%, 11-20→66%, 1-10→33%, 0→0 (ceil rounding, as above).
  */
@@ -52,6 +84,68 @@ const perUserRanges = (max: number) => ({
         { bottom: 0, top: 0, points: 0 },
     ],
 });
+
+/**
+ * ChurnZero "Active Days" bucket: 11+→100%, 6-10→66%, 1-5→33%, 0→0.
+ */
+const activeDaysRanges = (max: number): ChurnScoreStepThresholds => ({
+    ranges: [
+        { bottom: 11, top: null, points: max },
+        { bottom: 6, top: 10, points: Math.ceil(max * 0.66) },
+        { bottom: 1, top: 5, points: Math.ceil(max * 0.33) },
+        { bottom: 0, top: 0, points: 0 },
+    ],
+});
+
+/**
+ * Raw event-count bucket scaled to the factor goal (ChurnZero "Messages"
+ * style): goal+→100%, 1..goal-1→50%, 0→0.
+ */
+const countRanges = (
+    max: number,
+    goalValue: number,
+): ChurnScoreStepThresholds => {
+    const goal = Math.max(1, Math.round(goalValue));
+    return {
+        ranges: [
+            { bottom: goal, top: null, points: max },
+            { bottom: 1, top: goal - 1, points: Math.ceil(max * 0.5) },
+            { bottom: 0, top: 0, points: 0 },
+        ],
+    };
+};
+
+/**
+ * Derives ChurnZero-style step buckets for a factor from its aggregation,
+ * weight (`maxPoints`) and goal. The rubric editor calls this when a config is
+ * saved as `stepwise` so the buckets always match the current weights — the
+ * percent/per-user/days breakpoints mirror the ChurnZero rubric exactly.
+ */
+export const deriveStepThresholds = (
+    aggregation: ChurnScoreAggregation,
+    maxPoints: number,
+    goalValue: number,
+    factorKey?: string,
+): ChurnScoreStepThresholds => {
+    if (factorKey === ACTIVATED_FACTOR_KEY) {
+        return activatedRanges(maxPoints);
+    }
+    switch (aggregation) {
+        case 'pct_users_with_event':
+            return pctRanges(maxPoints);
+        case 'event_count_per_user':
+            return perUserRanges(maxPoints);
+        case 'active_days':
+            return activeDaysRanges(maxPoints);
+        case 'event_count':
+            return countRanges(maxPoints, goalValue);
+        default:
+            return assertUnreachable(
+                aggregation,
+                `Unknown churn score aggregation: ${aggregation}`,
+            );
+    }
+};
 
 export const DEFAULT_CHURN_SCORE_FACTORS: ChurnScoreFactorInput[] = [
     {
