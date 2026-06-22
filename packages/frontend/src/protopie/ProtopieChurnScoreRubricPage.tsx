@@ -19,27 +19,31 @@ import {
     Title,
     Tooltip,
 } from '@mantine-8/core';
-import { useDebouncedValue } from '@mantine-8/hooks';
+import { useDebouncedValue, useDisclosure } from '@mantine-8/hooks';
 import {
     IconCalculator,
     IconDeviceFloppy,
     IconHelpCircle,
     IconHistory,
+    IconPencil,
     IconPlus,
     IconRefresh,
     IconTrash,
 } from '@tabler/icons-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import MantineIcon from '../components/common/MantineIcon';
+import MantineModal from '../components/common/MantineModal';
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import useApp from '../providers/App/useApp';
 import {
+    useDeleteProtopieChurnConfig,
     useProtopieChurnConfig,
     useProtopieChurnConfigs,
     useProtopieChurnEvents,
     useProtopieChurnConfigVersions,
     useProtopieChurnRun,
     useRecomputeProtopieChurnScore,
+    useRenameProtopieChurnConfig,
     useRestoreProtopieChurnConfigVersion,
     useUpdateProtopieChurnConfig,
 } from './api';
@@ -170,9 +174,15 @@ const ProtopieChurnScoreRubricPage = () => {
     });
     const updateConfig = useUpdateProtopieChurnConfig(projectUuid);
     const restoreVersion = useRestoreProtopieChurnConfigVersion(projectUuid);
+    const deleteConfig = useDeleteProtopieChurnConfig(projectUuid);
+    const renameConfig = useRenameProtopieChurnConfig(projectUuid);
     const recompute = useRecomputeProtopieChurnScore(projectUuid);
     const [runUuid, setRunUuid] = useState<string | undefined>();
     const runQuery = useProtopieChurnRun({ projectUuid, runUuid });
+
+    const [deleteModalOpened, deleteModal] = useDisclosure(false);
+    const [renameModalOpened, renameModal] = useDisclosure(false);
+    const [renameValue, setRenameValue] = useState('');
 
     const [lookbackDays, setLookbackDays] = useState(90);
     const [lowThreshold, setLowThreshold] = useState(0.75);
@@ -187,15 +197,33 @@ const ProtopieChurnScoreRubricPage = () => {
         null,
     );
 
+    const applyConfigToState = useCallback(
+        (data: Protopie.ChurnScoreConfigWithFactors) => {
+            setLookbackDays(data.config.lookbackDays);
+            setLowThreshold(data.config.riskBandThresholds.low);
+            setMediumThreshold(data.config.riskBandThresholds.medium);
+            setScoreFunction(data.config.scoreFunction);
+            setFactors(data.factors.map(toFactorInput));
+        },
+        [],
+    );
+
     useEffect(() => {
         if (!configQuery.data) return;
 
-        setLookbackDays(configQuery.data.config.lookbackDays);
-        setLowThreshold(configQuery.data.config.riskBandThresholds.low);
-        setMediumThreshold(configQuery.data.config.riskBandThresholds.medium);
-        setScoreFunction(configQuery.data.config.scoreFunction);
-        setFactors(configQuery.data.factors.map(toFactorInput));
-    }, [configQuery.data]);
+        applyConfigToState(configQuery.data);
+    }, [configQuery.data, applyConfigToState]);
+
+    // Reset reads the already-cached server config directly. We can't rely on
+    // configQuery.refetch() here: React Query's structural sharing returns the
+    // same object reference when the server payload is unchanged (it always is,
+    // since only local edits changed), so the effect above never re-fires and
+    // the edits would persist.
+    const resetToConfig = () => {
+        if (configQuery.data) {
+            applyConfigToState(configQuery.data);
+        }
+    };
 
     useEffect(() => {
         if (recompute.data?.runUuid) {
@@ -383,6 +411,58 @@ const ProtopieChurnScoreRubricPage = () => {
         trimmedNewRubricName !== DEFAULT_CONFIG_NAME &&
         !visibleRubricNameExists;
 
+    const canManageRubric = !isDefaultRubric && !defaultRubricBlocked;
+    const trimmedRenameValue = renameValue.trim();
+    const renameConflict = (configsQuery.data ?? []).some(
+        (config) =>
+            config.name.toLowerCase() === trimmedRenameValue.toLowerCase() &&
+            config.name !== name,
+    );
+    const canRename =
+        trimmedRenameValue.length > 0 &&
+        trimmedRenameValue !== DEFAULT_CONFIG_NAME &&
+        trimmedRenameValue !== name &&
+        !renameConflict;
+
+    const openRenameModal = () => {
+        setRenameValue(name);
+        renameModal.open();
+    };
+
+    const handleDelete = () => {
+        if (!canManageRubric) {
+            return;
+        }
+
+        deleteConfig.mutate(
+            { name },
+            {
+                onSuccess: () => {
+                    setSelectedConfigName(DEFAULT_CONFIG_NAME);
+                    setRestoreConfigUuid(null);
+                    deleteModal.close();
+                },
+            },
+        );
+    };
+
+    const handleRename = () => {
+        if (!canManageRubric || !canRename) {
+            return;
+        }
+
+        renameConfig.mutate(
+            { currentName: name, newName: trimmedRenameValue },
+            {
+                onSuccess: (response) => {
+                    setSelectedConfigName(response.config.name);
+                    setRenameValue('');
+                    renameModal.close();
+                },
+            },
+        );
+    };
+
     const handleSave = () => {
         if (rubricInvalid) {
             return;
@@ -521,6 +601,27 @@ const ProtopieChurnScoreRubricPage = () => {
                             Save edits as custom rubric
                         </Button>
                     </Group>
+
+                    {canManageRubric && (
+                        <Group gap="xs">
+                            <Button
+                                variant="default"
+                                leftSection={<MantineIcon icon={IconPencil} />}
+                                onClick={openRenameModal}
+                            >
+                                Rename rubric
+                            </Button>
+                            <Button
+                                variant="outline"
+                                color="red"
+                                leftSection={<MantineIcon icon={IconTrash} />}
+                                loading={deleteConfig.isLoading}
+                                onClick={deleteModal.open}
+                            >
+                                Delete rubric
+                            </Button>
+                        </Group>
+                    )}
 
                     <Group grow align="flex-end">
                         <NumberInput
@@ -895,7 +996,7 @@ const ProtopieChurnScoreRubricPage = () => {
                         <Button
                             variant="default"
                             leftSection={<MantineIcon icon={IconRefresh} />}
-                            onClick={() => void configQuery.refetch()}
+                            onClick={resetToConfig}
                         >
                             Reset unsaved changes
                         </Button>
@@ -927,6 +1028,49 @@ const ProtopieChurnScoreRubricPage = () => {
                     </Group>
                 </Stack>
             </Card>
+
+            <MantineModal
+                opened={deleteModalOpened}
+                onClose={deleteModal.close}
+                title="Delete rubric"
+                variant="delete"
+                resourceType="churn score rubric"
+                resourceLabel={name}
+                confirmLoading={deleteConfig.isLoading}
+                onConfirm={handleDelete}
+            >
+                <Text size="sm">
+                    All versions of this rubric will be removed from the editor.
+                    Existing churn scores already computed with it are kept for
+                    history and stay accessible from dashboards.
+                </Text>
+            </MantineModal>
+
+            <MantineModal
+                opened={renameModalOpened}
+                onClose={renameModal.close}
+                title="Rename rubric"
+                confirmLabel="Rename"
+                confirmDisabled={!canRename}
+                confirmLoading={renameConfig.isLoading}
+                onConfirm={handleRename}
+            >
+                <TextInput
+                    label="New rubric name"
+                    placeholder="Example: EMEA renewal rubric"
+                    value={renameValue}
+                    error={
+                        renameConflict
+                            ? 'Name already exists'
+                            : trimmedRenameValue === DEFAULT_CONFIG_NAME
+                              ? 'Reserved name'
+                              : undefined
+                    }
+                    onChange={(event) =>
+                        setRenameValue(event.currentTarget.value)
+                    }
+                />
+            </MantineModal>
         </Stack>
     );
 };

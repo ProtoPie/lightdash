@@ -371,7 +371,7 @@
             },
             "ChurnScoreConfigStatus": {
                 "type": "string",
-                "enum": ["draft", "active", "archived"]
+                "enum": ["draft", "active", "archived", "deleted"]
             },
             "ChurnScoreConfig": {
                 "properties": {
@@ -720,6 +720,43 @@
                     "scoreFunction",
                     "lookbackDays"
                 ],
+                "type": "object"
+            },
+            "ApiSuccess__deleted-true__": {
+                "properties": {
+                    "results": {
+                        "properties": {
+                            "deleted": {
+                                "type": "boolean",
+                                "enum": [true],
+                                "nullable": false
+                            }
+                        },
+                        "required": ["deleted"],
+                        "type": "object"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiChurnScoreConfigDeletedResponse": {
+                "$ref": "#/components/schemas/ApiSuccess__deleted-true__"
+            },
+            "RenameChurnScoreConfigInput": {
+                "properties": {
+                    "newName": {
+                        "type": "string"
+                    },
+                    "currentName": {
+                        "type": "string"
+                    }
+                },
+                "required": ["newName", "currentName"],
                 "type": "object"
             },
             "ApiSuccess__runUuid-string--status-queued__": {
@@ -33639,6 +33676,53 @@
                         }
                     }
                 }
+            },
+            "delete": {
+                "operationId": "DeleteProtopieChurnScoreConfig",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreConfigDeletedResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Soft-delete a churn score rubric (all versions). Historical scores are\npreserved; the rubric leaves the editor and active lookups.",
+                "summary": "Delete Protopie churn score rubric",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "name",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
             }
         },
         "/api/v1/projects/{projectUuid}/protopie/churn/configs": {
@@ -33778,6 +33862,57 @@
                         }
                     }
                 ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/config/rename": {
+            "put": {
+                "operationId": "RenameProtopieChurnScoreConfig",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreConfigResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Rename a churn score rubric (all versions). Scores key off configUuid, so\nthis is a label-only change.",
+                "summary": "Rename Protopie churn score rubric",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RenameChurnScoreConfigInput"
+                            }
+                        }
+                    }
+                }
             }
         },
         "/api/v1/projects/{projectUuid}/protopie/churn/recompute": {

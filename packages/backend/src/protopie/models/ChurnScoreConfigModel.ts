@@ -184,6 +184,90 @@ export class ChurnScoreConfigModel {
         return ChurnScoreConfigModel.toRecord(row);
     }
 
+    /**
+     * Soft-delete every version of a rubric (by name) in one project. Scores and
+     * runs that FK-reference these configs stay intact for audit; the rubric just
+     * leaves every active-status query. Returns the number of rows marked.
+     */
+    async softDeleteByName({
+        projectUuid,
+        name,
+        userUuid,
+        trx,
+    }: {
+        projectUuid: string;
+        name: string;
+        userUuid: string | null;
+        trx: Knex.Transaction;
+    }): Promise<number> {
+        return this.query(trx)
+            .where({
+                project_uuid: projectUuid,
+                name,
+            })
+            .whereNot('status', 'deleted')
+            .update({
+                status: 'deleted',
+                effective_to: trx.fn.now(),
+                updated_by_user_uuid: userUuid,
+                updated_at: trx.fn.now(),
+            });
+    }
+
+    /**
+     * Rename every version of a rubric. Scores key off config_uuid, not name, so
+     * this is a label-only change. Returns the number of rows updated.
+     */
+    async renameByName({
+        projectUuid,
+        currentName,
+        newName,
+        userUuid,
+        trx,
+    }: {
+        projectUuid: string;
+        currentName: string;
+        newName: string;
+        userUuid: string | null;
+        trx: Knex.Transaction;
+    }): Promise<number> {
+        return this.query(trx)
+            .where({
+                project_uuid: projectUuid,
+                name: currentName,
+            })
+            .update({
+                name: newName,
+                updated_by_user_uuid: userUuid,
+                updated_at: trx.fn.now(),
+            });
+    }
+
+    /**
+     * True if any row (any status, including deleted) already uses this name in
+     * the project. Rename collision guard: a deleted rubric still owns its
+     * (project, name, version) rows, so renaming onto that name would violate the
+     * unique index.
+     */
+    async nameExistsInAnyStatus({
+        projectUuid,
+        name,
+        trx,
+    }: {
+        projectUuid: string;
+        name: string;
+        trx?: Knex.Transaction;
+    }): Promise<boolean> {
+        const row = await this.query(trx)
+            .where({
+                project_uuid: projectUuid,
+                name,
+            })
+            .first();
+
+        return Boolean(row);
+    }
+
     private query(trx?: Queryable) {
         return (trx ?? this.database)<DbChurnScoreConfig>(
             ProtopieTableName.ChurnScoreConfigs,

@@ -12,7 +12,14 @@ export type ChurnScoreAggregation =
 
 export type ChurnScoreFunction = 'linear' | 'stepwise';
 
-export type ChurnScoreConfigStatus = 'draft' | 'active' | 'archived';
+export type ChurnScoreConfigStatus =
+    | 'draft'
+    | 'active'
+    | 'archived'
+    // Soft-delete marker. A deleted rubric keeps its rows (and the churn scores
+    // that FK-reference them) for audit/history, but is excluded from every
+    // active-status query so it disappears from the editor and name lookups.
+    | 'deleted';
 
 export type ChurnScoreRunStatus =
     | 'queued'
@@ -108,6 +115,11 @@ export type ChurnScoreConfigInput = {
     scoreFunction: ChurnScoreFunction;
     riskBandThresholds: ChurnScoreRiskBandThresholds;
     factors: ChurnScoreFactorInput[];
+};
+
+export type RenameChurnScoreConfigInput = {
+    currentName: string;
+    newName: string;
 };
 
 export type ChurnScoreFactorScore = {

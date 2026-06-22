@@ -541,6 +541,7 @@ const models: TsoaRoute.Models = {
                 { dataType: 'enum', enums: ['draft'] },
                 { dataType: 'enum', enums: ['active'] },
                 { dataType: 'enum', enums: ['archived'] },
+                { dataType: 'enum', enums: ['deleted'] },
             ],
             validators: {},
         },
@@ -845,6 +846,45 @@ const models: TsoaRoute.Models = {
                 scoreFunction: { ref: 'ChurnScoreFunction', required: true },
                 lookbackDays: { dataType: 'double', required: true },
                 name: { dataType: 'string' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'ApiSuccess__deleted-true__': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                results: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        deleted: {
+                            dataType: 'enum',
+                            enums: [true],
+                            required: true,
+                        },
+                    },
+                    required: true,
+                },
+                status: { dataType: 'enum', enums: ['ok'], required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiChurnScoreConfigDeletedResponse: {
+        dataType: 'refAlias',
+        type: { ref: 'ApiSuccess__deleted-true__', validators: {} },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    RenameChurnScoreConfigInput: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                newName: { dataType: 'string', required: true },
+                currentName: { dataType: 'string', required: true },
             },
             validators: {},
         },
@@ -32549,6 +32589,135 @@ export function RegisterRoutes(app: Router) {
 
                 await templateService.apiHandler({
                     methodName: 'updateConfig',
+                    controller,
+                    response,
+                    next,
+                    validatedArgs,
+                    successStatus: 200,
+                });
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    const argsProtopieChurnScoreController_deleteConfig: Record<
+        string,
+        TsoaRoute.ParameterSchema
+    > = {
+        projectUuid: {
+            in: 'path',
+            name: 'projectUuid',
+            required: true,
+            dataType: 'string',
+        },
+        req: { in: 'request', name: 'req', required: true, dataType: 'object' },
+        name: { in: 'query', name: 'name', required: true, dataType: 'string' },
+    };
+    app.delete(
+        '/api/v1/projects/:projectUuid/protopie/churn/config',
+        ...fetchMiddlewares<RequestHandler>(ProtopieChurnScoreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ProtopieChurnScoreController.prototype.deleteConfig,
+        ),
+
+        async function ProtopieChurnScoreController_deleteConfig(
+            request: ExRequest,
+            response: ExResponse,
+            next: any,
+        ) {
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = templateService.getValidatedArgs({
+                    args: argsProtopieChurnScoreController_deleteConfig,
+                    request,
+                    response,
+                });
+
+                const container: IocContainer =
+                    typeof iocContainer === 'function'
+                        ? (iocContainer as IocContainerFactory)(request)
+                        : iocContainer;
+
+                const controller: any =
+                    await container.get<ProtopieChurnScoreController>(
+                        ProtopieChurnScoreController,
+                    );
+                if (typeof controller['setStatus'] === 'function') {
+                    controller.setStatus(undefined);
+                }
+
+                await templateService.apiHandler({
+                    methodName: 'deleteConfig',
+                    controller,
+                    response,
+                    next,
+                    validatedArgs,
+                    successStatus: 200,
+                });
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    const argsProtopieChurnScoreController_renameConfig: Record<
+        string,
+        TsoaRoute.ParameterSchema
+    > = {
+        projectUuid: {
+            in: 'path',
+            name: 'projectUuid',
+            required: true,
+            dataType: 'string',
+        },
+        body: {
+            in: 'body',
+            name: 'body',
+            required: true,
+            ref: 'RenameChurnScoreConfigInput',
+        },
+        req: { in: 'request', name: 'req', required: true, dataType: 'object' },
+    };
+    app.put(
+        '/api/v1/projects/:projectUuid/protopie/churn/config/rename',
+        ...fetchMiddlewares<RequestHandler>(ProtopieChurnScoreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ProtopieChurnScoreController.prototype.renameConfig,
+        ),
+
+        async function ProtopieChurnScoreController_renameConfig(
+            request: ExRequest,
+            response: ExResponse,
+            next: any,
+        ) {
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = templateService.getValidatedArgs({
+                    args: argsProtopieChurnScoreController_renameConfig,
+                    request,
+                    response,
+                });
+
+                const container: IocContainer =
+                    typeof iocContainer === 'function'
+                        ? (iocContainer as IocContainerFactory)(request)
+                        : iocContainer;
+
+                const controller: any =
+                    await container.get<ProtopieChurnScoreController>(
+                        ProtopieChurnScoreController,
+                    );
+                if (typeof controller['setStatus'] === 'function') {
+                    controller.setStatus(undefined);
+                }
+
+                await templateService.apiHandler({
+                    methodName: 'renameConfig',
                     controller,
                     response,
                     next,

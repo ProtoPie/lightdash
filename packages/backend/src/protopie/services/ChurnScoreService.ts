@@ -320,6 +320,121 @@ export class ChurnScoreService extends BaseService {
         });
     }
 
+    async deleteConfig({
+        projectUuid,
+        name,
+        user,
+    }: {
+        projectUuid: string;
+        name: string;
+        user: SessionUser;
+    }): Promise<{ deleted: true }> {
+        const trimmedName = name?.trim();
+        if (!trimmedName) {
+            throw new ParameterError('A rubric name is required.');
+        }
+        if (ChurnScoreService.isDefaultConfig(trimmedName)) {
+            throw new ForbiddenError(
+                'The default churn score rubric cannot be deleted.',
+            );
+        }
+
+        const active = await this.churnScoreConfigModel.getActiveConfig({
+            projectUuid,
+            name: trimmedName,
+        });
+        if (!active) {
+            throw new NotFoundError(
+                `Churn score rubric does not exist: ${trimmedName}`,
+            );
+        }
+        this.requireConfigEdit(user, projectUuid, active, trimmedName);
+
+        await this.database.transaction(async (trx) => {
+            await this.churnScoreConfigModel.softDeleteByName({
+                projectUuid,
+                name: trimmedName,
+                userUuid: user.userUuid,
+                trx,
+            });
+        });
+
+        return { deleted: true };
+    }
+
+    async renameConfig({
+        projectUuid,
+        currentName,
+        newName,
+        user,
+    }: {
+        projectUuid: string;
+        currentName: string;
+        newName: string;
+        user: SessionUser;
+    }): Promise<Protopie.ChurnScoreConfigWithFactors> {
+        const trimmedCurrentName = currentName?.trim();
+        const trimmedNewName = newName?.trim();
+
+        if (!trimmedCurrentName || !trimmedNewName) {
+            throw new ParameterError(
+                'Both current and new names are required.',
+            );
+        }
+        if (ChurnScoreService.isDefaultConfig(trimmedCurrentName)) {
+            throw new ForbiddenError(
+                'The default churn score rubric cannot be renamed.',
+            );
+        }
+        if (ChurnScoreService.isDefaultConfig(trimmedNewName)) {
+            throw new ParameterError(
+                'A rubric cannot use the default rubric name.',
+            );
+        }
+        if (trimmedNewName === trimmedCurrentName) {
+            throw new ParameterError('The new name must be different.');
+        }
+
+        const active = await this.churnScoreConfigModel.getActiveConfig({
+            projectUuid,
+            name: trimmedCurrentName,
+        });
+        if (!active) {
+            throw new NotFoundError(
+                `Churn score rubric does not exist: ${trimmedCurrentName}`,
+            );
+        }
+        this.requireConfigEdit(user, projectUuid, active, trimmedCurrentName);
+
+        // Collision guard: a soft-deleted rubric still owns its
+        // (project, name, version) rows, so renaming onto any existing name —
+        // active, archived, or deleted — would violate the unique index.
+        const taken = await this.churnScoreConfigModel.nameExistsInAnyStatus({
+            projectUuid,
+            name: trimmedNewName,
+        });
+        if (taken) {
+            throw new ParameterError(
+                `A churn score rubric named "${trimmedNewName}" already exists. Choose a different name.`,
+            );
+        }
+
+        await this.database.transaction(async (trx) => {
+            await this.churnScoreConfigModel.renameByName({
+                projectUuid,
+                currentName: trimmedCurrentName,
+                newName: trimmedNewName,
+                userUuid: user.userUuid,
+                trx,
+            });
+        });
+
+        return this.getActiveConfigByName({
+            projectUuid,
+            name: trimmedNewName,
+        });
+    }
+
     async enqueueRecompute({
         projectUuid,
         name,

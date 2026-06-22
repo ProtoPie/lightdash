@@ -6,6 +6,7 @@ import {
 } from '@lightdash/common';
 import {
     Body,
+    Delete,
     Get,
     Middlewares,
     OperationId,
@@ -37,6 +38,8 @@ type ApiChurnScoreConfigsResponse = ApiSuccess<Protopie.ChurnScoreConfig[]>;
 type ApiChurnScoreConfigVersionsResponse = ApiSuccess<
     Protopie.ChurnScoreConfig[]
 >;
+
+type ApiChurnScoreConfigDeletedResponse = ApiSuccess<{ deleted: true }>;
 
 type ApiChurnScoreRunQueuedResponse = ApiSuccess<{
     runUuid: string;
@@ -249,6 +252,73 @@ export class ProtopieChurnScoreController extends BaseController {
             ).churnScoreService.upsertConfigAsNewVersion({
                 projectUuid,
                 payload: body,
+                user: toSessionUser(req.account),
+            }),
+        };
+    }
+
+    /**
+     * Soft-delete a churn score rubric (all versions). Historical scores are
+     * preserved; the rubric leaves the editor and active lookups.
+     * @summary Delete Protopie churn score rubric
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Delete('config')
+    @OperationId('DeleteProtopieChurnScoreConfig')
+    async deleteConfig(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+        @Query() name: string,
+    ): Promise<ApiChurnScoreConfigDeletedResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: await getProtopieServices(
+                this.services,
+            ).churnScoreService.deleteConfig({
+                projectUuid,
+                name,
+                user: toSessionUser(req.account),
+            }),
+        };
+    }
+
+    /**
+     * Rename a churn score rubric (all versions). Scores key off configUuid, so
+     * this is a label-only change.
+     * @summary Rename Protopie churn score rubric
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Put('config/rename')
+    @OperationId('RenameProtopieChurnScoreConfig')
+    async renameConfig(
+        @Path() projectUuid: string,
+        @Body() body: Protopie.RenameChurnScoreConfigInput,
+        @Request() req: express.Request,
+    ): Promise<ApiChurnScoreConfigResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: await getProtopieServices(
+                this.services,
+            ).churnScoreService.renameConfig({
+                projectUuid,
+                currentName: body.currentName,
+                newName: body.newName,
                 user: toSessionUser(req.account),
             }),
         };

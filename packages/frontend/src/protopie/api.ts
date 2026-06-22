@@ -254,6 +254,87 @@ export const useRestoreProtopieChurnConfigVersion = (projectUuid?: string) => {
     });
 };
 
+export const useDeleteProtopieChurnConfig = (projectUuid?: string) => {
+    const queryClient = useQueryClient();
+    const { showToastApiError, showToastSuccess } = useToaster();
+
+    return useMutation<{ deleted: true }, ApiError, { name: string }>({
+        mutationFn: ({ name }) => {
+            const params = new URLSearchParams();
+            params.set('name', name);
+            return lightdashApi<AnyType>({
+                method: 'DELETE',
+                url: `/projects/${projectUuid}/protopie/churn/config?${params.toString()}`,
+                body: undefined,
+            }) as Promise<{ deleted: true }>;
+        },
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigsQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigVersionsQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnScoresQueryKeyBase(projectUuid),
+            });
+            showToastSuccess({
+                title: 'Churn rubric deleted',
+            });
+        },
+        onError: ({ error }) => {
+            showToastApiError({
+                title: 'Failed to delete churn rubric',
+                apiError: error,
+            });
+        },
+    });
+};
+
+export const useRenameProtopieChurnConfig = (projectUuid?: string) => {
+    const queryClient = useQueryClient();
+    const { showToastApiError, showToastSuccess } = useToaster();
+
+    return useMutation<
+        Protopie.ChurnScoreConfigWithFactors,
+        ApiError,
+        Protopie.RenameChurnScoreConfigInput
+    >({
+        mutationFn: (body) =>
+            lightdashApi<AnyType>({
+                method: 'PUT',
+                url: `/projects/${projectUuid}/protopie/churn/config/rename`,
+                body: JSON.stringify(body),
+            }) as Promise<Protopie.ChurnScoreConfigWithFactors>,
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigsQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigVersionsQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnScoresQueryKeyBase(projectUuid),
+            });
+            showToastSuccess({
+                title: 'Churn rubric renamed',
+            });
+        },
+        onError: ({ error }) => {
+            showToastApiError({
+                title: 'Failed to rename churn rubric',
+                apiError: error,
+            });
+        },
+    });
+};
+
 export const useRecomputeProtopieChurnScore = (projectUuid?: string) => {
     const queryClient = useQueryClient();
     const { showToastApiError, showToastSuccess } = useToaster();
