@@ -30,8 +30,8 @@ const ProtopieSectionTabs: FC = () => {
             }}
         >
             <Tabs.List>
-                <Tabs.Tab value="rubric">Rubric</Tabs.Tab>
                 <Tabs.Tab value="scores">Scores</Tabs.Tab>
+                <Tabs.Tab value="rubric">Rubric</Tabs.Tab>
             </Tabs.List>
         </Tabs>
     );
