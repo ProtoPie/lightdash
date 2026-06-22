@@ -235,7 +235,15 @@ COPY --from=build-formula /usr/app/packages/formula/ ./packages/formula/
 COPY --from=build-warehouses /usr/app/packages/warehouses/ ./packages/warehouses/
 COPY packages/backend/tsconfig.json ./packages/backend/
 COPY packages/backend/tsconfig.sentry.json ./packages/backend/
+COPY packages/backend/tsoa.yml ./packages/backend/
 COPY packages/backend/src/ ./packages/backend/src/
+
+# Regenerate TSOA routes + OpenAPI from the controllers so the build never
+# depends on the committed src/generated/ files being in sync. generate-api is
+# otherwise a manual step that silently drifts (a controller change without a
+# re-run leaves stale routes.ts, which then fails `tsc --build`). common is
+# already built and copied above, so this resolves @lightdash/common types.
+RUN pnpm -F backend generate-api
 
 # Build MCP chart app (pnpm workspace member — deps already installed in prod-builder)
 RUN pnpm -F @lightdash/mcp-chart-app build
