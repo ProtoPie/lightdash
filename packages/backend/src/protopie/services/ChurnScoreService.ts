@@ -589,10 +589,25 @@ export class ChurnScoreService extends BaseService {
             throw new ParameterError('accountKey is required.');
         }
 
+        // External deep links (e.g. the honmoon license card) omit configUuid.
+        // Rather than fall back to "latest computed row across all configs" —
+        // non-deterministic when several configs are active — resolve the
+        // canonical default rubric by its stable name. config_uuid changes on
+        // every re-version but the name does not, so the link always tracks the
+        // latest active "Default Churn Score" without callers hardcoding a UUID.
+        const resolvedConfigUuid =
+            configUuid ??
+            (
+                await this.churnScoreConfigModel.getActiveConfig({
+                    projectUuid,
+                    name: Protopie.DEFAULT_CHURN_SCORE_CONFIG_NAME,
+                })
+            )?.configUuid;
+
         const score = await this.churnScoreModel.getLatestScoreByAccount({
             projectUuid,
             accountKey: trimmedAccountKey,
-            configUuid,
+            configUuid: resolvedConfigUuid,
         });
         if (!score) {
             throw new NotFoundError('Churn score account was not found.');
