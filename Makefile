@@ -28,6 +28,9 @@ DEV_LATEST_TAG ?= dev-latest
 PROD_IMAGE_TAG ?= prod-$(GIT_SHA)
 # Set SKIP_PREFLIGHT=1 to skip the backend typecheck (e.g. clean checkout w/o node_modules).
 SKIP_PREFLIGHT ?=
+# Set BUILD=0 to skip the local image build and deploy an already-pushed tag
+# (e.g. one that CI built). Pass the matching DEV_IMAGE_TAG / PROD_IMAGE_TAG.
+BUILD ?= 1
 
 # DEV ECS coordinates (used by deploy-dev-quick / logs-dev).
 DEV_ECS_CLUSTER ?= lightdash-cluster-dev
@@ -157,7 +160,12 @@ plan-dev: ## Terraform plan for dev only (no apply). Pass DEV_IMAGE_TAG to plan 
 		-var "lightdash_oci_tag=$(DEV_IMAGE_TAG)"
 
 .PHONY: deploy-dev
-deploy-dev: build-dev ## Build+push dev image, show plan, then apply after confirmation.
+deploy-dev: ## Build+push (unless BUILD=0) dev image, show plan, then apply after confirmation.
+	@if [ "$(BUILD)" = "0" ]; then \
+		echo "BUILD=0 — deploying existing image $(IMAGE_REPO):$(DEV_IMAGE_TAG) (no rebuild)"; \
+	else \
+		$(MAKE) build-dev; \
+	fi
 	@test -d "$(DEV_INFRA_DIR)" || (echo "Missing DEV_INFRA_DIR=$(DEV_INFRA_DIR)" && exit 1)
 	cd "$(DEV_INFRA_DIR)" && $(TERRAFORM) init -upgrade=false
 	cd "$(DEV_INFRA_DIR)" && $(TERRAFORM) plan \
@@ -207,11 +215,15 @@ plan-prod: ## Terraform plan for prod only (no apply). Pass PROD_IMAGE_TAG to pl
 		-var "lightdash_image_repo=$(IMAGE_REPO)" \
 		-var "lightdash_oci_tag=$(PROD_IMAGE_TAG)"
 
-deploy-prod: ## PROD cutover. Build+push prod image, show plan, require CONFIRM=PROD before apply.
+deploy-prod: ## PROD deploy. Build+push (unless BUILD=0) prod image, show plan, require CONFIRM=PROD before apply.
 	@echo "⚠️  PROD deploy. This cuts production over to $(IMAGE_REPO):$(PROD_IMAGE_TAG)." >&2
 	@echo "    Ensure a fresh prod RDS snapshot exists before proceeding." >&2
 	@test -d "$(PROD_INFRA_DIR)" || (echo "Missing PROD_INFRA_DIR=$(PROD_INFRA_DIR)" && exit 1)
-	$(MAKE) build-prod
+	@if [ "$(BUILD)" = "0" ]; then \
+		echo "BUILD=0 — deploying existing image $(IMAGE_REPO):$(PROD_IMAGE_TAG) (no rebuild)"; \
+	else \
+		$(MAKE) build-prod; \
+	fi
 	cd "$(PROD_INFRA_DIR)" && $(TERRAFORM) init -upgrade=false
 	cd "$(PROD_INFRA_DIR)" && $(TERRAFORM) plan \
 		-var "lightdash_image_repo=$(IMAGE_REPO)" \
