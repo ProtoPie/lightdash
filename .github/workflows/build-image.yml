@@ -48,6 +48,18 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
+            - name: Free up runner disk
+              # ubuntu-latest ships ~25-30GB of preinstalled toolchains we don't
+              # use. Removing them reclaims space so the heavy multi-stage image
+              # build does not hit "No space left on device".
+              run: |
+                  echo "Before:"; df -h / | tail -1
+                  sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+                              /usr/local/lib/android /opt/hostedtoolcache \
+                              /usr/local/share/boost /usr/share/swift || true
+                  sudo docker image prune -af || true
+                  echo "After:"; df -h / | tail -1
+
             - name: Resolve environment + image tags
               id: meta
               run: |
@@ -89,10 +101,17 @@ jobs:
             - name: Build and push image
               run: |
                   IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}"
+                  # Reuse layers from a persistent registry cache in ECR so
+                  # commits that don't change the lockfile skip the expensive
+                  # pnpm install + unchanged package builds. mode=max caches the
+                  # intermediate multi-stage layers too; image-manifest +
+                  # oci-mediatypes make the cache export compatible with ECR.
                   docker buildx build \
                     --platform "$PLATFORM" \
                     -f "$DOCKERFILE" \
                     --target "$DOCKER_TARGET" \
+                    --cache-from "type=registry,ref=${IMAGE}:buildcache" \
+                    --cache-to "type=registry,ref=${IMAGE}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true" \
                     -t "${IMAGE}:${{ steps.meta.outputs.sha_tag }}" \
                     -t "${IMAGE}:${{ steps.meta.outputs.latest_tag }}" \
                     --push .

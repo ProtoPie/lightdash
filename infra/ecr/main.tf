@@ -59,19 +59,43 @@ resource "aws_ecr_repository" "lightdash" {
 resource "aws_ecr_lifecycle_policy" "lightdash" {
   repository = aws_ecr_repository.lightdash.name
 
+  # NOTE: rules only ever SELECT images to expire. The build-image CI cache tag
+  # (`buildcache`) and the moving `dev-latest` / `prod-latest` tags are never
+  # matched by the rules below, so they are never expired.
   policy = jsonencode({
     rules = [
       {
         rulePriority = 1
-        description  = "Keep only the latest image and the one before it"
+        description  = "Expire untagged images (e.g. digests left behind when a moving tag is repushed) after 1 day"
         selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 2
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 1
         }
-        action = {
-          type = "expire"
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep the 10 most recent dev- images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["dev-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
         }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 3
+        description  = "Keep the 15 most recent prod- images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["prod-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 15
+        }
+        action = { type = "expire" }
       }
     ]
   })
