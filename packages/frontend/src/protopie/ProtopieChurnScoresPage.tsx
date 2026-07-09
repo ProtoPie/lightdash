@@ -31,10 +31,12 @@ const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
 
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = ['25', '50', '100', '200'];
-const DEFAULT_SORT_VALUE = 'score_desc';
+const DEFAULT_SORT_VALUE = 'health_asc';
 const SORT_OPTIONS = [
-    { value: 'score_desc', label: 'Churn score: high to low' },
-    { value: 'score_asc', label: 'Churn score: low to high' },
+    // Default (health_asc = most at-risk first) is listed first so the dropdown
+    // order matches DEFAULT_SORT_VALUE.
+    { value: 'health_asc', label: 'Health points: low to high' },
+    { value: 'health_desc', label: 'Health points: high to low' },
     { value: 'risk_desc', label: 'Risk: high to low' },
     { value: 'risk_asc', label: 'Risk: low to high' },
     { value: 'namespace_asc', label: 'Namespace: A to Z' },
@@ -42,12 +44,15 @@ const SORT_OPTIONS = [
     { value: 'computed_at_desc', label: 'Computed: newest first' },
     { value: 'computed_at_asc', label: 'Computed: oldest first' },
 ];
+// Health = 100 − churn and maxPoints is constant per config, so ordering by the
+// backend's churn_score key (sortBy: 'score') is exactly the health ordering, inverted.
+// We reuse that key with a flipped direction rather than adding a backend sort key.
 const SORT_FILTERS: Record<
     string,
     Pick<Protopie.ChurnScoreLatestFilters, 'sortBy' | 'sortDirection'>
 > = {
-    score_asc: { sortBy: 'score', sortDirection: 'asc' },
-    score_desc: { sortBy: 'score', sortDirection: 'desc' },
+    health_desc: { sortBy: 'score', sortDirection: 'asc' },
+    health_asc: { sortBy: 'score', sortDirection: 'desc' },
     risk_desc: { sortBy: 'risk', sortDirection: 'desc' },
     risk_asc: { sortBy: 'risk', sortDirection: 'asc' },
     namespace_asc: { sortBy: 'namespace', sortDirection: 'asc' },
@@ -69,7 +74,7 @@ const ProtopieChurnScoresPage = () => {
         string | undefined
     >();
     const numericPageSize = Number(pageSize);
-    const sortFilter = SORT_FILTERS[sortValue] ?? SORT_FILTERS.score_asc;
+    const sortFilter = SORT_FILTERS[sortValue] ?? SORT_FILTERS.health_asc;
     const configs = useProtopieChurnConfigs(projectUuid);
 
     useEffect(() => {
@@ -219,7 +224,6 @@ const ProtopieChurnScoresPage = () => {
                             <Table.Thead>
                                 <Table.Tr>
                                     <Table.Th>Account</Table.Th>
-                                    <Table.Th>Churn score</Table.Th>
                                     <Table.Th>Risk</Table.Th>
                                     <Table.Th>Health points</Table.Th>
                                     <Table.Th>Computed</Table.Th>
@@ -231,58 +235,52 @@ const ProtopieChurnScoresPage = () => {
                                         score.accountKey,
                                     )}?configUuid=${score.configUuid}`;
                                     return (
-                                    <Table.Tr key={score.scoreUuid}>
-                                        <Table.Td>
-                                            <Anchor
-                                                component={Link}
-                                                to={detailTo}
-                                                size="sm"
-                                                fw={600}
-                                            >
-                                                {score.namespace ??
-                                                    score.accountKey}
-                                            </Anchor>
-                                            {score.cloudUrl && (
-                                                <Text size="xs" c="dimmed">
-                                                    {score.cloudUrl}
+                                        <Table.Tr key={score.scoreUuid}>
+                                            <Table.Td>
+                                                <Anchor
+                                                    component={Link}
+                                                    to={detailTo}
+                                                    size="sm"
+                                                    fw={600}
+                                                >
+                                                    {score.namespace ??
+                                                        score.accountKey}
+                                                </Anchor>
+                                                {score.cloudUrl && (
+                                                    <Text size="xs" c="dimmed">
+                                                        {score.cloudUrl}
+                                                    </Text>
+                                                )}
+                                            </Table.Td>
+                                            <Table.Td>
+                                                <Badge
+                                                    color={
+                                                        riskBandColor[
+                                                            score.riskBand
+                                                        ]
+                                                    }
+                                                    variant="light"
+                                                >
+                                                    {score.riskBand}
+                                                </Badge>
+                                            </Table.Td>
+                                            <Table.Td>
+                                                <Text size="sm">
+                                                    {score.totalPoints.toFixed(
+                                                        2,
+                                                    )}{' '}
+                                                    /{' '}
+                                                    {score.maxPoints.toFixed(2)}
                                                 </Text>
-                                            )}
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Anchor
-                                                component={Link}
-                                                to={detailTo}
-                                                fw={600}
-                                            >
-                                                {score.churnScore.toFixed(2)}
-                                            </Anchor>
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Badge
-                                                color={
-                                                    riskBandColor[
-                                                        score.riskBand
-                                                    ]
-                                                }
-                                                variant="light"
-                                            >
-                                                {score.riskBand}
-                                            </Badge>
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Text size="sm">
-                                                {score.totalPoints.toFixed(2)} /{' '}
-                                                {score.maxPoints.toFixed(2)}
-                                            </Text>
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Text size="sm">
-                                                {new Date(
-                                                    score.computedAt,
-                                                ).toLocaleString()}
-                                            </Text>
-                                        </Table.Td>
-                                    </Table.Tr>
+                                            </Table.Td>
+                                            <Table.Td>
+                                                <Text size="sm">
+                                                    {new Date(
+                                                        score.computedAt,
+                                                    ).toLocaleString()}
+                                                </Text>
+                                            </Table.Td>
+                                        </Table.Tr>
                                     );
                                 })}
                             </Table.Tbody>

@@ -288,17 +288,7 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                 <ProtopieSectionTabs />
             </Stack>
 
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="md">
-                <Card withBorder className={classes.formPanel}>
-                    <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-                        Churn score
-                    </Text>
-                    <Title order={2}>{score.churnScore.toFixed(2)}</Title>
-                    <Text size="sm" c="dimmed">
-                        100 − health ({score.normalizedScore.toFixed(2)}) ·
-                        higher = more at risk
-                    </Text>
-                </Card>
+            <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
                 <Card withBorder className={classes.formPanel}>
                     <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
                         Health score
