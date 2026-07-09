@@ -26,7 +26,6 @@ import EChartsReact, {
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import { useProtopieChurnScoreAccountDetails } from './api';
 import classes from './ProtopieFormsPage.module.css';
-import ProtopieSectionTabs from './ProtopieSectionTabs';
 
 const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
     low: 'green',
@@ -284,8 +283,6 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                         {score.riskBand} risk
                     </Badge>
                 </Group>
-
-                <ProtopieSectionTabs />
             </Stack>
 
             <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
