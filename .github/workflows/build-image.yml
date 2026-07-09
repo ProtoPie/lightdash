@@ -58,6 +58,13 @@ jobs:
                   else
                     ENVIRONMENT="dev"
                   fi
+                  # prod images may only originate from main. Block manual
+                  # workflow_dispatch runs that pick prod on any other ref, so an
+                  # unmerged commit can never be pushed as a prod-* / prod-latest tag.
+                  if [ "$ENVIRONMENT" = "prod" ] && [ "$GITHUB_REF_NAME" != "main" ]; then
+                    echo "::error::prod images may only be built from main (ref=$GITHUB_REF_NAME)"
+                    exit 1
+                  fi
                   SHA="${GITHUB_SHA:0:10}"
                   {
                     echo "environment=${ENVIRONMENT}"
