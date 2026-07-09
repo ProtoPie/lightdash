@@ -106,12 +106,19 @@ jobs:
                   # pnpm install + unchanged package builds. mode=max caches the
                   # intermediate multi-stage layers too; image-manifest +
                   # oci-mediatypes make the cache export compatible with ECR.
+                  #
+                  # The cache tag is per-environment (buildcache-dev / -prod) so a
+                  # dev build (which may run from any ref via workflow_dispatch)
+                  # can never poison the cache a main-gated prod build imports.
+                  # The `buildcache-*` prefix is also outside the dev-/prod- ECR
+                  # lifecycle rules, so the cache tag is never expired by them.
+                  CACHE_REF="${IMAGE}:buildcache-${{ steps.meta.outputs.environment }}"
                   docker buildx build \
                     --platform "$PLATFORM" \
                     -f "$DOCKERFILE" \
                     --target "$DOCKER_TARGET" \
-                    --cache-from "type=registry,ref=${IMAGE}:buildcache" \
-                    --cache-to "type=registry,ref=${IMAGE}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true" \
+                    --cache-from "type=registry,ref=${CACHE_REF}" \
+                    --cache-to "type=registry,ref=${CACHE_REF},mode=max,image-manifest=true,oci-mediatypes=true" \
                     -t "${IMAGE}:${{ steps.meta.outputs.sha_tag }}" \
                     -t "${IMAGE}:${{ steps.meta.outputs.latest_tag }}" \
                     --push .

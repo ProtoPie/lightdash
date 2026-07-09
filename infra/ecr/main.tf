@@ -59,9 +59,16 @@ resource "aws_ecr_repository" "lightdash" {
 resource "aws_ecr_lifecycle_policy" "lightdash" {
   repository = aws_ecr_repository.lightdash.name
 
-  # NOTE: rules only ever SELECT images to expire. The build-image CI cache tag
-  # (`buildcache`) and the moving `dev-latest` / `prod-latest` tags are never
-  # matched by the rules below, so they are never expired.
+  # NOTE: rules only ever SELECT images to expire.
+  # - The CI cache tags (`buildcache-dev` / `buildcache-prod`) start with
+  #   `buildcache`, not `dev-` / `prod-`, so no rule below matches them; the
+  #   current cache image is never expired. When the moving cache tag is
+  #   repushed, the old digest becomes untagged and is cleaned by rule 1.
+  # - `dev-latest` / `prod-latest` DO match the `dev-` / `prod-` prefix rules
+  #   and are counted with the SHA images. Because every build repushes them
+  #   onto the newest digest, they always sit at the top of the count and are
+  #   kept in practice — but they are not specially protected, so keep the
+  #   counts comfortably above the number of images a rollback could shift.
   policy = jsonencode({
     rules = [
       {
