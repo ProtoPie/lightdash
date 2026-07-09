@@ -33,8 +33,10 @@ const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = ['25', '50', '100', '200'];
 const DEFAULT_SORT_VALUE = 'health_asc';
 const SORT_OPTIONS = [
-    { value: 'health_desc', label: 'Health points: high to low' },
+    // Default (health_asc = most at-risk first) is listed first so the dropdown
+    // order matches DEFAULT_SORT_VALUE.
     { value: 'health_asc', label: 'Health points: low to high' },
+    { value: 'health_desc', label: 'Health points: high to low' },
     { value: 'risk_desc', label: 'Risk: high to low' },
     { value: 'risk_asc', label: 'Risk: low to high' },
     { value: 'namespace_asc', label: 'Namespace: A to Z' },
