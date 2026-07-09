@@ -1,0 +1,115 @@
+name: build-image
+
+# Builds the ProtoPie custom Lightdash image and pushes it to ECR.
+#   push to develop -> dev-<sha>  (+ dev-latest)
+#   push to main    -> prod-<sha> (+ prod-latest)
+# This workflow ONLY builds + pushes. Deployment stays manual/local via the
+# repo Makefile so a human gates the terraform apply / ECS rollout:
+#   make deploy-dev  BUILD=0 DEV_IMAGE_TAG=dev-<sha>
+#   make deploy-prod BUILD=0 PROD_IMAGE_TAG=prod-<sha> CONFIRM=PROD
+#
+# Auth: GitHub OIDC -> IAM role `github-actions-ecr` (trusts repo:ProtoPie/*,
+# ECR push allowed in us-west-2). No stored AWS keys, no new IAM permissions.
+
+on:
+    push:
+        branches: [develop, main]
+        paths-ignore:
+            - 'docs/**'
+            - '**/*.md'
+    workflow_dispatch:
+        inputs:
+            environment:
+                description: 'Image environment to build'
+                type: choice
+                options: [dev, prod]
+                default: dev
+
+concurrency:
+    group: build-image-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    id-token: write # required for OIDC
+    contents: read
+
+env:
+    AWS_REGION: us-west-2
+    AWS_ROLE_ARN: arn:aws:iam::750128304405:role/github-actions-ecr
+    ECR_REGISTRY: 750128304405.dkr.ecr.us-west-2.amazonaws.com
+    ECR_REPOSITORY: protopie/lightdash
+    DOCKERFILE: dockerfile
+    DOCKER_TARGET: prod
+    PLATFORM: linux/amd64
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Resolve environment + image tags
+              id: meta
+              run: |
+                  if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+                    ENVIRONMENT="${{ github.event.inputs.environment }}"
+                  elif [ "${{ github.ref_name }}" = "main" ]; then
+                    ENVIRONMENT="prod"
+                  else
+                    ENVIRONMENT="dev"
+                  fi
+                  # prod images may only originate from main. Block manual
+                  # workflow_dispatch runs that pick prod on any other ref, so an
+                  # unmerged commit can never be pushed as a prod-* / prod-latest tag.
+                  if [ "$ENVIRONMENT" = "prod" ] && [ "$GITHUB_REF_NAME" != "main" ]; then
+                    echo "::error::prod images may only be built from main (ref=$GITHUB_REF_NAME)"
+                    exit 1
+                  fi
+                  SHA="${GITHUB_SHA:0:10}"
+                  {
+                    echo "environment=${ENVIRONMENT}"
+                    echo "sha_tag=${ENVIRONMENT}-${SHA}"
+                    echo "latest_tag=${ENVIRONMENT}-latest"
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Configure AWS credentials (OIDC)
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ env.AWS_ROLE_ARN }}
+                  aws-region: ${{ env.AWS_REGION }}
+
+            - name: ECR login
+              run: |
+                  aws ecr get-login-password --region "$AWS_REGION" \
+                    | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Build and push image
+              run: |
+                  IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}"
+                  docker buildx build \
+                    --platform "$PLATFORM" \
+                    -f "$DOCKERFILE" \
+                    --target "$DOCKER_TARGET" \
+                    -t "${IMAGE}:${{ steps.meta.outputs.sha_tag }}" \
+                    -t "${IMAGE}:${{ steps.meta.outputs.latest_tag }}" \
+                    --push .
+
+            - name: Job summary
+              run: |
+                  ENV="${{ steps.meta.outputs.environment }}"
+                  TAG="${{ steps.meta.outputs.sha_tag }}"
+                  {
+                    echo "### Pushed \`${ECR_REPOSITORY}:${TAG}\` (+ ${{ steps.meta.outputs.latest_tag }})"
+                    echo ""
+                    echo "Deploy from a local checkout (human-gated):"
+                    echo '```bash'
+                    if [ "$ENV" = "prod" ]; then
+                      echo "make deploy-prod BUILD=0 PROD_IMAGE_TAG=${TAG} CONFIRM=PROD"
+                    else
+                      echo "make deploy-dev BUILD=0 DEV_IMAGE_TAG=${TAG}"
+                    fi
+                    echo '```'
+                  } >> "$GITHUB_STEP_SUMMARY"
