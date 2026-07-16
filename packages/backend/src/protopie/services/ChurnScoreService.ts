@@ -1274,17 +1274,23 @@ export class ChurnScoreService extends BaseService {
         dateTo?: string;
     }): ChurnScoreEventUsageDateRange {
         ChurnScoreService.validateDateString(martMax, 'martMax');
-        // The selectable window is the most recent N days of the mart, anchored
-        // to its latest event_date across all accounts.
+        // The selectable window spans the most recent MAX days of the mart,
+        // anchored to its latest event_date across all accounts. The default
+        // window (when the caller omits dateFrom) is narrower so the first load
+        // stays light; users can widen it back to minSelectableDate.
         const maxSelectableDate = martMax;
         const minSelectableDate = ChurnScoreService.addDays(
             martMax,
-            -(Protopie.CHURN_SCORE_EVENT_USAGE_WINDOW_DAYS - 1),
+            -(Protopie.CHURN_SCORE_EVENT_USAGE_MAX_WINDOW_DAYS - 1),
+        );
+        const defaultDateFrom = ChurnScoreService.addDays(
+            martMax,
+            -(Protopie.CHURN_SCORE_EVENT_USAGE_DEFAULT_WINDOW_DAYS - 1),
         );
 
         const resolvedDateTo = dateTo?.trim() || maxSelectableDate;
         ChurnScoreService.validateDateString(resolvedDateTo, 'dateTo');
-        const resolvedDateFrom = dateFrom?.trim() || minSelectableDate;
+        const resolvedDateFrom = dateFrom?.trim() || defaultDateFrom;
         ChurnScoreService.validateDateString(resolvedDateFrom, 'dateFrom');
 
         // Validated YYYY-MM-DD strings compare chronologically as strings.
