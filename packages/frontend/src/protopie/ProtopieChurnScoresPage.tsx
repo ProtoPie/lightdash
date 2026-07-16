@@ -199,9 +199,17 @@ const ProtopieChurnScoresPage = () => {
                             allowDeselect={false}
                             data={configOptions}
                             value={selectedConfigUuid}
-                            onChange={(value) =>
-                                setSelectedConfigUuid(value ?? undefined)
-                            }
+                            onChange={(value) => {
+                                setSelectedConfigUuid(value ?? undefined);
+                                // Filter options are per-config; a value picked
+                                // under one rubric may not exist in the next, so
+                                // clear the SF filters on rubric change to avoid
+                                // an empty result set + stale MultiSelect values.
+                                setAccountOwner([]);
+                                setSfPlanCategory([]);
+                                setSfAccountRegion([]);
+                                setSfAccountCountry([]);
+                            }}
                         />
                         <Select
                             label="Risk band"

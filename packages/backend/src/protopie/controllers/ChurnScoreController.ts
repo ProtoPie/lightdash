@@ -464,14 +464,17 @@ export class ProtopieChurnScoreController extends BaseController {
         @Query() minScore?: number,
         @Query() maxScore?: number,
         @Query() namespace?: string,
-        @Query() accountOwner?: string[],
-        @Query() sfPlanCategory?: string[],
-        @Query() sfAccountRegion?: string[],
-        @Query() sfAccountCountry?: string[],
         @Query() sortBy?: Protopie.ChurnScoreSortBy,
         @Query() sortDirection?: Protopie.ChurnScoreSortDirection,
         @Query() limit?: number,
         @Query() offset?: number,
+        // Appended after the pre-existing params so a stale generated route
+        // adapter (local dev, before `pnpm generate-api`) can't shift the
+        // established positional args (sortBy/limit/offset) into these.
+        @Query() accountOwner?: string[],
+        @Query() sfPlanCategory?: string[],
+        @Query() sfAccountRegion?: string[],
+        @Query() sfAccountCountry?: string[],
     ): Promise<ApiChurnScoresResponse> {
         assertRegisteredAccount(req.account);
         this.setStatus(200);

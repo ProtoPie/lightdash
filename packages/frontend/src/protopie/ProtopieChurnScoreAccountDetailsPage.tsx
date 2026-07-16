@@ -258,7 +258,11 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                         >
                             Back to scores
                         </Button>
-                        <Title order={3}>{score.namespace ?? 'Account'}</Title>
+                        <Title order={3}>
+                            {score.sfAccountName ??
+                                score.namespace ??
+                                'Account'}
+                        </Title>
                         <Group gap="xs">
                             <Text c="dimmed" size="sm">
                                 Combined namespace score across all teams for{' '}
