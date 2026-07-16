@@ -453,6 +453,28 @@ export const useProtopieChurnScoreAccountDetails = ({
         },
     });
 
+// Appends the multi-select SF facet filters as repeated query params. Empty or
+// absent arrays append nothing → unfiltered (never "match none"). Shared by the
+// scores list and the faceted filter-options request so a new facet only needs
+// wiring in one place.
+const appendChurnFacetParams = (
+    params: URLSearchParams,
+    filters?: Protopie.ChurnScoreLatestFilters,
+): void => {
+    filters?.accountOwner?.forEach((value) =>
+        params.append('accountOwner', value),
+    );
+    filters?.sfPlanCategory?.forEach((value) =>
+        params.append('sfPlanCategory', value),
+    );
+    filters?.sfAccountRegion?.forEach((value) =>
+        params.append('sfAccountRegion', value),
+    );
+    filters?.sfAccountCountry?.forEach((value) =>
+        params.append('sfAccountCountry', value),
+    );
+};
+
 export const useProtopieChurnScores = ({
     projectUuid,
     filters,
@@ -477,20 +499,8 @@ export const useProtopieChurnScores = ({
                 params.set('maxScore', String(filters.maxScore));
             }
             if (filters?.namespace) params.set('namespace', filters.namespace);
-            // Repeated params for multi-select IN filters. Empty arrays append
-            // nothing → unfiltered (never "match none").
-            filters?.accountOwner?.forEach((value) =>
-                params.append('accountOwner', value),
-            );
-            filters?.sfPlanCategory?.forEach((value) =>
-                params.append('sfPlanCategory', value),
-            );
-            filters?.sfAccountRegion?.forEach((value) =>
-                params.append('sfAccountRegion', value),
-            );
-            filters?.sfAccountCountry?.forEach((value) =>
-                params.append('sfAccountCountry', value),
-            );
+            if (filters?.search) params.set('search', filters.search);
+            appendChurnFacetParams(params, filters);
             if (filters?.sortBy) params.set('sortBy', filters.sortBy);
             if (filters?.sortDirection) {
                 params.set('sortDirection', filters.sortDirection);
@@ -511,15 +521,27 @@ export const useProtopieChurnScores = ({
 
 export const useProtopieChurnScoreFilterOptions = (
     projectUuid?: string,
-    configUuid?: string,
+    filters?: Protopie.ChurnScoreLatestFilters,
 ) =>
     useQuery<Protopie.ChurnScoreFilterOptions, ApiError>({
-        queryKey: ['protopie', 'churn-filter-options', projectUuid, configUuid],
+        queryKey: ['protopie', 'churn-filter-options', projectUuid, filters],
         enabled: Boolean(projectUuid),
         keepPreviousData: true,
         queryFn: () => {
             const params = new URLSearchParams();
-            if (configUuid) params.set('configUuid', configUuid);
+            if (filters?.configUuid)
+                params.set('configUuid', filters.configUuid);
+            if (filters?.riskBand) params.set('riskBand', filters.riskBand);
+            if (filters?.search) params.set('search', filters.search);
+            if (filters?.minScore !== undefined) {
+                params.set('minScore', String(filters.minScore));
+            }
+            if (filters?.maxScore !== undefined) {
+                params.set('maxScore', String(filters.maxScore));
+            }
+            // Each facet's own selection is ignored server-side when computing
+            // that facet's options (faceted-search semantics).
+            appendChurnFacetParams(params, filters);
             return lightdashApi<AnyType>({
                 method: 'GET',
                 url: `/projects/${projectUuid}/protopie/churn/scores/filter-options?${params.toString()}`,

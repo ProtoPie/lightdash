@@ -230,7 +230,17 @@ export type ChurnScoreLatestFilters = {
     minScore?: number;
     maxScore?: number;
     namespace?: string;
-    /** Multi-select SF filters (IN semantics). Empty/absent = unfiltered. */
+    /**
+     * Free-text search across the account label + all 4 SF attributes
+     * (sf_account_name, namespace, cloud_url, account_owner, sf_plan_category,
+     * sf_account_region, sf_account_country). Partial, case-insensitive.
+     */
+    search?: string;
+    /**
+     * Multi-select SF filters (IN semantics). Empty/absent = unfiltered.
+     * Include CHURN_SCORE_FILTER_NONE_VALUE to also match rows where the
+     * attribute is null (the "(none)" bucket).
+     */
     accountOwner?: string[];
     sfPlanCategory?: string[];
     sfAccountRegion?: string[];
@@ -241,14 +251,39 @@ export type ChurnScoreLatestFilters = {
     offset?: number;
 };
 
+/** The four SF-attribute facets that drive the churn-scores filter dropdowns. */
+export type ChurnScoreFacetKey =
+    | 'accountOwner'
+    | 'sfPlanCategory'
+    | 'sfAccountRegion'
+    | 'sfAccountCountry';
+
+/** One selectable value in a facet, with its result count under the other active filters. */
+export type ChurnScoreFacetOption = {
+    value: string;
+    count: number;
+};
+
 /**
- * Distinct values for the churn-scores screen filter dropdowns, per config.
+ * A single filter facet: the available values (with counts) plus the count of
+ * rows where the attribute is null (the "(none)" bucket). Counts are computed
+ * with every OTHER active filter applied but NOT this facet's own selection, so
+ * the user can still broaden a facet they have already touched (standard
+ * faceted-search semantics).
+ */
+export type ChurnScoreFacet = {
+    options: ChurnScoreFacetOption[];
+    noneCount: number;
+};
+
+/**
+ * Faceted values for the churn-scores screen filter dropdowns, per config.
  * NOTE: reflects the last recompute (the persisted score snapshot), not live
  * Salesforce — values lag until the next recompute run.
  */
 export type ChurnScoreFilterOptions = {
-    accountOwner: string[];
-    sfPlanCategory: string[];
-    sfAccountRegion: string[];
-    sfAccountCountry: string[];
+    accountOwner: ChurnScoreFacet;
+    sfPlanCategory: ChurnScoreFacet;
+    sfAccountRegion: ChurnScoreFacet;
+    sfAccountCountry: ChurnScoreFacet;
 };

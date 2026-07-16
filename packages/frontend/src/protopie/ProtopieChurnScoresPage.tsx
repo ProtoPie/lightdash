@@ -1,4 +1,4 @@
-import { type Protopie } from '@lightdash/common';
+import { Protopie } from '@lightdash/common';
 import {
     Alert,
     Anchor,
@@ -8,6 +8,7 @@ import {
     Group,
     Loader,
     MultiSelect,
+    Pill,
     Select,
     Stack,
     Table,
@@ -16,8 +17,8 @@ import {
     Title,
 } from '@mantine-8/core';
 import { useDebouncedValue } from '@mantine-8/hooks';
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import {
     useProtopieChurnConfigs,
@@ -66,40 +67,167 @@ const SORT_FILTERS: Record<
     computed_at_asc: { sortBy: 'computed_at', sortDirection: 'asc' },
 };
 
+// Sentinel for the "(none)" bucket — selecting it filters to accounts whose SF
+// attribute is null. Backend translates it to `IS NULL`.
+const NONE_VALUE = Protopie.CHURN_SCORE_FILTER_NONE_VALUE;
+
+const parseRiskBand = (
+    value: string | null,
+): Protopie.ChurnScoreRiskBand | null =>
+    value === 'high' || value === 'medium' || value === 'low' ? value : null;
+
+const facetValueLabel = (value: string): string =>
+    value === NONE_VALUE ? '(none)' : value;
+
+/**
+ * Builds Mantine MultiSelect `data` from a facet response: `value (count)`
+ * labels, a prepended `(none)` option when null rows exist, and any currently
+ * selected value that the latest options no longer include — so a selection can
+ * always be removed even when other filters drop its count to zero.
+ */
+const buildFacetData = (
+    facet: Protopie.ChurnScoreFacet | undefined,
+    selected: string[],
+): { value: string; label: string }[] => {
+    const data: { value: string; label: string }[] = [];
+    const seen = new Set<string>();
+    const noneCount = facet?.noneCount ?? 0;
+    if (noneCount > 0 || selected.includes(NONE_VALUE)) {
+        data.push({
+            value: NONE_VALUE,
+            label: noneCount > 0 ? `(none) (${noneCount})` : '(none)',
+        });
+        seen.add(NONE_VALUE);
+    }
+    (facet?.options ?? []).forEach(({ value, count }) => {
+        data.push({ value, label: `${value} (${count})` });
+        seen.add(value);
+    });
+    selected.forEach((value) => {
+        if (!seen.has(value)) {
+            data.push({ value, label: facetValueLabel(value) });
+            seen.add(value);
+        }
+    });
+    return data;
+};
+
 const ProtopieChurnScoresPage = () => {
     const projectUuid = useProjectUuid();
-    const [riskBand, setRiskBand] =
-        useState<Protopie.ChurnScoreRiskBand | null>(null);
-    const [namespace, setNamespace] = useState('');
-    const [debouncedNamespace] = useDebouncedValue(namespace, 300);
-    const [accountOwner, setAccountOwner] = useState<string[]>([]);
-    const [sfPlanCategory, setSfPlanCategory] = useState<string[]>([]);
-    const [sfAccountRegion, setSfAccountRegion] = useState<string[]>([]);
-    const [sfAccountCountry, setSfAccountCountry] = useState<string[]>([]);
-    const [page, setPage] = useState(1);
-    const [pageSize, setPageSize] = useState(String(DEFAULT_PAGE_SIZE));
-    const [sortValue, setSortValue] = useState(DEFAULT_SORT_VALUE);
+    const [searchParams, setSearchParams] = useSearchParams();
+
+    // Filter state, initialized once from the URL so links are shareable and
+    // survive a refresh. The URL is kept in sync by the effect below.
     const [selectedConfigUuid, setSelectedConfigUuid] = useState<
         string | undefined
-    >();
+    >(() => searchParams.get('configUuid') ?? undefined);
+    const [riskBand, setRiskBand] =
+        useState<Protopie.ChurnScoreRiskBand | null>(() =>
+            parseRiskBand(searchParams.get('riskBand')),
+        );
+    const [search, setSearch] = useState(
+        () => searchParams.get('search') ?? '',
+    );
+    const [debouncedSearch] = useDebouncedValue(search, 300);
+    const [accountOwner, setAccountOwner] = useState<string[]>(() =>
+        searchParams.getAll('accountOwner'),
+    );
+    const [sfPlanCategory, setSfPlanCategory] = useState<string[]>(() =>
+        searchParams.getAll('sfPlanCategory'),
+    );
+    const [sfAccountRegion, setSfAccountRegion] = useState<string[]>(() =>
+        searchParams.getAll('sfAccountRegion'),
+    );
+    const [sfAccountCountry, setSfAccountCountry] = useState<string[]>(() =>
+        searchParams.getAll('sfAccountCountry'),
+    );
+    const [sortValue, setSortValue] = useState(() => {
+        const raw = searchParams.get('sort');
+        return raw && SORT_FILTERS[raw] ? raw : DEFAULT_SORT_VALUE;
+    });
+    const [pageSize, setPageSize] = useState(() => {
+        const raw = searchParams.get('rows');
+        return raw && PAGE_SIZE_OPTIONS.includes(raw)
+            ? raw
+            : String(DEFAULT_PAGE_SIZE);
+    });
+    const [page, setPage] = useState(() => {
+        const raw = Number(searchParams.get('page'));
+        return Number.isInteger(raw) && raw >= 1 ? raw : 1;
+    });
+
     const numericPageSize = Number(pageSize);
     const sortFilter = SORT_FILTERS[sortValue] ?? SORT_FILTERS.health_asc;
+
     const configs = useProtopieChurnConfigs(projectUuid);
-    const filterOptions = useProtopieChurnScoreFilterOptions(
-        projectUuid,
-        selectedConfigUuid,
+
+    // The filter set that both narrows the scores list and drives the faceted
+    // option counts (each facet ignores its own selection server-side).
+    const activeFilters = useMemo<Protopie.ChurnScoreLatestFilters>(
+        () => ({
+            configUuid: selectedConfigUuid,
+            riskBand: riskBand ?? undefined,
+            search: debouncedSearch.trim() || undefined,
+            accountOwner: accountOwner.length ? accountOwner : undefined,
+            sfPlanCategory: sfPlanCategory.length ? sfPlanCategory : undefined,
+            sfAccountRegion: sfAccountRegion.length
+                ? sfAccountRegion
+                : undefined,
+            sfAccountCountry: sfAccountCountry.length
+                ? sfAccountCountry
+                : undefined,
+        }),
+        [
+            selectedConfigUuid,
+            riskBand,
+            debouncedSearch,
+            accountOwner,
+            sfPlanCategory,
+            sfAccountRegion,
+            sfAccountCountry,
+        ],
     );
 
+    const filterOptions = useProtopieChurnScoreFilterOptions(
+        projectUuid,
+        activeFilters,
+    );
+
+    const filters = useMemo<Protopie.ChurnScoreLatestFilters>(
+        () => ({
+            ...activeFilters,
+            sortBy: sortFilter.sortBy,
+            sortDirection: sortFilter.sortDirection,
+            limit: numericPageSize,
+            offset: (page - 1) * numericPageSize,
+        }),
+        [
+            activeFilters,
+            sortFilter.sortBy,
+            sortFilter.sortDirection,
+            numericPageSize,
+            page,
+        ],
+    );
+    const scores = useProtopieChurnScores({ projectUuid, filters });
+
+    // Default to the first rubric only when none was restored from the URL.
     useEffect(() => {
         if (selectedConfigUuid || !configs.data?.length) return;
-
         setSelectedConfigUuid(configs.data[0].configUuid);
     }, [configs.data, selectedConfigUuid]);
 
+    // Reset to the first page whenever a filter changes — but not on the
+    // initial mount, so a shared URL's page survives the first load.
+    const isFirstRender = useRef(true);
     useEffect(() => {
+        if (isFirstRender.current) {
+            isFirstRender.current = false;
+            return;
+        }
         setPage(1);
     }, [
-        debouncedNamespace,
+        debouncedSearch,
         numericPageSize,
         riskBand,
         selectedConfigUuid,
@@ -110,39 +238,38 @@ const ProtopieChurnScoresPage = () => {
         sfAccountCountry,
     ]);
 
-    const filters = useMemo<Protopie.ChurnScoreLatestFilters>(
-        () => ({
-            configUuid: selectedConfigUuid,
-            riskBand: riskBand ?? undefined,
-            namespace: debouncedNamespace.trim() || undefined,
-            accountOwner: accountOwner.length ? accountOwner : undefined,
-            sfPlanCategory: sfPlanCategory.length ? sfPlanCategory : undefined,
-            sfAccountRegion: sfAccountRegion.length
-                ? sfAccountRegion
-                : undefined,
-            sfAccountCountry: sfAccountCountry.length
-                ? sfAccountCountry
-                : undefined,
-            sortBy: sortFilter.sortBy,
-            sortDirection: sortFilter.sortDirection,
-            limit: numericPageSize,
-            offset: (page - 1) * numericPageSize,
-        }),
-        [
-            debouncedNamespace,
-            accountOwner,
-            sfPlanCategory,
-            sfAccountRegion,
-            sfAccountCountry,
-            numericPageSize,
-            page,
-            riskBand,
-            selectedConfigUuid,
-            sortFilter.sortBy,
-            sortFilter.sortDirection,
-        ],
-    );
-    const scores = useProtopieChurnScores({ projectUuid, filters });
+    // Keep the URL in sync with the current filter state (external system).
+    useEffect(() => {
+        const next = new URLSearchParams();
+        if (selectedConfigUuid) next.set('configUuid', selectedConfigUuid);
+        if (riskBand) next.set('riskBand', riskBand);
+        if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim());
+        accountOwner.forEach((value) => next.append('accountOwner', value));
+        sfPlanCategory.forEach((value) => next.append('sfPlanCategory', value));
+        sfAccountRegion.forEach((value) =>
+            next.append('sfAccountRegion', value),
+        );
+        sfAccountCountry.forEach((value) =>
+            next.append('sfAccountCountry', value),
+        );
+        if (sortValue !== DEFAULT_SORT_VALUE) next.set('sort', sortValue);
+        if (pageSize !== String(DEFAULT_PAGE_SIZE)) next.set('rows', pageSize);
+        if (page > 1) next.set('page', String(page));
+        setSearchParams(next, { replace: true });
+    }, [
+        selectedConfigUuid,
+        riskBand,
+        debouncedSearch,
+        accountOwner,
+        sfPlanCategory,
+        sfAccountRegion,
+        sfAccountCountry,
+        sortValue,
+        pageSize,
+        page,
+        setSearchParams,
+    ]);
+
     const configOptions = useMemo(
         () =>
             (configs.data ?? []).map((config) => ({
@@ -151,6 +278,88 @@ const ProtopieChurnScoresPage = () => {
             })),
         [configs.data],
     );
+
+    const accountOwnerData = useMemo(
+        () => buildFacetData(filterOptions.data?.accountOwner, accountOwner),
+        [filterOptions.data, accountOwner],
+    );
+    const sfPlanCategoryData = useMemo(
+        () =>
+            buildFacetData(filterOptions.data?.sfPlanCategory, sfPlanCategory),
+        [filterOptions.data, sfPlanCategory],
+    );
+    const sfAccountRegionData = useMemo(
+        () =>
+            buildFacetData(
+                filterOptions.data?.sfAccountRegion,
+                sfAccountRegion,
+            ),
+        [filterOptions.data, sfAccountRegion],
+    );
+    const sfAccountCountryData = useMemo(
+        () =>
+            buildFacetData(
+                filterOptions.data?.sfAccountCountry,
+                sfAccountCountry,
+            ),
+        [filterOptions.data, sfAccountCountry],
+    );
+
+    const clearFacets = () => {
+        setAccountOwner([]);
+        setSfPlanCategory([]);
+        setSfAccountRegion([]);
+        setSfAccountCountry([]);
+    };
+
+    const clearAllFilters = () => {
+        setRiskBand(null);
+        setSearch('');
+        clearFacets();
+    };
+
+    // Removable chips summarizing every active filter.
+    const activeChips: { key: string; label: string; onRemove: () => void }[] =
+        [];
+    if (riskBand) {
+        activeChips.push({
+            key: 'risk',
+            label: `Risk: ${riskBand}`,
+            onRemove: () => setRiskBand(null),
+        });
+    }
+    if (search.trim()) {
+        activeChips.push({
+            key: 'search',
+            label: `Search: "${search.trim()}"`,
+            onRemove: () => setSearch(''),
+        });
+    }
+    (
+        [
+            { name: 'Owner', values: accountOwner, setter: setAccountOwner },
+            { name: 'Plan', values: sfPlanCategory, setter: setSfPlanCategory },
+            {
+                name: 'Region',
+                values: sfAccountRegion,
+                setter: setSfAccountRegion,
+            },
+            {
+                name: 'Country',
+                values: sfAccountCountry,
+                setter: setSfAccountCountry,
+            },
+        ] as const
+    ).forEach(({ name, values, setter }) => {
+        values.forEach((value) => {
+            activeChips.push({
+                key: `${name}:${value}`,
+                label: `${name}: ${facetValueLabel(value)}`,
+                onRemove: () => setter(values.filter((item) => item !== value)),
+            });
+        });
+    });
+
     const rows = scores.data ?? [];
     const hasPreviousPage = page > 1;
     const hasNextPage = rows.length === numericPageSize;
@@ -205,10 +414,7 @@ const ProtopieChurnScoresPage = () => {
                                 // under one rubric may not exist in the next, so
                                 // clear the SF filters on rubric change to avoid
                                 // an empty result set + stale MultiSelect values.
-                                setAccountOwner([]);
-                                setSfPlanCategory([]);
-                                setSfAccountRegion([]);
-                                setSfAccountCountry([]);
+                                clearFacets();
                             }}
                         />
                         <Select
@@ -225,15 +431,16 @@ const ProtopieChurnScoresPage = () => {
                                 setRiskBand(
                                     value === 'all'
                                         ? null
-                                        : (value as Protopie.ChurnScoreRiskBand),
+                                        : parseRiskBand(value),
                                 )
                             }
                         />
                         <TextInput
-                            label="Namespace"
-                            value={namespace}
+                            label="Search"
+                            placeholder="Account, namespace, URL, owner…"
+                            value={search}
                             onChange={(event) =>
-                                setNamespace(event.currentTarget.value)
+                                setSearch(event.currentTarget.value)
                             }
                         />
                         <Select
@@ -264,7 +471,7 @@ const ProtopieChurnScoresPage = () => {
                             }
                             searchable
                             clearable
-                            data={filterOptions.data?.accountOwner ?? []}
+                            data={accountOwnerData}
                             value={accountOwner}
                             onChange={setAccountOwner}
                         />
@@ -275,7 +482,7 @@ const ProtopieChurnScoresPage = () => {
                             }
                             searchable
                             clearable
-                            data={filterOptions.data?.sfPlanCategory ?? []}
+                            data={sfPlanCategoryData}
                             value={sfPlanCategory}
                             onChange={setSfPlanCategory}
                         />
@@ -286,7 +493,7 @@ const ProtopieChurnScoresPage = () => {
                             }
                             searchable
                             clearable
-                            data={filterOptions.data?.sfAccountRegion ?? []}
+                            data={sfAccountRegionData}
                             value={sfAccountRegion}
                             onChange={setSfAccountRegion}
                         />
@@ -297,11 +504,35 @@ const ProtopieChurnScoresPage = () => {
                             }
                             searchable
                             clearable
-                            data={filterOptions.data?.sfAccountCountry ?? []}
+                            data={sfAccountCountryData}
                             value={sfAccountCountry}
                             onChange={setSfAccountCountry}
                         />
                     </Group>
+
+                    {activeChips.length > 0 && (
+                        <Group gap="xs" align="center">
+                            <Text size="xs" c="dimmed">
+                                Active filters
+                            </Text>
+                            {activeChips.map((chip) => (
+                                <Pill
+                                    key={chip.key}
+                                    withRemoveButton
+                                    onRemove={chip.onRemove}
+                                >
+                                    {chip.label}
+                                </Pill>
+                            ))}
+                            <Button
+                                variant="subtle"
+                                size="compact-xs"
+                                onClick={clearAllFilters}
+                            >
+                                Clear all
+                            </Button>
+                        </Group>
+                    )}
 
                     <Table.ScrollContainer minWidth={820}>
                         <Table verticalSpacing="sm">

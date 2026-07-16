@@ -555,10 +555,12 @@ export class ChurnScoreService extends BaseService {
     async listFilterOptions({
         projectUuid,
         configUuid,
+        filters,
         user,
     }: {
         projectUuid: string;
         configUuid?: string;
+        filters: Protopie.ChurnScoreLatestFilters;
         user: SessionUser;
     }): Promise<Protopie.ChurnScoreFilterOptions> {
         this.requireProjectView(user, projectUuid);
@@ -570,6 +572,7 @@ export class ChurnScoreService extends BaseService {
         return this.churnScoreModel.listFilterOptions({
             projectUuid,
             configUuid: config.configUuid,
+            filters,
         });
     }
 

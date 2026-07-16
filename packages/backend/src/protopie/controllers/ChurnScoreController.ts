@@ -475,6 +475,7 @@ export class ProtopieChurnScoreController extends BaseController {
         @Query() sfPlanCategory?: string[],
         @Query() sfAccountRegion?: string[],
         @Query() sfAccountCountry?: string[],
+        @Query() search?: string,
     ): Promise<ApiChurnScoresResponse> {
         assertRegisteredAccount(req.account);
         this.setStatus(200);
@@ -491,6 +492,7 @@ export class ProtopieChurnScoreController extends BaseController {
                     minScore,
                     maxScore,
                     namespace,
+                    search,
                     accountOwner,
                     sfPlanCategory,
                     sfAccountRegion,
@@ -517,6 +519,14 @@ export class ProtopieChurnScoreController extends BaseController {
         @Path() projectUuid: string,
         @Request() req: express.Request,
         @Query() configUuid?: string,
+        @Query() riskBand?: Protopie.ChurnScoreRiskBand,
+        @Query() search?: string,
+        @Query() minScore?: number,
+        @Query() maxScore?: number,
+        @Query() accountOwner?: string[],
+        @Query() sfPlanCategory?: string[],
+        @Query() sfAccountRegion?: string[],
+        @Query() sfAccountCountry?: string[],
     ): Promise<ApiChurnScoreFilterOptionsResponse> {
         assertRegisteredAccount(req.account);
         this.setStatus(200);
@@ -528,6 +538,17 @@ export class ProtopieChurnScoreController extends BaseController {
             ).churnScoreService.listFilterOptions({
                 projectUuid,
                 configUuid,
+                filters: {
+                    configUuid,
+                    riskBand,
+                    search,
+                    minScore,
+                    maxScore,
+                    accountOwner,
+                    sfPlanCategory,
+                    sfAccountRegion,
+                    sfAccountCountry,
+                },
                 user: toSessionUser(req.account),
             }),
         };
