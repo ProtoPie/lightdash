@@ -1,4 +1,4 @@
-import { Protopie } from '@lightdash/common';
+import { type Protopie } from '@lightdash/common';
 import {
     Alert,
     Anchor,
@@ -25,6 +25,7 @@ import {
     useProtopieChurnScoreFilterOptions,
     useProtopieChurnScores,
 } from './api';
+import { buildFacetData, facetValueLabel } from './churnFacetData';
 import ProtopieChurnScoreMethodCards from './ProtopieChurnScoreMethodCards';
 import classes from './ProtopieFormsPage.module.css';
 import ProtopieSectionTabs from './ProtopieSectionTabs';
@@ -67,50 +68,10 @@ const SORT_FILTERS: Record<
     computed_at_asc: { sortBy: 'computed_at', sortDirection: 'asc' },
 };
 
-// Sentinel for the "(none)" bucket — selecting it filters to accounts whose SF
-// attribute is null. Backend translates it to `IS NULL`.
-const NONE_VALUE = Protopie.CHURN_SCORE_FILTER_NONE_VALUE;
-
 const parseRiskBand = (
     value: string | null,
 ): Protopie.ChurnScoreRiskBand | null =>
     value === 'high' || value === 'medium' || value === 'low' ? value : null;
-
-const facetValueLabel = (value: string): string =>
-    value === NONE_VALUE ? '(none)' : value;
-
-/**
- * Builds Mantine MultiSelect `data` from a facet response: `value (count)`
- * labels, a prepended `(none)` option when null rows exist, and any currently
- * selected value that the latest options no longer include — so a selection can
- * always be removed even when other filters drop its count to zero.
- */
-const buildFacetData = (
-    facet: Protopie.ChurnScoreFacet | undefined,
-    selected: string[],
-): { value: string; label: string }[] => {
-    const data: { value: string; label: string }[] = [];
-    const seen = new Set<string>();
-    const noneCount = facet?.noneCount ?? 0;
-    if (noneCount > 0 || selected.includes(NONE_VALUE)) {
-        data.push({
-            value: NONE_VALUE,
-            label: noneCount > 0 ? `(none) (${noneCount})` : '(none)',
-        });
-        seen.add(NONE_VALUE);
-    }
-    (facet?.options ?? []).forEach(({ value, count }) => {
-        data.push({ value, label: `${value} (${count})` });
-        seen.add(value);
-    });
-    selected.forEach((value) => {
-        if (!seen.has(value)) {
-            data.push({ value, label: facetValueLabel(value) });
-            seen.add(value);
-        }
-    });
-    return data;
-};
 
 const ProtopieChurnScoresPage = () => {
     const projectUuid = useProjectUuid();
@@ -211,18 +172,26 @@ const ProtopieChurnScoresPage = () => {
     );
     const scores = useProtopieChurnScores({ projectUuid, filters });
 
-    // Default to the first rubric only when none was restored from the URL.
+    // Pick a valid rubric once configs load: keep the URL's config only if it's
+    // actually accessible, otherwise fall back to the first — so a stale/deleted
+    // configUuid in a shared link recovers instead of leaving the page in a
+    // permanent scores.error state.
     useEffect(() => {
-        if (selectedConfigUuid || !configs.data?.length) return;
+        if (!configs.data?.length) return;
+        const isValid = configs.data.some(
+            (config) => config.configUuid === selectedConfigUuid,
+        );
+        if (isValid) return;
         setSelectedConfigUuid(configs.data[0].configUuid);
     }, [configs.data, selectedConfigUuid]);
 
-    // Reset to the first page whenever a filter changes — but not on the
-    // initial mount, so a shared URL's page survives the first load.
-    const isFirstRender = useRef(true);
+    // Reset to the first page whenever a filter changes — but not on the initial
+    // load. Arm only once a config is settled (from the URL or after async
+    // hydration) so a shared URL's page survives the automatic config set.
+    const pageResetArmed = useRef(false);
     useEffect(() => {
-        if (isFirstRender.current) {
-            isFirstRender.current = false;
+        if (!pageResetArmed.current) {
+            if (selectedConfigUuid) pageResetArmed.current = true;
             return;
         }
         setPage(1);
@@ -509,6 +478,13 @@ const ProtopieChurnScoresPage = () => {
                             onChange={setSfAccountCountry}
                         />
                     </Group>
+
+                    {filterOptions.error && (
+                        <Text size="xs" c="red">
+                            Filter options failed to load — available values and
+                            counts may be incomplete.
+                        </Text>
+                    )}
 
                     {activeChips.length > 0 && (
                         <Group gap="xs" align="center">

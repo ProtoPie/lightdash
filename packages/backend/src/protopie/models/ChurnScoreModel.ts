@@ -28,6 +28,15 @@ type DbChurnScore = {
     run_uuid: string;
 };
 
+/**
+ * Escapes LIKE/ILIKE wildcards so a user's free-text search is matched as
+ * literal partial text — otherwise `%` and `_` act as wildcards (e.g. a lone
+ * `_` would match nearly every account). Postgres LIKE uses backslash as its
+ * default escape character, so no explicit ESCAPE clause is needed.
+ */
+export const escapeLikePattern = (value: string): string =>
+    value.replace(/[\\%_]/g, (char) => `\\${char}`);
+
 const CHURN_SCORE_SORT_BY = new Set<Protopie.ChurnScoreSortBy>([
     'score',
     'risk',
@@ -94,18 +103,18 @@ export class ChurnScoreModel {
     }
 
     /** Maps each filter facet to its snapshot column. */
-    private static readonly FACET_COLUMNS: Record<
-        Protopie.ChurnScoreFacetKey,
-        string
-    > = {
+    private static readonly FACET_COLUMNS = {
         accountOwner: 'account_owner',
         sfPlanCategory: 'sf_plan_category',
         sfAccountRegion: 'sf_account_region',
         sfAccountCountry: 'sf_account_country',
-    };
+    } as const satisfies Record<
+        Protopie.ChurnScoreFacetKey,
+        keyof DbChurnScore
+    >;
 
     /** Columns scanned by the unified free-text search (OR ilike). */
-    private static readonly SEARCH_COLUMNS = [
+    private static readonly SEARCH_COLUMNS: readonly (keyof DbChurnScore)[] = [
         'sf_account_name',
         'namespace',
         'cloud_url',
@@ -168,7 +177,7 @@ export class ChurnScoreModel {
         }
         const search = filters.search?.trim();
         if (search) {
-            const like = `%${search}%`;
+            const like = `%${escapeLikePattern(search)}%`;
             void query.where((builder) => {
                 ChurnScoreModel.SEARCH_COLUMNS.forEach((column) => {
                     void builder.orWhere(column, 'ilike', like);
@@ -324,32 +333,34 @@ export class ChurnScoreModel {
             const column = ChurnScoreModel.FACET_COLUMNS[facetKey];
             // Apply every OTHER active filter (not this facet's own selection)
             // so its value list stays broadenable — the faceted-search rule.
-            const base = this.database.from(
+            const query = this.database.from(
                 this.latestScoresSubquery({ projectUuid, configUuid }),
             );
-            ChurnScoreModel.applyScoreFilters(base, filters, facetKey);
+            ChurnScoreModel.applyScoreFilters(query, filters, facetKey);
 
-            const optionRows = (await base
-                .clone()
-                .whereNotNull(column)
+            // Single GROUP BY over the whole snapshot (nulls included) — the
+            // null group is split out into noneCount, so one query per facet.
+            const rows = (await query
                 .groupBy(column)
                 .orderBy(column, 'asc')
                 .select(column)
                 .count({ count: '*' })) as Record<string, unknown>[];
 
-            const noneRow = (await base
-                .clone()
-                .whereNull(column)
-                .count({ count: '*' })
-                .first()) as { count?: string | number } | undefined;
+            const options: Protopie.ChurnScoreFacetOption[] = [];
+            let noneCount = 0;
+            rows.forEach((row) => {
+                const value = row[column];
+                if (value === null || value === undefined) {
+                    noneCount = Number(row.count);
+                } else {
+                    options.push({
+                        value: String(value),
+                        count: Number(row.count),
+                    });
+                }
+            });
 
-            return {
-                options: optionRows.map((row) => ({
-                    value: String(row[column]),
-                    count: Number(row.count),
-                })),
-                noneCount: Number(noneRow?.count ?? 0),
-            };
+            return { options, noneCount };
         };
 
         const [

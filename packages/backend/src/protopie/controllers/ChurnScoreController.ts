@@ -537,7 +537,6 @@ export class ProtopieChurnScoreController extends BaseController {
                 this.services,
             ).churnScoreService.listFilterOptions({
                 projectUuid,
-                configUuid,
                 filters: {
                     configUuid,
                     riskBand,
