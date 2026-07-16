@@ -8,6 +8,11 @@ type DbChurnScore = {
     account_key: string;
     namespace: string | null;
     cloud_url: string | null;
+    sf_account_name: string | null;
+    account_owner: string | null;
+    sf_plan_category: string | null;
+    sf_account_region: string | null;
+    sf_account_country: string | null;
     scored_for_date: string | Date;
     lookback_days: number;
     config_uuid: string;
@@ -100,6 +105,11 @@ export class ChurnScoreModel {
                     account_key: row.accountKey,
                     namespace: row.namespace,
                     cloud_url: row.cloudUrl,
+                    sf_account_name: row.sfAccountName,
+                    account_owner: row.accountOwner,
+                    sf_plan_category: row.sfPlanCategory,
+                    sf_account_region: row.sfAccountRegion,
+                    sf_account_country: row.sfAccountCountry,
                     scored_for_date: row.scoredForDate,
                     lookback_days: row.lookbackDays,
                     config_uuid: row.configUuid,
@@ -123,6 +133,17 @@ export class ChurnScoreModel {
             .merge({
                 namespace: this.database.raw('excluded.namespace'),
                 cloud_url: this.database.raw('excluded.cloud_url'),
+                sf_account_name: this.database.raw('excluded.sf_account_name'),
+                account_owner: this.database.raw('excluded.account_owner'),
+                sf_plan_category: this.database.raw(
+                    'excluded.sf_plan_category',
+                ),
+                sf_account_region: this.database.raw(
+                    'excluded.sf_account_region',
+                ),
+                sf_account_country: this.database.raw(
+                    'excluded.sf_account_country',
+                ),
                 config_version: this.database.raw('excluded.config_version'),
                 total_points: this.database.raw('excluded.total_points'),
                 max_points: this.database.raw('excluded.max_points'),
@@ -138,15 +159,20 @@ export class ChurnScoreModel {
             });
     }
 
-    async listLatestScores({
+    /**
+     * The latest-run snapshot for one (project, config): the newest scored row
+     * per account_key from the most recent run. Shared by `listLatestScores`
+     * and `listFilterOptions` so filter dropdowns and the scores list always
+     * agree on which accounts exist. Returns an aliased subquery (`latest_scores`)
+     * to nest inside an outer query.
+     */
+    private latestScoresSubquery({
         projectUuid,
         configUuid,
-        filters,
     }: {
         projectUuid: string;
         configUuid: string;
-        filters: Protopie.ChurnScoreLatestFilters;
-    }): Promise<ProtopieChurnScoreRecord[]> {
+    }): Knex.QueryBuilder {
         const latestRun = this.database<DbChurnScore>(
             ProtopieTableName.ChurnScores,
         )
@@ -158,9 +184,7 @@ export class ChurnScoreModel {
             .orderBy('scored_for_date', 'desc')
             .orderBy('computed_at', 'desc')
             .limit(1);
-        const latestScores = this.database<DbChurnScore>(
-            ProtopieTableName.ChurnScores,
-        )
+        return this.database<DbChurnScore>(ProtopieTableName.ChurnScores)
             .distinctOn('account_key')
             .select('*')
             .where({
@@ -172,6 +196,63 @@ export class ChurnScoreModel {
             .orderBy('scored_for_date', 'desc')
             .orderBy('computed_at', 'desc')
             .as('latest_scores');
+    }
+
+    /**
+     * Distinct non-null SF attribute values for the filter dropdowns, scoped to
+     * the same latest-run snapshot the scores list uses.
+     */
+    async listFilterOptions({
+        projectUuid,
+        configUuid,
+    }: {
+        projectUuid: string;
+        configUuid: string;
+    }): Promise<Protopie.ChurnScoreFilterOptions> {
+        const distinctValues = async (column: string): Promise<string[]> => {
+            const rows = await this.database
+                .distinct(column)
+                .from(this.latestScoresSubquery({ projectUuid, configUuid }))
+                .whereNotNull(column)
+                .orderBy(column, 'asc');
+            return (rows as Record<string, unknown>[]).map((row) =>
+                String(row[column]),
+            );
+        };
+
+        const [
+            accountOwner,
+            sfPlanCategory,
+            sfAccountRegion,
+            sfAccountCountry,
+        ] = await Promise.all([
+            distinctValues('account_owner'),
+            distinctValues('sf_plan_category'),
+            distinctValues('sf_account_region'),
+            distinctValues('sf_account_country'),
+        ]);
+
+        return {
+            accountOwner,
+            sfPlanCategory,
+            sfAccountRegion,
+            sfAccountCountry,
+        };
+    }
+
+    async listLatestScores({
+        projectUuid,
+        configUuid,
+        filters,
+    }: {
+        projectUuid: string;
+        configUuid: string;
+        filters: Protopie.ChurnScoreLatestFilters;
+    }): Promise<ProtopieChurnScoreRecord[]> {
+        const latestScores = this.latestScoresSubquery({
+            projectUuid,
+            configUuid,
+        });
         const offset = Math.max(filters.offset ?? 0, 0);
         const limit = Math.min(Math.max(filters.limit ?? 50, 1), 500);
         const query = this.database
@@ -191,6 +272,20 @@ export class ChurnScoreModel {
         }
         if (filters.namespace) {
             void query.where('namespace', 'ilike', `%${filters.namespace}%`);
+        }
+        // Multi-select SF filters (IN). Guard on length: an empty array must
+        // mean "unfiltered", never Knex's invalid `WHERE col IN ()`.
+        if (filters.accountOwner && filters.accountOwner.length > 0) {
+            void query.whereIn('account_owner', filters.accountOwner);
+        }
+        if (filters.sfPlanCategory && filters.sfPlanCategory.length > 0) {
+            void query.whereIn('sf_plan_category', filters.sfPlanCategory);
+        }
+        if (filters.sfAccountRegion && filters.sfAccountRegion.length > 0) {
+            void query.whereIn('sf_account_region', filters.sfAccountRegion);
+        }
+        if (filters.sfAccountCountry && filters.sfAccountCountry.length > 0) {
+            void query.whereIn('sf_account_country', filters.sfAccountCountry);
         }
 
         ChurnScoreModel.applyScoreSort(query, filters);
@@ -255,6 +350,11 @@ export class ChurnScoreModel {
             accountKey: row.account_key,
             namespace: row.namespace,
             cloudUrl: row.cloud_url,
+            sfAccountName: row.sf_account_name,
+            accountOwner: row.account_owner,
+            sfPlanCategory: row.sf_plan_category,
+            sfAccountRegion: row.sf_account_region,
+            sfAccountCountry: row.sf_account_country,
             scoredForDate:
                 row.scored_for_date instanceof Date
                     ? row.scored_for_date.toISOString().slice(0, 10)

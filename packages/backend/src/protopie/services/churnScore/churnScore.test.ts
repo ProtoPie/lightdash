@@ -292,15 +292,19 @@ describe('buildAggregationQuery', () => {
         expect(values).toEqual(expectedValues);
         expect(values).toHaveLength(26);
 
-        // url-keyed accounts + contacts-roster denominator
-        expect(sql).toContain('c.account_url AS account_key');
-        expect(sql).toContain('c.total_contacts AS total_users');
+        // canonical account_key roster + distinct_user_count denominator
+        expect(sql).toContain('c.account_key AS account_key');
+        expect(sql).toContain('c.distinct_user_count AS total_users');
+        expect(sql).toContain('c.account_owner AS account_owner');
         expect(sql).toContain(
-            'FROM warehouse_staging.protopie_account_contacts c',
+            'FROM warehouse_staging.protopie_account_user_counts c',
         );
         expect(sql).toContain(
-            'FROM warehouse_staging.protopie_account_event_usage eu',
+            'FROM warehouse_staging.protopie_account_event_usage_enterprise_all eu',
         );
+        // single canonical-key join (enterprise slug / Pro-Plus account name)
+        expect(sql).toContain('ON e.account_key = c.account_key');
+        expect(sql).toContain('GROUP BY eu.account_key');
         expect(sql).toContain('LEFT JOIN event_agg e');
 
         // standard 90-day factors
@@ -312,13 +316,11 @@ describe('buildAggregationQuery', () => {
             'eu.event_date >= CURRENT_DATE - 120 THEN eu.user_id END) AS pct_activated_logged_in_users_users',
         );
         // per-user instance totals
-        expect(sql).toContain(
-            'AS starting_actions_per_user_event_count',
-        );
+        expect(sql).toContain('AS starting_actions_per_user_event_count');
         expect(sql).toContain('SUM(CASE WHEN');
         // active days, no event filter
         expect(sql).toContain(
-            "COUNT(DISTINCT CASE WHEN eu.event_date >= CURRENT_DATE - 90 THEN eu.event_date END) AS active_days",
+            'COUNT(DISTINCT CASE WHEN eu.event_date >= CURRENT_DATE - 90 THEN eu.event_date END) AS active_days',
         );
         // Messages factor has no events → FALSE predicate → always 0
         expect(sql).toContain(

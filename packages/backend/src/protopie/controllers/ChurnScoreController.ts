@@ -107,6 +107,9 @@ type ApiChurnScoreAccountDetailsResponse = ApiSuccess<{
 
 type ApiChurnScoreEventsResponse = ApiSuccess<string[]>;
 
+type ApiChurnScoreFilterOptionsResponse =
+    ApiSuccess<Protopie.ChurnScoreFilterOptions>;
+
 @Route('/api/v1/projects/{projectUuid}/protopie/churn')
 @Response<ApiErrorPayload>('default', 'Error')
 @Tags('Protopie')
@@ -461,6 +464,10 @@ export class ProtopieChurnScoreController extends BaseController {
         @Query() minScore?: number,
         @Query() maxScore?: number,
         @Query() namespace?: string,
+        @Query() accountOwner?: string[],
+        @Query() sfPlanCategory?: string[],
+        @Query() sfAccountRegion?: string[],
+        @Query() sfAccountCountry?: string[],
         @Query() sortBy?: Protopie.ChurnScoreSortBy,
         @Query() sortDirection?: Protopie.ChurnScoreSortDirection,
         @Query() limit?: number,
@@ -481,11 +488,43 @@ export class ProtopieChurnScoreController extends BaseController {
                     minScore,
                     maxScore,
                     namespace,
+                    accountOwner,
+                    sfPlanCategory,
+                    sfAccountRegion,
+                    sfAccountCountry,
                     sortBy,
                     sortDirection,
                     limit,
                     offset,
                 },
+                user: toSessionUser(req.account),
+            }),
+        };
+    }
+
+    /**
+     * List distinct SF attribute values for the churn scores filter dropdowns.
+     * @summary List Protopie churn score filter options
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('scores/filter-options')
+    @OperationId('ListProtopieChurnScoreFilterOptions')
+    async listFilterOptions(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+        @Query() configUuid?: string,
+    ): Promise<ApiChurnScoreFilterOptionsResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: await getProtopieServices(
+                this.services,
+            ).churnScoreService.listFilterOptions({
+                projectUuid,
+                configUuid,
                 user: toSessionUser(req.account),
             }),
         };

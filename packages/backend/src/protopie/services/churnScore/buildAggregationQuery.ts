@@ -5,16 +5,23 @@ const IDENTIFIER_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /**
  * ChurnZero-faithful source relations (materialized in the data-modeling repo).
  *
- * - EVENT_USAGE_MART: per-account-per-event-per-day usage, ≥120d, with
- *   Studio events attributed by user_id and Cloud events by Page-URL host,
- *   plus the synthetic `editor_activated` event dated at user_created_at.
- *   Columns consumed: account_url, event_name, event_date (date), user_id,
+ * - EVENT_USAGE_MART: UNION of enterprise/dedicated-cloud and Pro-Plus event
+ *   usage, per-account-per-event-per-day, ~372d window, with the synthetic
+ *   `editor_activated` event dated at user_created_at. Exposes a canonical
+ *   `account_key` (enterprise = the '.protopie' slug of the cloud URL; Pro-Plus
+ *   = the SF `account_name`).
+ *   Columns consumed: account_key, event_name, event_date (date), user_id,
  *   event_count (instance count).
- * - CONTACTS_MART: one row per account = the CONTACTS roster denominator.
- *   Columns consumed: account_url, namespace, total_contacts (U).
+ * - USER_COUNTS_MART: one row per SF `account_name` = the roster + denominator,
+ *   with the matching canonical `account_key` (dbt computes the same slug /
+ *   name split, so the two tables join on that single column).
+ *   Columns consumed: account_key, sf_account_name, enterprise_url,
+ *   distinct_user_count (U), account_owner, sf_plan_category, sf_account_region,
+ *   sf_account_country.
+ *   Join: event.account_key = user_counts.account_key.
  */
-const EVENT_USAGE_MART = 'protopie_account_event_usage';
-const CONTACTS_MART = 'protopie_account_contacts';
+export const EVENT_USAGE_MART = 'protopie_account_event_usage_enterprise_all';
+export const USER_COUNTS_MART = 'protopie_account_user_counts';
 
 const validateIdentifier = (value: string, label: string): void => {
     if (!IDENTIFIER_REGEX.test(value)) {
@@ -77,10 +84,11 @@ const resolveWindowDays = (
 
 /**
  * Builds the per-account churn aggregation against the CZ-faithful marts.
- * Account key = `account_url`. Denominator (`total_users`) = CONTACTS roster
- * (`total_contacts`). Every account in the roster is scored, even with zero
- * events (LEFT JOIN → NULL metrics → treated as 0 by scoreAccount). Each factor
- * applies its own lookback window.
+ * Account key = the canonical `account_key` (enterprise slug or SF account name;
+ * dbt-computed on both marts). Denominator (`total_users`) = the
+ * `distinct_user_count` from the SF-account roster. Every account in the roster
+ * is scored, even with zero events (LEFT JOIN → NULL metrics → treated as 0 by
+ * scoreAccount). Each factor applies its own lookback window.
  */
 export const buildAggregationQuery = ({
     schema,
@@ -143,21 +151,26 @@ export const buildAggregationQuery = ({
     const sql = `
         WITH event_agg AS (
             SELECT
-                eu.account_url,
+                eu.account_key,
                 ${innerSelect}
             FROM ${schema}.${EVENT_USAGE_MART} eu
             WHERE eu.event_date >= CURRENT_DATE - ${maxWindowDays}
-            GROUP BY eu.account_url
+            GROUP BY eu.account_key
         )
         SELECT
-            c.account_url AS account_key,
-            c.namespace AS namespace,
-            c.account_url AS cloud_url,
-            c.total_contacts AS total_users,
+            c.account_key AS account_key,
+            c.sf_account_name AS namespace,
+            c.enterprise_url AS cloud_url,
+            c.distinct_user_count AS total_users,
+            c.sf_account_name AS sf_account_name,
+            c.account_owner AS account_owner,
+            c.sf_plan_category AS sf_plan_category,
+            c.sf_account_region AS sf_account_region,
+            c.sf_account_country AS sf_account_country,
             ${outerSelect}
-        FROM ${schema}.${CONTACTS_MART} c
+        FROM ${schema}.${USER_COUNTS_MART} c
         LEFT JOIN event_agg e
-            ON e.account_url = c.account_url
+            ON e.account_key = c.account_key
     `;
 
     return { sql, values };
