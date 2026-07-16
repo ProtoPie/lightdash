@@ -33,7 +33,10 @@ import {
     ChurnScoreRunModel,
     type ProtopieChurnScoreRunRecord,
 } from '../models/ChurnScoreRunModel';
-import { buildAggregationQuery } from './churnScore/buildAggregationQuery';
+import {
+    buildAggregationQuery,
+    EVENT_USAGE_MART,
+} from './churnScore/buildAggregationQuery';
 import {
     scoreAccount,
     type ChurnScoreAccountAggregationRow,
@@ -549,6 +552,27 @@ export class ChurnScoreService extends BaseService {
         });
     }
 
+    async listFilterOptions({
+        projectUuid,
+        configUuid,
+        user,
+    }: {
+        projectUuid: string;
+        configUuid?: string;
+        user: SessionUser;
+    }): Promise<Protopie.ChurnScoreFilterOptions> {
+        this.requireProjectView(user, projectUuid);
+        const config = await this.getConfigForScores({
+            projectUuid,
+            configUuid,
+        });
+        this.requireConfigView(user, projectUuid, config);
+        return this.churnScoreModel.listFilterOptions({
+            projectUuid,
+            configUuid: config.configUuid,
+        });
+    }
+
     async getAccountHistory({
         projectUuid,
         accountKey,
@@ -626,7 +650,7 @@ export class ChurnScoreService extends BaseService {
         });
         const eventUsage = await this.getAccountEventUsage({
             projectUuid,
-            accountUrl: score.cloudUrl ?? trimmedAccountKey,
+            accountKey: score.accountKey,
             config,
             factors,
             scoredForDate: score.scoredForDate,
@@ -792,6 +816,11 @@ export class ChurnScoreService extends BaseService {
                     accountKey: result.accountKey,
                     namespace: result.namespace,
                     cloudUrl: result.cloudUrl,
+                    sfAccountName: result.sfAccountName,
+                    accountOwner: result.accountOwner,
+                    sfPlanCategory: result.sfPlanCategory,
+                    sfAccountRegion: result.sfAccountRegion,
+                    sfAccountCountry: result.sfAccountCountry,
                     scoredForDate,
                     lookbackDays: config.lookbackDays,
                     configUuid: config.configUuid,
@@ -961,7 +990,7 @@ export class ChurnScoreService extends BaseService {
 
     private async getAccountEventUsage({
         projectUuid,
-        accountUrl,
+        accountKey,
         config,
         factors,
         scoredForDate,
@@ -969,7 +998,7 @@ export class ChurnScoreService extends BaseService {
         dateTo,
     }: {
         projectUuid: string;
-        accountUrl: string;
+        accountKey: string;
         config: ProtopieChurnScoreConfigRecord;
         factors: ProtopieChurnScoreFactorRecord[];
         scoredForDate: string;
@@ -1001,7 +1030,7 @@ export class ChurnScoreService extends BaseService {
             // Selectable bounds are anchored to the mart-wide latest event_date
             // (across all accounts), not this account's data or the score date.
             const martMaxResult = await warehouseClient.runQuery(
-                `SELECT max(event_date) AS mart_max FROM ${schema}.protopie_account_event_usage`,
+                `SELECT max(event_date) AS mart_max FROM ${schema}.${EVENT_USAGE_MART}`,
                 {
                     project_uuid: projectUuid,
                     query_context: QueryExecutionContext.API,
@@ -1032,7 +1061,7 @@ export class ChurnScoreService extends BaseService {
                 });
             }
 
-            const values = [accountUrl, dateRange.dateFrom, dateRange.dateTo];
+            const values = [accountKey, dateRange.dateFrom, dateRange.dateTo];
             const eventPlaceholders = selectedEventNames.map((eventName) => {
                 values.push(eventName);
                 return `$${values.length}`;
@@ -1046,8 +1075,8 @@ export class ChurnScoreService extends BaseService {
                     event_count,
                     first_seen_at,
                     last_seen_at
-                FROM ${schema}.protopie_account_event_usage
-                WHERE account_url = $1
+                FROM ${schema}.${EVENT_USAGE_MART}
+                WHERE account_key = $1
                   AND event_date >= $2::date
                   AND event_date <= $3::date
                   AND event_name IN (${eventPlaceholders.join(', ')})
@@ -1160,7 +1189,7 @@ export class ChurnScoreService extends BaseService {
             SELECT
                 MAX(event_date) AS max_event_date,
                 COUNT(*) AS row_count
-            FROM ${schema}.protopie_account_event_usage
+            FROM ${schema}.${EVENT_USAGE_MART}
         `;
         const { warehouseClient, sshTunnel } =
             await this.projectService._getWarehouseClient(
@@ -1190,7 +1219,7 @@ export class ChurnScoreService extends BaseService {
             if (rowCount === 0 || !maxEventDate) {
                 return {
                     fresh: false,
-                    reason: 'Churn mart protopie_account_event_usage is empty.',
+                    reason: `Churn mart ${EVENT_USAGE_MART} is empty.`,
                     maxEventDate: null,
                 };
             }
@@ -1274,17 +1303,23 @@ export class ChurnScoreService extends BaseService {
         dateTo?: string;
     }): ChurnScoreEventUsageDateRange {
         ChurnScoreService.validateDateString(martMax, 'martMax');
-        // The selectable window is the most recent N days of the mart, anchored
-        // to its latest event_date across all accounts.
+        // The selectable window spans the most recent MAX days of the mart,
+        // anchored to its latest event_date across all accounts. The default
+        // window (when the caller omits dateFrom) is narrower so the first load
+        // stays light; users can widen it back to minSelectableDate.
         const maxSelectableDate = martMax;
         const minSelectableDate = ChurnScoreService.addDays(
             martMax,
-            -(Protopie.CHURN_SCORE_EVENT_USAGE_WINDOW_DAYS - 1),
+            -(Protopie.CHURN_SCORE_EVENT_USAGE_MAX_WINDOW_DAYS - 1),
+        );
+        const defaultDateFrom = ChurnScoreService.addDays(
+            martMax,
+            -(Protopie.CHURN_SCORE_EVENT_USAGE_DEFAULT_WINDOW_DAYS - 1),
         );
 
         const resolvedDateTo = dateTo?.trim() || maxSelectableDate;
         ChurnScoreService.validateDateString(resolvedDateTo, 'dateTo');
-        const resolvedDateFrom = dateFrom?.trim() || minSelectableDate;
+        const resolvedDateFrom = dateFrom?.trim() || defaultDateFrom;
         ChurnScoreService.validateDateString(resolvedDateFrom, 'dateFrom');
 
         // Validated YYYY-MM-DD strings compare chronologically as strings.

@@ -7,6 +7,7 @@ import {
     Card,
     Group,
     Loader,
+    MultiSelect,
     Select,
     Stack,
     Table,
@@ -18,7 +19,11 @@ import { useDebouncedValue } from '@mantine-8/hooks';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { useProjectUuid } from '../hooks/useProjectUuid';
-import { useProtopieChurnConfigs, useProtopieChurnScores } from './api';
+import {
+    useProtopieChurnConfigs,
+    useProtopieChurnScoreFilterOptions,
+    useProtopieChurnScores,
+} from './api';
 import ProtopieChurnScoreMethodCards from './ProtopieChurnScoreMethodCards';
 import classes from './ProtopieFormsPage.module.css';
 import ProtopieSectionTabs from './ProtopieSectionTabs';
@@ -67,6 +72,10 @@ const ProtopieChurnScoresPage = () => {
         useState<Protopie.ChurnScoreRiskBand | null>(null);
     const [namespace, setNamespace] = useState('');
     const [debouncedNamespace] = useDebouncedValue(namespace, 300);
+    const [accountOwner, setAccountOwner] = useState<string[]>([]);
+    const [sfPlanCategory, setSfPlanCategory] = useState<string[]>([]);
+    const [sfAccountRegion, setSfAccountRegion] = useState<string[]>([]);
+    const [sfAccountCountry, setSfAccountCountry] = useState<string[]>([]);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(String(DEFAULT_PAGE_SIZE));
     const [sortValue, setSortValue] = useState(DEFAULT_SORT_VALUE);
@@ -76,6 +85,10 @@ const ProtopieChurnScoresPage = () => {
     const numericPageSize = Number(pageSize);
     const sortFilter = SORT_FILTERS[sortValue] ?? SORT_FILTERS.health_asc;
     const configs = useProtopieChurnConfigs(projectUuid);
+    const filterOptions = useProtopieChurnScoreFilterOptions(
+        projectUuid,
+        selectedConfigUuid,
+    );
 
     useEffect(() => {
         if (selectedConfigUuid || !configs.data?.length) return;
@@ -91,6 +104,10 @@ const ProtopieChurnScoresPage = () => {
         riskBand,
         selectedConfigUuid,
         sortValue,
+        accountOwner,
+        sfPlanCategory,
+        sfAccountRegion,
+        sfAccountCountry,
     ]);
 
     const filters = useMemo<Protopie.ChurnScoreLatestFilters>(
@@ -98,6 +115,14 @@ const ProtopieChurnScoresPage = () => {
             configUuid: selectedConfigUuid,
             riskBand: riskBand ?? undefined,
             namespace: debouncedNamespace.trim() || undefined,
+            accountOwner: accountOwner.length ? accountOwner : undefined,
+            sfPlanCategory: sfPlanCategory.length ? sfPlanCategory : undefined,
+            sfAccountRegion: sfAccountRegion.length
+                ? sfAccountRegion
+                : undefined,
+            sfAccountCountry: sfAccountCountry.length
+                ? sfAccountCountry
+                : undefined,
             sortBy: sortFilter.sortBy,
             sortDirection: sortFilter.sortDirection,
             limit: numericPageSize,
@@ -105,6 +130,10 @@ const ProtopieChurnScoresPage = () => {
         }),
         [
             debouncedNamespace,
+            accountOwner,
+            sfPlanCategory,
+            sfAccountRegion,
+            sfAccountCountry,
             numericPageSize,
             page,
             riskBand,
@@ -170,9 +199,17 @@ const ProtopieChurnScoresPage = () => {
                             allowDeselect={false}
                             data={configOptions}
                             value={selectedConfigUuid}
-                            onChange={(value) =>
-                                setSelectedConfigUuid(value ?? undefined)
-                            }
+                            onChange={(value) => {
+                                setSelectedConfigUuid(value ?? undefined);
+                                // Filter options are per-config; a value picked
+                                // under one rubric may not exist in the next, so
+                                // clear the SF filters on rubric change to avoid
+                                // an empty result set + stale MultiSelect values.
+                                setAccountOwner([]);
+                                setSfPlanCategory([]);
+                                setSfAccountRegion([]);
+                                setSfAccountCountry([]);
+                            }}
                         />
                         <Select
                             label="Risk band"
@@ -219,6 +256,53 @@ const ProtopieChurnScoresPage = () => {
                         />
                     </Group>
 
+                    <Group grow>
+                        <MultiSelect
+                            label="Account owner"
+                            placeholder={
+                                accountOwner.length ? undefined : 'All'
+                            }
+                            searchable
+                            clearable
+                            data={filterOptions.data?.accountOwner ?? []}
+                            value={accountOwner}
+                            onChange={setAccountOwner}
+                        />
+                        <MultiSelect
+                            label="Plan category"
+                            placeholder={
+                                sfPlanCategory.length ? undefined : 'All'
+                            }
+                            searchable
+                            clearable
+                            data={filterOptions.data?.sfPlanCategory ?? []}
+                            value={sfPlanCategory}
+                            onChange={setSfPlanCategory}
+                        />
+                        <MultiSelect
+                            label="Region"
+                            placeholder={
+                                sfAccountRegion.length ? undefined : 'All'
+                            }
+                            searchable
+                            clearable
+                            data={filterOptions.data?.sfAccountRegion ?? []}
+                            value={sfAccountRegion}
+                            onChange={setSfAccountRegion}
+                        />
+                        <MultiSelect
+                            label="Country"
+                            placeholder={
+                                sfAccountCountry.length ? undefined : 'All'
+                            }
+                            searchable
+                            clearable
+                            data={filterOptions.data?.sfAccountCountry ?? []}
+                            value={sfAccountCountry}
+                            onChange={setSfAccountCountry}
+                        />
+                    </Group>
+
                     <Table.ScrollContainer minWidth={820}>
                         <Table verticalSpacing="sm">
                             <Table.Thead>
@@ -243,7 +327,8 @@ const ProtopieChurnScoresPage = () => {
                                                     size="sm"
                                                     fw={600}
                                                 >
-                                                    {score.namespace ??
+                                                    {score.sfAccountName ??
+                                                        score.namespace ??
                                                         score.accountKey}
                                                 </Anchor>
                                                 {score.cloudUrl && (

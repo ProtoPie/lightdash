@@ -11,11 +11,21 @@ export const DEFAULT_CHURN_SCORE_CONFIG_NAME = 'Default Churn Score';
 export const DEFAULT_CHURN_SCORE_LOOKBACK_DAYS = 90;
 
 /**
- * Width of the Event usage explorer's selectable date window, anchored to the
- * mart-wide latest `event_date` (NOT per-account, NOT the rubric lookback).
- * Sales can only browse the most recent 90 days of `protopie_account_event_usage`.
+ * Maximum selectable width of the Event usage explorer's date window, anchored
+ * to the mart-wide latest `event_date` (NOT per-account, NOT the rubric
+ * lookback). Sales can browse back up to this many days of
+ * `protopie_account_event_usage`. The mart must materialize at least this many
+ * days or dates beyond its coverage return empty.
  */
-export const CHURN_SCORE_EVENT_USAGE_WINDOW_DAYS = 90;
+export const CHURN_SCORE_EVENT_USAGE_MAX_WINDOW_DAYS = 365;
+
+/**
+ * Default width of the Event usage explorer's date window when the caller does
+ * not specify `dateFrom`. Kept narrower than the max so the first page load
+ * stays light; users can widen the range up to
+ * `CHURN_SCORE_EVENT_USAGE_MAX_WINDOW_DAYS`.
+ */
+export const CHURN_SCORE_EVENT_USAGE_DEFAULT_WINDOW_DAYS = 90;
 
 /**
  * Scoring function for the default rubric. ChurnZero parity uses integer

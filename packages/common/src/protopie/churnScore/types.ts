@@ -136,6 +136,16 @@ export type ChurnScore = {
     accountKey: string;
     namespace: string | null;
     cloudUrl: string | null;
+    /** Salesforce account display name (user-facing label). */
+    sfAccountName: string | null;
+    /** Salesforce account owner (sales rep) — filterable. */
+    accountOwner: string | null;
+    /** Salesforce plan category — filterable. */
+    sfPlanCategory: string | null;
+    /** Salesforce account region — filterable. */
+    sfAccountRegion: string | null;
+    /** Salesforce account country — filterable. */
+    sfAccountCountry: string | null;
     scoredForDate: string;
     lookbackDays: number;
     configUuid: string;
@@ -220,8 +230,25 @@ export type ChurnScoreLatestFilters = {
     minScore?: number;
     maxScore?: number;
     namespace?: string;
+    /** Multi-select SF filters (IN semantics). Empty/absent = unfiltered. */
+    accountOwner?: string[];
+    sfPlanCategory?: string[];
+    sfAccountRegion?: string[];
+    sfAccountCountry?: string[];
     sortBy?: ChurnScoreSortBy;
     sortDirection?: ChurnScoreSortDirection;
     limit?: number;
     offset?: number;
+};
+
+/**
+ * Distinct values for the churn-scores screen filter dropdowns, per config.
+ * NOTE: reflects the last recompute (the persisted score snapshot), not live
+ * Salesforce — values lag until the next recompute run.
+ */
+export type ChurnScoreFilterOptions = {
+    accountOwner: string[];
+    sfPlanCategory: string[];
+    sfAccountRegion: string[];
+    sfAccountCountry: string[];
 };
