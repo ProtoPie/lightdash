@@ -1,5 +1,10 @@
 import { type AnyType, type ApiError, type Protopie } from '@lightdash/common';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+    useInfiniteQuery,
+    useMutation,
+    useQuery,
+    useQueryClient,
+} from '@tanstack/react-query';
 import { lightdashApi } from '../api';
 import useToaster from '../hooks/toaster/useToaster';
 
@@ -475,18 +480,31 @@ const appendChurnFacetParams = (
     );
 };
 
+// Batch size for the infinite scroll list. `filters.limit` carries the page's
+// "Rows" selection; each fetch requests one batch and `offset` comes from the
+// infinite-query pageParam (not from `filters`, which stays offset-free so the
+// query key resets cleanly on any filter/sort/batch change).
+const DEFAULT_CHURN_SCORES_BATCH_SIZE = 25;
+
 export const useProtopieChurnScores = ({
     projectUuid,
     filters,
 }: {
     projectUuid?: string;
     filters?: Protopie.ChurnScoreLatestFilters;
-}) =>
-    useQuery<Protopie.ChurnScore[], ApiError>({
+}) => {
+    const batchSize = filters?.limit ?? DEFAULT_CHURN_SCORES_BATCH_SIZE;
+    return useInfiniteQuery<Protopie.ChurnScore[], ApiError>({
         queryKey: protopieChurnScoresQueryKey(projectUuid, filters),
         enabled: Boolean(projectUuid),
         keepPreviousData: true,
-        queryFn: () => {
+        // No total count from the backend, so infer "more pages" the same way
+        // the old Next button did: a full batch means there may be more.
+        getNextPageParam: (lastPage, allPages) =>
+            lastPage.length === batchSize
+                ? allPages.length * batchSize
+                : undefined,
+        queryFn: ({ pageParam = 0 }) => {
             const params = new URLSearchParams();
             if (filters?.riskBand) params.set('riskBand', filters.riskBand);
             if (filters?.configUuid) {
@@ -505,12 +523,8 @@ export const useProtopieChurnScores = ({
             if (filters?.sortDirection) {
                 params.set('sortDirection', filters.sortDirection);
             }
-            if (filters?.limit !== undefined) {
-                params.set('limit', String(filters.limit));
-            }
-            if (filters?.offset !== undefined) {
-                params.set('offset', String(filters.offset));
-            }
+            params.set('limit', String(batchSize));
+            params.set('offset', String(pageParam));
 
             return lightdashApi<AnyType>({
                 method: 'GET',
@@ -518,6 +532,7 @@ export const useProtopieChurnScores = ({
             }) as Promise<Protopie.ChurnScore[]>;
         },
     });
+};
 
 export const useProtopieChurnScoreFilterOptions = (
     projectUuid?: string,

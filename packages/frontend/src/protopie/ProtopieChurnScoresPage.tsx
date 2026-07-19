@@ -36,6 +36,19 @@ const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
     high: 'red',
 };
 
+// A table cell for a nullable SF attribute — renders an em dash when absent.
+const AttributeCell = ({ value }: { value: string | null }) => (
+    <Table.Td>
+        {value ? (
+            <Text size="sm">{value}</Text>
+        ) : (
+            <Text size="sm" c="dimmed">
+                —
+            </Text>
+        )}
+    </Table.Td>
+);
+
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = ['25', '50', '100', '200'];
 const DEFAULT_SORT_VALUE = 'health_asc';
@@ -112,10 +125,6 @@ const ProtopieChurnScoresPage = () => {
             ? raw
             : String(DEFAULT_PAGE_SIZE);
     });
-    const [page, setPage] = useState(() => {
-        const raw = Number(searchParams.get('page'));
-        return Number.isInteger(raw) && raw >= 1 ? raw : 1;
-    });
 
     const numericPageSize = Number(pageSize);
     const sortFilter = SORT_FILTERS[sortValue] ?? SORT_FILTERS.health_asc;
@@ -159,18 +168,19 @@ const ProtopieChurnScoresPage = () => {
             ...activeFilters,
             sortBy: sortFilter.sortBy,
             sortDirection: sortFilter.sortDirection,
+            // Batch size for infinite scroll; offset is supplied per-page by the
+            // infinite query's pageParam, so it is intentionally omitted here.
             limit: numericPageSize,
-            offset: (page - 1) * numericPageSize,
         }),
         [
             activeFilters,
             sortFilter.sortBy,
             sortFilter.sortDirection,
             numericPageSize,
-            page,
         ],
     );
     const scores = useProtopieChurnScores({ projectUuid, filters });
+    const { fetchNextPage, hasNextPage, isFetchingNextPage } = scores;
 
     // Pick a valid rubric once configs load: keep the URL's config only if it's
     // actually accessible, otherwise fall back to the first — so a stale/deleted
@@ -185,27 +195,9 @@ const ProtopieChurnScoresPage = () => {
         setSelectedConfigUuid(configs.data[0].configUuid);
     }, [configs.data, selectedConfigUuid]);
 
-    // Reset to the first page whenever a filter changes — but not on the initial
-    // load. Arm only once a config is settled (from the URL or after async
-    // hydration) so a shared URL's page survives the automatic config set.
-    const pageResetArmed = useRef(false);
-    useEffect(() => {
-        if (!pageResetArmed.current) {
-            if (selectedConfigUuid) pageResetArmed.current = true;
-            return;
-        }
-        setPage(1);
-    }, [
-        debouncedSearch,
-        numericPageSize,
-        riskBand,
-        selectedConfigUuid,
-        sortValue,
-        accountOwner,
-        sfPlanCategory,
-        sfAccountRegion,
-        sfAccountCountry,
-    ]);
+    // Filter/sort/batch changes flow into the query key, so the infinite query
+    // discards accumulated pages and refetches from offset 0 automatically — no
+    // manual page reset needed.
 
     // Keep the URL in sync with the current filter state (external system).
     useEffect(() => {
@@ -223,7 +215,6 @@ const ProtopieChurnScoresPage = () => {
         );
         if (sortValue !== DEFAULT_SORT_VALUE) next.set('sort', sortValue);
         if (pageSize !== String(DEFAULT_PAGE_SIZE)) next.set('rows', pageSize);
-        if (page > 1) next.set('page', String(page));
         setSearchParams(next, { replace: true });
     }, [
         selectedConfigUuid,
@@ -235,7 +226,6 @@ const ProtopieChurnScoresPage = () => {
         sfAccountCountry,
         sortValue,
         pageSize,
-        page,
         setSearchParams,
     ]);
 
@@ -329,9 +319,29 @@ const ProtopieChurnScoresPage = () => {
         });
     });
 
-    const rows = scores.data ?? [];
-    const hasPreviousPage = page > 1;
-    const hasNextPage = rows.length === numericPageSize;
+    const rows = useMemo(() => scores.data?.pages.flat() ?? [], [scores.data]);
+
+    // Infinite scroll: fetch the next batch when a sentinel below the table
+    // scrolls into view. rootMargin pre-fetches before the user hits the bottom.
+    const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        const sentinel = loadMoreRef.current;
+        if (!sentinel) return undefined;
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (
+                    entries[0]?.isIntersecting &&
+                    hasNextPage &&
+                    !isFetchingNextPage
+                ) {
+                    void fetchNextPage();
+                }
+            },
+            { rootMargin: '300px' },
+        );
+        observer.observe(sentinel);
+        return () => observer.disconnect();
+    }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
     if (scores.isLoading && !scores.data) {
         return (
@@ -510,11 +520,15 @@ const ProtopieChurnScoresPage = () => {
                         </Group>
                     )}
 
-                    <Table.ScrollContainer minWidth={820}>
+                    <Table.ScrollContainer minWidth={1200}>
                         <Table verticalSpacing="sm">
                             <Table.Thead>
                                 <Table.Tr>
                                     <Table.Th>Account</Table.Th>
+                                    <Table.Th>Account owner</Table.Th>
+                                    <Table.Th>Plan category</Table.Th>
+                                    <Table.Th>Region</Table.Th>
+                                    <Table.Th>Country</Table.Th>
                                     <Table.Th>Risk</Table.Th>
                                     <Table.Th>Health points</Table.Th>
                                     <Table.Th>Computed</Table.Th>
@@ -544,6 +558,18 @@ const ProtopieChurnScoresPage = () => {
                                                     </Text>
                                                 )}
                                             </Table.Td>
+                                            <AttributeCell
+                                                value={score.accountOwner}
+                                            />
+                                            <AttributeCell
+                                                value={score.sfPlanCategory}
+                                            />
+                                            <AttributeCell
+                                                value={score.sfAccountRegion}
+                                            />
+                                            <AttributeCell
+                                                value={score.sfAccountCountry}
+                                            />
                                             <Table.Td>
                                                 <Badge
                                                     color={
@@ -579,35 +605,25 @@ const ProtopieChurnScoresPage = () => {
                         </Table>
                     </Table.ScrollContainer>
 
-                    <Group justify="space-between">
-                        <Text size="sm" c="dimmed">
-                            Page {page} · Showing {rows.length} scores
-                            {scores.isFetching ? ' · Refreshing' : ''}
-                        </Text>
-                        <Group gap="xs">
-                            <Button
-                                variant="default"
-                                size="xs"
-                                disabled={!hasPreviousPage || scores.isFetching}
-                                onClick={() =>
-                                    setPage((currentPage) =>
-                                        Math.max(currentPage - 1, 1),
-                                    )
-                                }
-                            >
-                                Previous
-                            </Button>
-                            <Button
-                                variant="default"
-                                size="xs"
-                                disabled={!hasNextPage || scores.isFetching}
-                                onClick={() =>
-                                    setPage((currentPage) => currentPage + 1)
-                                }
-                            >
-                                Next
-                            </Button>
-                        </Group>
+                    {/* Sentinel observed for infinite scroll; also the loading
+                        and end-of-list status line. */}
+                    <Group ref={loadMoreRef} justify="center" py="xs">
+                        {isFetchingNextPage ? (
+                            <Group gap="xs">
+                                <Loader size="xs" />
+                                <Text size="sm" c="dimmed">
+                                    Loading more scores
+                                </Text>
+                            </Group>
+                        ) : (
+                            <Text size="sm" c="dimmed">
+                                {rows.length === 0
+                                    ? 'No scores match these filters'
+                                    : `Showing ${rows.length} score${
+                                          rows.length === 1 ? '' : 's'
+                                      }${hasNextPage ? '' : ' · End of list'}`}
+                            </Text>
+                        )}
                     </Group>
                 </Stack>
             </Card>
