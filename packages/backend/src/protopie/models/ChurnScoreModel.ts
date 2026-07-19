@@ -28,6 +28,15 @@ type DbChurnScore = {
     run_uuid: string;
 };
 
+/**
+ * Escapes LIKE/ILIKE wildcards so a user's free-text search is matched as
+ * literal partial text — otherwise `%` and `_` act as wildcards (e.g. a lone
+ * `_` would match nearly every account). Postgres LIKE uses backslash as its
+ * default escape character, so no explicit ESCAPE clause is needed.
+ */
+export const escapeLikePattern = (value: string): string =>
+    value.replace(/[\\%_]/g, (char) => `\\${char}`);
+
 const CHURN_SCORE_SORT_BY = new Set<Protopie.ChurnScoreSortBy>([
     'score',
     'risk',
@@ -91,6 +100,113 @@ export class ChurnScoreModel {
         }
 
         void query.orderBy('account_key', 'asc');
+    }
+
+    /** Maps each filter facet to its snapshot column. */
+    private static readonly FACET_COLUMNS = {
+        accountOwner: 'account_owner',
+        sfPlanCategory: 'sf_plan_category',
+        sfAccountRegion: 'sf_account_region',
+        sfAccountCountry: 'sf_account_country',
+    } as const satisfies Record<
+        Protopie.ChurnScoreFacetKey,
+        keyof DbChurnScore
+    >;
+
+    /** Columns scanned by the unified free-text search (OR ilike). */
+    private static readonly SEARCH_COLUMNS: readonly (keyof DbChurnScore)[] = [
+        'sf_account_name',
+        'namespace',
+        'cloud_url',
+        'account_owner',
+        'sf_plan_category',
+        'sf_account_region',
+        'sf_account_country',
+    ];
+
+    /**
+     * Applies one multi-select SF facet filter. `values` may include
+     * CHURN_SCORE_FILTER_NONE_VALUE to also match null rows via OR. Empty or
+     * undefined = unfiltered (never emits an invalid `WHERE col IN ()`).
+     */
+    private static applyFacetFilter(
+        query: Knex.QueryBuilder,
+        column: string,
+        values: string[] | undefined,
+    ): void {
+        if (!values || values.length === 0) {
+            return;
+        }
+        const includeNone = values.includes(
+            Protopie.CHURN_SCORE_FILTER_NONE_VALUE,
+        );
+        const concrete = values.filter(
+            (value) => value !== Protopie.CHURN_SCORE_FILTER_NONE_VALUE,
+        );
+        void query.where((builder) => {
+            if (concrete.length > 0) {
+                void builder.whereIn(column, concrete);
+            }
+            if (includeNone) {
+                void builder.orWhereNull(column);
+            }
+        });
+    }
+
+    /**
+     * Applies every score filter to `query`. Pass `excludeFacet` to skip that
+     * one facet's own selection — used when computing faceted option counts so
+     * a facet never constrains its own value list (standard faceted-search).
+     */
+    private static applyScoreFilters(
+        query: Knex.QueryBuilder,
+        filters: Protopie.ChurnScoreLatestFilters,
+        excludeFacet?: Protopie.ChurnScoreFacetKey,
+    ): void {
+        if (filters.riskBand) {
+            void query.where('risk_band', filters.riskBand);
+        }
+        if (filters.minScore !== undefined) {
+            void query.where('normalized_score', '>=', filters.minScore);
+        }
+        if (filters.maxScore !== undefined) {
+            void query.where('normalized_score', '<=', filters.maxScore);
+        }
+        if (filters.namespace) {
+            void query.where('namespace', 'ilike', `%${filters.namespace}%`);
+        }
+        const search = filters.search?.trim();
+        if (search) {
+            const like = `%${escapeLikePattern(search)}%`;
+            void query.where((builder) => {
+                ChurnScoreModel.SEARCH_COLUMNS.forEach((column) => {
+                    void builder.orWhere(column, 'ilike', like);
+                });
+            });
+        }
+        const facetValues: Record<
+            Protopie.ChurnScoreFacetKey,
+            string[] | undefined
+        > = {
+            accountOwner: filters.accountOwner,
+            sfPlanCategory: filters.sfPlanCategory,
+            sfAccountRegion: filters.sfAccountRegion,
+            sfAccountCountry: filters.sfAccountCountry,
+        };
+        (
+            Object.keys(
+                ChurnScoreModel.FACET_COLUMNS,
+            ) as Protopie.ChurnScoreFacetKey[]
+        ).forEach((facetKey) => {
+            if (facetKey === excludeFacet) {
+                return;
+            }
+            ChurnScoreModel.applyFacetFilter(
+                query,
+                ChurnScoreModel.FACET_COLUMNS[facetKey],
+                facetValues[facetKey],
+            );
+        });
     }
 
     async upsertScores(rows: ProtopieChurnScoreInsert[]): Promise<void> {
@@ -205,19 +321,46 @@ export class ChurnScoreModel {
     async listFilterOptions({
         projectUuid,
         configUuid,
+        filters,
     }: {
         projectUuid: string;
         configUuid: string;
+        filters: Protopie.ChurnScoreLatestFilters;
     }): Promise<Protopie.ChurnScoreFilterOptions> {
-        const distinctValues = async (column: string): Promise<string[]> => {
-            const rows = await this.database
-                .distinct(column)
-                .from(this.latestScoresSubquery({ projectUuid, configUuid }))
-                .whereNotNull(column)
-                .orderBy(column, 'asc');
-            return (rows as Record<string, unknown>[]).map((row) =>
-                String(row[column]),
+        const computeFacet = async (
+            facetKey: Protopie.ChurnScoreFacetKey,
+        ): Promise<Protopie.ChurnScoreFacet> => {
+            const column = ChurnScoreModel.FACET_COLUMNS[facetKey];
+            // Apply every OTHER active filter (not this facet's own selection)
+            // so its value list stays broadenable — the faceted-search rule.
+            const query = this.database.from(
+                this.latestScoresSubquery({ projectUuid, configUuid }),
             );
+            ChurnScoreModel.applyScoreFilters(query, filters, facetKey);
+
+            // Single GROUP BY over the whole snapshot (nulls included) — the
+            // null group is split out into noneCount, so one query per facet.
+            const rows = (await query
+                .groupBy(column)
+                .orderBy(column, 'asc')
+                .select(column)
+                .count({ count: '*' })) as Record<string, unknown>[];
+
+            const options: Protopie.ChurnScoreFacetOption[] = [];
+            let noneCount = 0;
+            rows.forEach((row) => {
+                const value = row[column];
+                if (value === null || value === undefined) {
+                    noneCount = Number(row.count);
+                } else {
+                    options.push({
+                        value: String(value),
+                        count: Number(row.count),
+                    });
+                }
+            });
+
+            return { options, noneCount };
         };
 
         const [
@@ -226,10 +369,10 @@ export class ChurnScoreModel {
             sfAccountRegion,
             sfAccountCountry,
         ] = await Promise.all([
-            distinctValues('account_owner'),
-            distinctValues('sf_plan_category'),
-            distinctValues('sf_account_region'),
-            distinctValues('sf_account_country'),
+            computeFacet('accountOwner'),
+            computeFacet('sfPlanCategory'),
+            computeFacet('sfAccountRegion'),
+            computeFacet('sfAccountCountry'),
         ]);
 
         return {
@@ -261,32 +404,7 @@ export class ChurnScoreModel {
             .limit(limit)
             .offset(offset);
 
-        if (filters.riskBand) {
-            void query.where('risk_band', filters.riskBand);
-        }
-        if (filters.minScore !== undefined) {
-            void query.where('normalized_score', '>=', filters.minScore);
-        }
-        if (filters.maxScore !== undefined) {
-            void query.where('normalized_score', '<=', filters.maxScore);
-        }
-        if (filters.namespace) {
-            void query.where('namespace', 'ilike', `%${filters.namespace}%`);
-        }
-        // Multi-select SF filters (IN). Guard on length: an empty array must
-        // mean "unfiltered", never Knex's invalid `WHERE col IN ()`.
-        if (filters.accountOwner && filters.accountOwner.length > 0) {
-            void query.whereIn('account_owner', filters.accountOwner);
-        }
-        if (filters.sfPlanCategory && filters.sfPlanCategory.length > 0) {
-            void query.whereIn('sf_plan_category', filters.sfPlanCategory);
-        }
-        if (filters.sfAccountRegion && filters.sfAccountRegion.length > 0) {
-            void query.whereIn('sf_account_region', filters.sfAccountRegion);
-        }
-        if (filters.sfAccountCountry && filters.sfAccountCountry.length > 0) {
-            void query.whereIn('sf_account_country', filters.sfAccountCountry);
-        }
+        ChurnScoreModel.applyScoreFilters(query, filters);
 
         ChurnScoreModel.applyScoreSort(query, filters);
 

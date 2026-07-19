@@ -8,6 +8,14 @@ import {
 
 export const DEFAULT_CHURN_SCORE_CONFIG_NAME = 'Default Churn Score';
 
+/**
+ * Sentinel value used in the SF-attribute filter arrays to select the "(none)"
+ * bucket — accounts where that attribute is null. The backend translates it to
+ * `IS NULL`. Chosen to be URL-safe (survives query-string round-trips) yet
+ * distinct from any realistic Salesforce owner/plan/region/country value.
+ */
+export const CHURN_SCORE_FILTER_NONE_VALUE = '__none__';
+
 export const DEFAULT_CHURN_SCORE_LOOKBACK_DAYS = 90;
 
 /**

@@ -554,22 +554,23 @@ export class ChurnScoreService extends BaseService {
 
     async listFilterOptions({
         projectUuid,
-        configUuid,
+        filters,
         user,
     }: {
         projectUuid: string;
-        configUuid?: string;
+        filters: Protopie.ChurnScoreLatestFilters;
         user: SessionUser;
     }): Promise<Protopie.ChurnScoreFilterOptions> {
         this.requireProjectView(user, projectUuid);
         const config = await this.getConfigForScores({
             projectUuid,
-            configUuid,
+            configUuid: filters.configUuid,
         });
         this.requireConfigView(user, projectUuid, config);
         return this.churnScoreModel.listFilterOptions({
             projectUuid,
             configUuid: config.configUuid,
+            filters,
         });
     }
 
