@@ -1,5 +1,10 @@
 import { type AnyType, type ApiError, type Protopie } from '@lightdash/common';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+    useInfiniteQuery,
+    useMutation,
+    useQuery,
+    useQueryClient,
+} from '@tanstack/react-query';
 import { lightdashApi } from '../api';
 import useToaster from '../hooks/toaster/useToaster';
 
@@ -453,18 +458,53 @@ export const useProtopieChurnScoreAccountDetails = ({
         },
     });
 
+// Appends the multi-select SF facet filters as repeated query params. Empty or
+// absent arrays append nothing → unfiltered (never "match none"). Shared by the
+// scores list and the faceted filter-options request so a new facet only needs
+// wiring in one place.
+const appendChurnFacetParams = (
+    params: URLSearchParams,
+    filters?: Protopie.ChurnScoreLatestFilters,
+): void => {
+    filters?.accountOwner?.forEach((value) =>
+        params.append('accountOwner', value),
+    );
+    filters?.sfPlanCategory?.forEach((value) =>
+        params.append('sfPlanCategory', value),
+    );
+    filters?.sfAccountRegion?.forEach((value) =>
+        params.append('sfAccountRegion', value),
+    );
+    filters?.sfAccountCountry?.forEach((value) =>
+        params.append('sfAccountCountry', value),
+    );
+};
+
+// Batch size for the infinite scroll list. `filters.limit` carries the page's
+// "Rows" selection; each fetch requests one batch and `offset` comes from the
+// infinite-query pageParam (not from `filters`, which stays offset-free so the
+// query key resets cleanly on any filter/sort/batch change).
+const DEFAULT_CHURN_SCORES_BATCH_SIZE = 25;
+
 export const useProtopieChurnScores = ({
     projectUuid,
     filters,
 }: {
     projectUuid?: string;
     filters?: Protopie.ChurnScoreLatestFilters;
-}) =>
-    useQuery<Protopie.ChurnScore[], ApiError>({
+}) => {
+    const batchSize = filters?.limit ?? DEFAULT_CHURN_SCORES_BATCH_SIZE;
+    return useInfiniteQuery<Protopie.ChurnScore[], ApiError>({
         queryKey: protopieChurnScoresQueryKey(projectUuid, filters),
         enabled: Boolean(projectUuid),
         keepPreviousData: true,
-        queryFn: () => {
+        // No total count from the backend, so infer "more pages" the same way
+        // the old Next button did: a full batch means there may be more.
+        getNextPageParam: (lastPage, allPages) =>
+            lastPage.length === batchSize
+                ? allPages.length * batchSize
+                : undefined,
+        queryFn: ({ pageParam = 0 }) => {
             const params = new URLSearchParams();
             if (filters?.riskBand) params.set('riskBand', filters.riskBand);
             if (filters?.configUuid) {
@@ -477,20 +517,49 @@ export const useProtopieChurnScores = ({
                 params.set('maxScore', String(filters.maxScore));
             }
             if (filters?.namespace) params.set('namespace', filters.namespace);
+            if (filters?.search) params.set('search', filters.search);
+            appendChurnFacetParams(params, filters);
             if (filters?.sortBy) params.set('sortBy', filters.sortBy);
             if (filters?.sortDirection) {
                 params.set('sortDirection', filters.sortDirection);
             }
-            if (filters?.limit !== undefined) {
-                params.set('limit', String(filters.limit));
-            }
-            if (filters?.offset !== undefined) {
-                params.set('offset', String(filters.offset));
-            }
+            params.set('limit', String(batchSize));
+            params.set('offset', String(pageParam));
 
             return lightdashApi<AnyType>({
                 method: 'GET',
                 url: `/projects/${projectUuid}/protopie/churn/scores/latest?${params.toString()}`,
             }) as Promise<Protopie.ChurnScore[]>;
+        },
+    });
+};
+
+export const useProtopieChurnScoreFilterOptions = (
+    projectUuid?: string,
+    filters?: Protopie.ChurnScoreLatestFilters,
+) =>
+    useQuery<Protopie.ChurnScoreFilterOptions, ApiError>({
+        queryKey: ['protopie', 'churn-filter-options', projectUuid, filters],
+        enabled: Boolean(projectUuid),
+        keepPreviousData: true,
+        queryFn: () => {
+            const params = new URLSearchParams();
+            if (filters?.configUuid)
+                params.set('configUuid', filters.configUuid);
+            if (filters?.riskBand) params.set('riskBand', filters.riskBand);
+            if (filters?.search) params.set('search', filters.search);
+            if (filters?.minScore !== undefined) {
+                params.set('minScore', String(filters.minScore));
+            }
+            if (filters?.maxScore !== undefined) {
+                params.set('maxScore', String(filters.maxScore));
+            }
+            // Each facet's own selection is ignored server-side when computing
+            // that facet's options (faceted-search semantics).
+            appendChurnFacetParams(params, filters);
+            return lightdashApi<AnyType>({
+                method: 'GET',
+                url: `/projects/${projectUuid}/protopie/churn/scores/filter-options?${params.toString()}`,
+            }) as Promise<Protopie.ChurnScoreFilterOptions>;
         },
     });

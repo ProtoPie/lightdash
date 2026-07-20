@@ -7,6 +7,8 @@ import {
     Card,
     Group,
     Loader,
+    MultiSelect,
+    Pill,
     Select,
     Stack,
     Table,
@@ -15,10 +17,15 @@ import {
     Title,
 } from '@mantine-8/core';
 import { useDebouncedValue } from '@mantine-8/hooks';
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { useProjectUuid } from '../hooks/useProjectUuid';
-import { useProtopieChurnConfigs, useProtopieChurnScores } from './api';
+import {
+    useProtopieChurnConfigs,
+    useProtopieChurnScoreFilterOptions,
+    useProtopieChurnScores,
+} from './api';
+import { buildFacetData, facetValueLabel } from './churnFacetData';
 import ProtopieChurnScoreMethodCards from './ProtopieChurnScoreMethodCards';
 import classes from './ProtopieFormsPage.module.css';
 import ProtopieSectionTabs from './ProtopieSectionTabs';
@@ -29,12 +36,27 @@ const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
     high: 'red',
 };
 
+// A table cell for a nullable SF attribute — renders an em dash when absent.
+const AttributeCell = ({ value }: { value: string | null }) => (
+    <Table.Td>
+        {value ? (
+            <Text size="sm">{value}</Text>
+        ) : (
+            <Text size="sm" c="dimmed">
+                —
+            </Text>
+        )}
+    </Table.Td>
+);
+
 const DEFAULT_PAGE_SIZE = 25;
 const PAGE_SIZE_OPTIONS = ['25', '50', '100', '200'];
-const DEFAULT_SORT_VALUE = 'score_desc';
+const DEFAULT_SORT_VALUE = 'health_asc';
 const SORT_OPTIONS = [
-    { value: 'score_desc', label: 'Churn score: high to low' },
-    { value: 'score_asc', label: 'Churn score: low to high' },
+    // Default (health_asc = most at-risk first) is listed first so the dropdown
+    // order matches DEFAULT_SORT_VALUE.
+    { value: 'health_asc', label: 'Health points: low to high' },
+    { value: 'health_desc', label: 'Health points: high to low' },
     { value: 'risk_desc', label: 'Risk: high to low' },
     { value: 'risk_asc', label: 'Risk: low to high' },
     { value: 'namespace_asc', label: 'Namespace: A to Z' },
@@ -42,12 +64,15 @@ const SORT_OPTIONS = [
     { value: 'computed_at_desc', label: 'Computed: newest first' },
     { value: 'computed_at_asc', label: 'Computed: oldest first' },
 ];
+// Health = 100 − churn and maxPoints is constant per config, so ordering by the
+// backend's churn_score key (sortBy: 'score') is exactly the health ordering, inverted.
+// We reuse that key with a flipped direction rather than adding a backend sort key.
 const SORT_FILTERS: Record<
     string,
     Pick<Protopie.ChurnScoreLatestFilters, 'sortBy' | 'sortDirection'>
 > = {
-    score_asc: { sortBy: 'score', sortDirection: 'asc' },
-    score_desc: { sortBy: 'score', sortDirection: 'desc' },
+    health_desc: { sortBy: 'score', sortDirection: 'asc' },
+    health_asc: { sortBy: 'score', sortDirection: 'desc' },
     risk_desc: { sortBy: 'risk', sortDirection: 'desc' },
     risk_asc: { sortBy: 'risk', sortDirection: 'asc' },
     namespace_asc: { sortBy: 'namespace', sortDirection: 'asc' },
@@ -56,59 +81,154 @@ const SORT_FILTERS: Record<
     computed_at_asc: { sortBy: 'computed_at', sortDirection: 'asc' },
 };
 
+const parseRiskBand = (
+    value: string | null,
+): Protopie.ChurnScoreRiskBand | null =>
+    value === 'high' || value === 'medium' || value === 'low' ? value : null;
+
 const ProtopieChurnScoresPage = () => {
     const projectUuid = useProjectUuid();
-    const [riskBand, setRiskBand] =
-        useState<Protopie.ChurnScoreRiskBand | null>(null);
-    const [namespace, setNamespace] = useState('');
-    const [debouncedNamespace] = useDebouncedValue(namespace, 300);
-    const [page, setPage] = useState(1);
-    const [pageSize, setPageSize] = useState(String(DEFAULT_PAGE_SIZE));
-    const [sortValue, setSortValue] = useState(DEFAULT_SORT_VALUE);
+    const [searchParams, setSearchParams] = useSearchParams();
+
+    // Filter state, initialized once from the URL so links are shareable and
+    // survive a refresh. The URL is kept in sync by the effect below.
     const [selectedConfigUuid, setSelectedConfigUuid] = useState<
         string | undefined
-    >();
+    >(() => searchParams.get('configUuid') ?? undefined);
+    const [riskBand, setRiskBand] =
+        useState<Protopie.ChurnScoreRiskBand | null>(() =>
+            parseRiskBand(searchParams.get('riskBand')),
+        );
+    const [search, setSearch] = useState(
+        () => searchParams.get('search') ?? '',
+    );
+    const [debouncedSearch] = useDebouncedValue(search, 300);
+    const [accountOwner, setAccountOwner] = useState<string[]>(() =>
+        searchParams.getAll('accountOwner'),
+    );
+    const [sfPlanCategory, setSfPlanCategory] = useState<string[]>(() =>
+        searchParams.getAll('sfPlanCategory'),
+    );
+    const [sfAccountRegion, setSfAccountRegion] = useState<string[]>(() =>
+        searchParams.getAll('sfAccountRegion'),
+    );
+    const [sfAccountCountry, setSfAccountCountry] = useState<string[]>(() =>
+        searchParams.getAll('sfAccountCountry'),
+    );
+    const [sortValue, setSortValue] = useState(() => {
+        const raw = searchParams.get('sort');
+        return raw && SORT_FILTERS[raw] ? raw : DEFAULT_SORT_VALUE;
+    });
+    const [pageSize, setPageSize] = useState(() => {
+        const raw = searchParams.get('rows');
+        return raw && PAGE_SIZE_OPTIONS.includes(raw)
+            ? raw
+            : String(DEFAULT_PAGE_SIZE);
+    });
+
     const numericPageSize = Number(pageSize);
-    const sortFilter = SORT_FILTERS[sortValue] ?? SORT_FILTERS.score_asc;
+    const sortFilter = SORT_FILTERS[sortValue] ?? SORT_FILTERS.health_asc;
+
     const configs = useProtopieChurnConfigs(projectUuid);
 
-    useEffect(() => {
-        if (selectedConfigUuid || !configs.data?.length) return;
-
-        setSelectedConfigUuid(configs.data[0].configUuid);
-    }, [configs.data, selectedConfigUuid]);
-
-    useEffect(() => {
-        setPage(1);
-    }, [
-        debouncedNamespace,
-        numericPageSize,
-        riskBand,
-        selectedConfigUuid,
-        sortValue,
-    ]);
-
-    const filters = useMemo<Protopie.ChurnScoreLatestFilters>(
+    // The filter set that both narrows the scores list and drives the faceted
+    // option counts (each facet ignores its own selection server-side).
+    const activeFilters = useMemo<Protopie.ChurnScoreLatestFilters>(
         () => ({
             configUuid: selectedConfigUuid,
             riskBand: riskBand ?? undefined,
-            namespace: debouncedNamespace.trim() || undefined,
-            sortBy: sortFilter.sortBy,
-            sortDirection: sortFilter.sortDirection,
-            limit: numericPageSize,
-            offset: (page - 1) * numericPageSize,
+            search: debouncedSearch.trim() || undefined,
+            accountOwner: accountOwner.length ? accountOwner : undefined,
+            sfPlanCategory: sfPlanCategory.length ? sfPlanCategory : undefined,
+            sfAccountRegion: sfAccountRegion.length
+                ? sfAccountRegion
+                : undefined,
+            sfAccountCountry: sfAccountCountry.length
+                ? sfAccountCountry
+                : undefined,
         }),
         [
-            debouncedNamespace,
-            numericPageSize,
-            page,
-            riskBand,
             selectedConfigUuid,
+            riskBand,
+            debouncedSearch,
+            accountOwner,
+            sfPlanCategory,
+            sfAccountRegion,
+            sfAccountCountry,
+        ],
+    );
+
+    const filterOptions = useProtopieChurnScoreFilterOptions(
+        projectUuid,
+        activeFilters,
+    );
+
+    const filters = useMemo<Protopie.ChurnScoreLatestFilters>(
+        () => ({
+            ...activeFilters,
+            sortBy: sortFilter.sortBy,
+            sortDirection: sortFilter.sortDirection,
+            // Batch size for infinite scroll; offset is supplied per-page by the
+            // infinite query's pageParam, so it is intentionally omitted here.
+            limit: numericPageSize,
+        }),
+        [
+            activeFilters,
             sortFilter.sortBy,
             sortFilter.sortDirection,
+            numericPageSize,
         ],
     );
     const scores = useProtopieChurnScores({ projectUuid, filters });
+    const { fetchNextPage, hasNextPage, isFetchingNextPage } = scores;
+
+    // Pick a valid rubric once configs load: keep the URL's config only if it's
+    // actually accessible, otherwise fall back to the first — so a stale/deleted
+    // configUuid in a shared link recovers instead of leaving the page in a
+    // permanent scores.error state.
+    useEffect(() => {
+        if (!configs.data?.length) return;
+        const isValid = configs.data.some(
+            (config) => config.configUuid === selectedConfigUuid,
+        );
+        if (isValid) return;
+        setSelectedConfigUuid(configs.data[0].configUuid);
+    }, [configs.data, selectedConfigUuid]);
+
+    // Filter/sort/batch changes flow into the query key, so the infinite query
+    // discards accumulated pages and refetches from offset 0 automatically — no
+    // manual page reset needed.
+
+    // Keep the URL in sync with the current filter state (external system).
+    useEffect(() => {
+        const next = new URLSearchParams();
+        if (selectedConfigUuid) next.set('configUuid', selectedConfigUuid);
+        if (riskBand) next.set('riskBand', riskBand);
+        if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim());
+        accountOwner.forEach((value) => next.append('accountOwner', value));
+        sfPlanCategory.forEach((value) => next.append('sfPlanCategory', value));
+        sfAccountRegion.forEach((value) =>
+            next.append('sfAccountRegion', value),
+        );
+        sfAccountCountry.forEach((value) =>
+            next.append('sfAccountCountry', value),
+        );
+        if (sortValue !== DEFAULT_SORT_VALUE) next.set('sort', sortValue);
+        if (pageSize !== String(DEFAULT_PAGE_SIZE)) next.set('rows', pageSize);
+        setSearchParams(next, { replace: true });
+    }, [
+        selectedConfigUuid,
+        riskBand,
+        debouncedSearch,
+        accountOwner,
+        sfPlanCategory,
+        sfAccountRegion,
+        sfAccountCountry,
+        sortValue,
+        pageSize,
+        setSearchParams,
+    ]);
+
     const configOptions = useMemo(
         () =>
             (configs.data ?? []).map((config) => ({
@@ -117,9 +237,111 @@ const ProtopieChurnScoresPage = () => {
             })),
         [configs.data],
     );
-    const rows = scores.data ?? [];
-    const hasPreviousPage = page > 1;
-    const hasNextPage = rows.length === numericPageSize;
+
+    const accountOwnerData = useMemo(
+        () => buildFacetData(filterOptions.data?.accountOwner, accountOwner),
+        [filterOptions.data, accountOwner],
+    );
+    const sfPlanCategoryData = useMemo(
+        () =>
+            buildFacetData(filterOptions.data?.sfPlanCategory, sfPlanCategory),
+        [filterOptions.data, sfPlanCategory],
+    );
+    const sfAccountRegionData = useMemo(
+        () =>
+            buildFacetData(
+                filterOptions.data?.sfAccountRegion,
+                sfAccountRegion,
+            ),
+        [filterOptions.data, sfAccountRegion],
+    );
+    const sfAccountCountryData = useMemo(
+        () =>
+            buildFacetData(
+                filterOptions.data?.sfAccountCountry,
+                sfAccountCountry,
+            ),
+        [filterOptions.data, sfAccountCountry],
+    );
+
+    const clearFacets = () => {
+        setAccountOwner([]);
+        setSfPlanCategory([]);
+        setSfAccountRegion([]);
+        setSfAccountCountry([]);
+    };
+
+    const clearAllFilters = () => {
+        setRiskBand(null);
+        setSearch('');
+        clearFacets();
+    };
+
+    // Removable chips summarizing every active filter.
+    const activeChips: { key: string; label: string; onRemove: () => void }[] =
+        [];
+    if (riskBand) {
+        activeChips.push({
+            key: 'risk',
+            label: `Risk: ${riskBand}`,
+            onRemove: () => setRiskBand(null),
+        });
+    }
+    if (search.trim()) {
+        activeChips.push({
+            key: 'search',
+            label: `Search: "${search.trim()}"`,
+            onRemove: () => setSearch(''),
+        });
+    }
+    (
+        [
+            { name: 'Owner', values: accountOwner, setter: setAccountOwner },
+            { name: 'Plan', values: sfPlanCategory, setter: setSfPlanCategory },
+            {
+                name: 'Region',
+                values: sfAccountRegion,
+                setter: setSfAccountRegion,
+            },
+            {
+                name: 'Country',
+                values: sfAccountCountry,
+                setter: setSfAccountCountry,
+            },
+        ] as const
+    ).forEach(({ name, values, setter }) => {
+        values.forEach((value) => {
+            activeChips.push({
+                key: `${name}:${value}`,
+                label: `${name}: ${facetValueLabel(value)}`,
+                onRemove: () => setter(values.filter((item) => item !== value)),
+            });
+        });
+    });
+
+    const rows = useMemo(() => scores.data?.pages.flat() ?? [], [scores.data]);
+
+    // Infinite scroll: fetch the next batch when a sentinel below the table
+    // scrolls into view. rootMargin pre-fetches before the user hits the bottom.
+    const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        const sentinel = loadMoreRef.current;
+        if (!sentinel) return undefined;
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (
+                    entries[0]?.isIntersecting &&
+                    hasNextPage &&
+                    !isFetchingNextPage
+                ) {
+                    void fetchNextPage();
+                }
+            },
+            { rootMargin: '300px' },
+        );
+        observer.observe(sentinel);
+        return () => observer.disconnect();
+    }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
     if (scores.isLoading && !scores.data) {
         return (
@@ -165,9 +387,14 @@ const ProtopieChurnScoresPage = () => {
                             allowDeselect={false}
                             data={configOptions}
                             value={selectedConfigUuid}
-                            onChange={(value) =>
-                                setSelectedConfigUuid(value ?? undefined)
-                            }
+                            onChange={(value) => {
+                                setSelectedConfigUuid(value ?? undefined);
+                                // Filter options are per-config; a value picked
+                                // under one rubric may not exist in the next, so
+                                // clear the SF filters on rubric change to avoid
+                                // an empty result set + stale MultiSelect values.
+                                clearFacets();
+                            }}
                         />
                         <Select
                             label="Risk band"
@@ -183,15 +410,16 @@ const ProtopieChurnScoresPage = () => {
                                 setRiskBand(
                                     value === 'all'
                                         ? null
-                                        : (value as Protopie.ChurnScoreRiskBand),
+                                        : parseRiskBand(value),
                                 )
                             }
                         />
                         <TextInput
-                            label="Namespace"
-                            value={namespace}
+                            label="Search"
+                            placeholder="Account, namespace, URL, owner…"
+                            value={search}
                             onChange={(event) =>
-                                setNamespace(event.currentTarget.value)
+                                setSearch(event.currentTarget.value)
                             }
                         />
                         <Select
@@ -214,12 +442,93 @@ const ProtopieChurnScoresPage = () => {
                         />
                     </Group>
 
-                    <Table.ScrollContainer minWidth={820}>
+                    <Group grow>
+                        <MultiSelect
+                            label="Account owner"
+                            placeholder={
+                                accountOwner.length ? undefined : 'All'
+                            }
+                            searchable
+                            clearable
+                            data={accountOwnerData}
+                            value={accountOwner}
+                            onChange={setAccountOwner}
+                        />
+                        <MultiSelect
+                            label="Plan category"
+                            placeholder={
+                                sfPlanCategory.length ? undefined : 'All'
+                            }
+                            searchable
+                            clearable
+                            data={sfPlanCategoryData}
+                            value={sfPlanCategory}
+                            onChange={setSfPlanCategory}
+                        />
+                        <MultiSelect
+                            label="Region"
+                            placeholder={
+                                sfAccountRegion.length ? undefined : 'All'
+                            }
+                            searchable
+                            clearable
+                            data={sfAccountRegionData}
+                            value={sfAccountRegion}
+                            onChange={setSfAccountRegion}
+                        />
+                        <MultiSelect
+                            label="Country"
+                            placeholder={
+                                sfAccountCountry.length ? undefined : 'All'
+                            }
+                            searchable
+                            clearable
+                            data={sfAccountCountryData}
+                            value={sfAccountCountry}
+                            onChange={setSfAccountCountry}
+                        />
+                    </Group>
+
+                    {filterOptions.error && (
+                        <Text size="xs" c="red">
+                            Filter options failed to load — available values and
+                            counts may be incomplete.
+                        </Text>
+                    )}
+
+                    {activeChips.length > 0 && (
+                        <Group gap="xs" align="center">
+                            <Text size="xs" c="dimmed">
+                                Active filters
+                            </Text>
+                            {activeChips.map((chip) => (
+                                <Pill
+                                    key={chip.key}
+                                    withRemoveButton
+                                    onRemove={chip.onRemove}
+                                >
+                                    {chip.label}
+                                </Pill>
+                            ))}
+                            <Button
+                                variant="subtle"
+                                size="compact-xs"
+                                onClick={clearAllFilters}
+                            >
+                                Clear all
+                            </Button>
+                        </Group>
+                    )}
+
+                    <Table.ScrollContainer minWidth={1200}>
                         <Table verticalSpacing="sm">
                             <Table.Thead>
                                 <Table.Tr>
                                     <Table.Th>Account</Table.Th>
-                                    <Table.Th>Churn score</Table.Th>
+                                    <Table.Th>Account owner</Table.Th>
+                                    <Table.Th>Plan category</Table.Th>
+                                    <Table.Th>Region</Table.Th>
+                                    <Table.Th>Country</Table.Th>
                                     <Table.Th>Risk</Table.Th>
                                     <Table.Th>Health points</Table.Th>
                                     <Table.Th>Computed</Table.Th>
@@ -231,93 +540,90 @@ const ProtopieChurnScoresPage = () => {
                                         score.accountKey,
                                     )}?configUuid=${score.configUuid}`;
                                     return (
-                                    <Table.Tr key={score.scoreUuid}>
-                                        <Table.Td>
-                                            <Anchor
-                                                component={Link}
-                                                to={detailTo}
-                                                size="sm"
-                                                fw={600}
-                                            >
-                                                {score.namespace ??
-                                                    score.accountKey}
-                                            </Anchor>
-                                            {score.cloudUrl && (
-                                                <Text size="xs" c="dimmed">
-                                                    {score.cloudUrl}
+                                        <Table.Tr key={score.scoreUuid}>
+                                            <Table.Td>
+                                                <Anchor
+                                                    component={Link}
+                                                    to={detailTo}
+                                                    size="sm"
+                                                    fw={600}
+                                                >
+                                                    {score.sfAccountName ??
+                                                        score.namespace ??
+                                                        score.accountKey}
+                                                </Anchor>
+                                                {score.cloudUrl && (
+                                                    <Text size="xs" c="dimmed">
+                                                        {score.cloudUrl}
+                                                    </Text>
+                                                )}
+                                            </Table.Td>
+                                            <AttributeCell
+                                                value={score.accountOwner}
+                                            />
+                                            <AttributeCell
+                                                value={score.sfPlanCategory}
+                                            />
+                                            <AttributeCell
+                                                value={score.sfAccountRegion}
+                                            />
+                                            <AttributeCell
+                                                value={score.sfAccountCountry}
+                                            />
+                                            <Table.Td>
+                                                <Badge
+                                                    color={
+                                                        riskBandColor[
+                                                            score.riskBand
+                                                        ]
+                                                    }
+                                                    variant="light"
+                                                >
+                                                    {score.riskBand}
+                                                </Badge>
+                                            </Table.Td>
+                                            <Table.Td>
+                                                <Text size="sm">
+                                                    {score.totalPoints.toFixed(
+                                                        2,
+                                                    )}{' '}
+                                                    /{' '}
+                                                    {score.maxPoints.toFixed(2)}
                                                 </Text>
-                                            )}
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Anchor
-                                                component={Link}
-                                                to={detailTo}
-                                                fw={600}
-                                            >
-                                                {score.churnScore.toFixed(2)}
-                                            </Anchor>
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Badge
-                                                color={
-                                                    riskBandColor[
-                                                        score.riskBand
-                                                    ]
-                                                }
-                                                variant="light"
-                                            >
-                                                {score.riskBand}
-                                            </Badge>
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Text size="sm">
-                                                {score.totalPoints.toFixed(2)} /{' '}
-                                                {score.maxPoints.toFixed(2)}
-                                            </Text>
-                                        </Table.Td>
-                                        <Table.Td>
-                                            <Text size="sm">
-                                                {new Date(
-                                                    score.computedAt,
-                                                ).toLocaleString()}
-                                            </Text>
-                                        </Table.Td>
-                                    </Table.Tr>
+                                            </Table.Td>
+                                            <Table.Td>
+                                                <Text size="sm">
+                                                    {new Date(
+                                                        score.computedAt,
+                                                    ).toLocaleString()}
+                                                </Text>
+                                            </Table.Td>
+                                        </Table.Tr>
                                     );
                                 })}
                             </Table.Tbody>
                         </Table>
                     </Table.ScrollContainer>
 
-                    <Group justify="space-between">
-                        <Text size="sm" c="dimmed">
-                            Page {page} · Showing {rows.length} scores
-                            {scores.isFetching ? ' · Refreshing' : ''}
-                        </Text>
-                        <Group gap="xs">
-                            <Button
-                                variant="default"
-                                size="xs"
-                                disabled={!hasPreviousPage || scores.isFetching}
-                                onClick={() =>
-                                    setPage((currentPage) =>
-                                        Math.max(currentPage - 1, 1),
-                                    )
-                                }
-                            >
-                                Previous
-                            </Button>
-                            <Button
-                                variant="default"
-                                size="xs"
-                                disabled={!hasNextPage || scores.isFetching}
-                                onClick={() =>
-                                    setPage((currentPage) => currentPage + 1)
-                                }
-                            >
-                                Next
-                            </Button>
-                        </Group>
+                    {/* Sentinel observed for infinite scroll; also the loading
+                        and end-of-list status line. */}
+                    <Group ref={loadMoreRef} justify="center" py="xs">
+                        {isFetchingNextPage ? (
+                            <Group gap="xs">
+                                <Loader size="xs" />
+                                <Text size="sm" c="dimmed">
+                                    Loading more scores
+                                </Text>
+                            </Group>
+                        ) : (
+                            <Text size="sm" c="dimmed">
+                                {rows.length === 0
+                                    ? 'No scores match these filters'
+                                    : `Showing ${rows.length} score${
+                                          rows.length === 1 ? '' : 's'
+                                      }${hasNextPage ? '' : ' · End of list'}`}
+                            </Text>
+                        )}
                     </Group>
                 </Stack>
             </Card>

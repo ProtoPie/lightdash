@@ -7,12 +7,23 @@ export type ChurnScoreAccountAggregationRow = Record<string, unknown> & {
     cloud_url: string | null;
     total_users: number | string | null;
     active_days: number | string | null;
+    // SF passthrough (from protopie_account_user_counts); not used in scoring.
+    sf_account_name?: string | null;
+    account_owner?: string | null;
+    sf_plan_category?: string | null;
+    sf_account_region?: string | null;
+    sf_account_country?: string | null;
 };
 
 export type ScoreAccountResult = {
     accountKey: string;
     namespace: string | null;
     cloudUrl: string | null;
+    sfAccountName: string | null;
+    accountOwner: string | null;
+    sfPlanCategory: string | null;
+    sfAccountRegion: string | null;
+    sfAccountCountry: string | null;
     totalPoints: number;
     maxPoints: number;
     scorePercent: number;
@@ -155,6 +166,11 @@ export const scoreAccount = ({
         accountKey: row.account_key,
         namespace: row.namespace,
         cloudUrl: row.cloud_url,
+        sfAccountName: row.sf_account_name ?? null,
+        accountOwner: row.account_owner ?? null,
+        sfPlanCategory: row.sf_plan_category ?? null,
+        sfAccountRegion: row.sf_account_region ?? null,
+        sfAccountCountry: row.sf_account_country ?? null,
         totalPoints: round(totalPoints, 2),
         maxPoints: round(maxPoints, 2),
         scorePercent: round(scorePercent, 4),

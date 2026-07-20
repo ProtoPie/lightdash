@@ -8,6 +8,11 @@ type DbChurnScore = {
     account_key: string;
     namespace: string | null;
     cloud_url: string | null;
+    sf_account_name: string | null;
+    account_owner: string | null;
+    sf_plan_category: string | null;
+    sf_account_region: string | null;
+    sf_account_country: string | null;
     scored_for_date: string | Date;
     lookback_days: number;
     config_uuid: string;
@@ -22,6 +27,15 @@ type DbChurnScore = {
     computed_at: Date;
     run_uuid: string;
 };
+
+/**
+ * Escapes LIKE/ILIKE wildcards so a user's free-text search is matched as
+ * literal partial text — otherwise `%` and `_` act as wildcards (e.g. a lone
+ * `_` would match nearly every account). Postgres LIKE uses backslash as its
+ * default escape character, so no explicit ESCAPE clause is needed.
+ */
+export const escapeLikePattern = (value: string): string =>
+    value.replace(/[\\%_]/g, (char) => `\\${char}`);
 
 const CHURN_SCORE_SORT_BY = new Set<Protopie.ChurnScoreSortBy>([
     'score',
@@ -88,6 +102,113 @@ export class ChurnScoreModel {
         void query.orderBy('account_key', 'asc');
     }
 
+    /** Maps each filter facet to its snapshot column. */
+    private static readonly FACET_COLUMNS = {
+        accountOwner: 'account_owner',
+        sfPlanCategory: 'sf_plan_category',
+        sfAccountRegion: 'sf_account_region',
+        sfAccountCountry: 'sf_account_country',
+    } as const satisfies Record<
+        Protopie.ChurnScoreFacetKey,
+        keyof DbChurnScore
+    >;
+
+    /** Columns scanned by the unified free-text search (OR ilike). */
+    private static readonly SEARCH_COLUMNS: readonly (keyof DbChurnScore)[] = [
+        'sf_account_name',
+        'namespace',
+        'cloud_url',
+        'account_owner',
+        'sf_plan_category',
+        'sf_account_region',
+        'sf_account_country',
+    ];
+
+    /**
+     * Applies one multi-select SF facet filter. `values` may include
+     * CHURN_SCORE_FILTER_NONE_VALUE to also match null rows via OR. Empty or
+     * undefined = unfiltered (never emits an invalid `WHERE col IN ()`).
+     */
+    private static applyFacetFilter(
+        query: Knex.QueryBuilder,
+        column: string,
+        values: string[] | undefined,
+    ): void {
+        if (!values || values.length === 0) {
+            return;
+        }
+        const includeNone = values.includes(
+            Protopie.CHURN_SCORE_FILTER_NONE_VALUE,
+        );
+        const concrete = values.filter(
+            (value) => value !== Protopie.CHURN_SCORE_FILTER_NONE_VALUE,
+        );
+        void query.where((builder) => {
+            if (concrete.length > 0) {
+                void builder.whereIn(column, concrete);
+            }
+            if (includeNone) {
+                void builder.orWhereNull(column);
+            }
+        });
+    }
+
+    /**
+     * Applies every score filter to `query`. Pass `excludeFacet` to skip that
+     * one facet's own selection — used when computing faceted option counts so
+     * a facet never constrains its own value list (standard faceted-search).
+     */
+    private static applyScoreFilters(
+        query: Knex.QueryBuilder,
+        filters: Protopie.ChurnScoreLatestFilters,
+        excludeFacet?: Protopie.ChurnScoreFacetKey,
+    ): void {
+        if (filters.riskBand) {
+            void query.where('risk_band', filters.riskBand);
+        }
+        if (filters.minScore !== undefined) {
+            void query.where('normalized_score', '>=', filters.minScore);
+        }
+        if (filters.maxScore !== undefined) {
+            void query.where('normalized_score', '<=', filters.maxScore);
+        }
+        if (filters.namespace) {
+            void query.where('namespace', 'ilike', `%${filters.namespace}%`);
+        }
+        const search = filters.search?.trim();
+        if (search) {
+            const like = `%${escapeLikePattern(search)}%`;
+            void query.where((builder) => {
+                ChurnScoreModel.SEARCH_COLUMNS.forEach((column) => {
+                    void builder.orWhere(column, 'ilike', like);
+                });
+            });
+        }
+        const facetValues: Record<
+            Protopie.ChurnScoreFacetKey,
+            string[] | undefined
+        > = {
+            accountOwner: filters.accountOwner,
+            sfPlanCategory: filters.sfPlanCategory,
+            sfAccountRegion: filters.sfAccountRegion,
+            sfAccountCountry: filters.sfAccountCountry,
+        };
+        (
+            Object.keys(
+                ChurnScoreModel.FACET_COLUMNS,
+            ) as Protopie.ChurnScoreFacetKey[]
+        ).forEach((facetKey) => {
+            if (facetKey === excludeFacet) {
+                return;
+            }
+            ChurnScoreModel.applyFacetFilter(
+                query,
+                ChurnScoreModel.FACET_COLUMNS[facetKey],
+                facetValues[facetKey],
+            );
+        });
+    }
+
     async upsertScores(rows: ProtopieChurnScoreInsert[]): Promise<void> {
         if (rows.length === 0) {
             return;
@@ -100,6 +221,11 @@ export class ChurnScoreModel {
                     account_key: row.accountKey,
                     namespace: row.namespace,
                     cloud_url: row.cloudUrl,
+                    sf_account_name: row.sfAccountName,
+                    account_owner: row.accountOwner,
+                    sf_plan_category: row.sfPlanCategory,
+                    sf_account_region: row.sfAccountRegion,
+                    sf_account_country: row.sfAccountCountry,
                     scored_for_date: row.scoredForDate,
                     lookback_days: row.lookbackDays,
                     config_uuid: row.configUuid,
@@ -123,6 +249,17 @@ export class ChurnScoreModel {
             .merge({
                 namespace: this.database.raw('excluded.namespace'),
                 cloud_url: this.database.raw('excluded.cloud_url'),
+                sf_account_name: this.database.raw('excluded.sf_account_name'),
+                account_owner: this.database.raw('excluded.account_owner'),
+                sf_plan_category: this.database.raw(
+                    'excluded.sf_plan_category',
+                ),
+                sf_account_region: this.database.raw(
+                    'excluded.sf_account_region',
+                ),
+                sf_account_country: this.database.raw(
+                    'excluded.sf_account_country',
+                ),
                 config_version: this.database.raw('excluded.config_version'),
                 total_points: this.database.raw('excluded.total_points'),
                 max_points: this.database.raw('excluded.max_points'),
@@ -138,15 +275,20 @@ export class ChurnScoreModel {
             });
     }
 
-    async listLatestScores({
+    /**
+     * The latest-run snapshot for one (project, config): the newest scored row
+     * per account_key from the most recent run. Shared by `listLatestScores`
+     * and `listFilterOptions` so filter dropdowns and the scores list always
+     * agree on which accounts exist. Returns an aliased subquery (`latest_scores`)
+     * to nest inside an outer query.
+     */
+    private latestScoresSubquery({
         projectUuid,
         configUuid,
-        filters,
     }: {
         projectUuid: string;
         configUuid: string;
-        filters: Protopie.ChurnScoreLatestFilters;
-    }): Promise<ProtopieChurnScoreRecord[]> {
+    }): Knex.QueryBuilder {
         const latestRun = this.database<DbChurnScore>(
             ProtopieTableName.ChurnScores,
         )
@@ -158,9 +300,7 @@ export class ChurnScoreModel {
             .orderBy('scored_for_date', 'desc')
             .orderBy('computed_at', 'desc')
             .limit(1);
-        const latestScores = this.database<DbChurnScore>(
-            ProtopieTableName.ChurnScores,
-        )
+        return this.database<DbChurnScore>(ProtopieTableName.ChurnScores)
             .distinctOn('account_key')
             .select('*')
             .where({
@@ -172,6 +312,90 @@ export class ChurnScoreModel {
             .orderBy('scored_for_date', 'desc')
             .orderBy('computed_at', 'desc')
             .as('latest_scores');
+    }
+
+    /**
+     * Distinct non-null SF attribute values for the filter dropdowns, scoped to
+     * the same latest-run snapshot the scores list uses.
+     */
+    async listFilterOptions({
+        projectUuid,
+        configUuid,
+        filters,
+    }: {
+        projectUuid: string;
+        configUuid: string;
+        filters: Protopie.ChurnScoreLatestFilters;
+    }): Promise<Protopie.ChurnScoreFilterOptions> {
+        const computeFacet = async (
+            facetKey: Protopie.ChurnScoreFacetKey,
+        ): Promise<Protopie.ChurnScoreFacet> => {
+            const column = ChurnScoreModel.FACET_COLUMNS[facetKey];
+            // Apply every OTHER active filter (not this facet's own selection)
+            // so its value list stays broadenable — the faceted-search rule.
+            const query = this.database.from(
+                this.latestScoresSubquery({ projectUuid, configUuid }),
+            );
+            ChurnScoreModel.applyScoreFilters(query, filters, facetKey);
+
+            // Single GROUP BY over the whole snapshot (nulls included) — the
+            // null group is split out into noneCount, so one query per facet.
+            const rows = (await query
+                .groupBy(column)
+                .orderBy(column, 'asc')
+                .select(column)
+                .count({ count: '*' })) as Record<string, unknown>[];
+
+            const options: Protopie.ChurnScoreFacetOption[] = [];
+            let noneCount = 0;
+            rows.forEach((row) => {
+                const value = row[column];
+                if (value === null || value === undefined) {
+                    noneCount = Number(row.count);
+                } else {
+                    options.push({
+                        value: String(value),
+                        count: Number(row.count),
+                    });
+                }
+            });
+
+            return { options, noneCount };
+        };
+
+        const [
+            accountOwner,
+            sfPlanCategory,
+            sfAccountRegion,
+            sfAccountCountry,
+        ] = await Promise.all([
+            computeFacet('accountOwner'),
+            computeFacet('sfPlanCategory'),
+            computeFacet('sfAccountRegion'),
+            computeFacet('sfAccountCountry'),
+        ]);
+
+        return {
+            accountOwner,
+            sfPlanCategory,
+            sfAccountRegion,
+            sfAccountCountry,
+        };
+    }
+
+    async listLatestScores({
+        projectUuid,
+        configUuid,
+        filters,
+    }: {
+        projectUuid: string;
+        configUuid: string;
+        filters: Protopie.ChurnScoreLatestFilters;
+    }): Promise<ProtopieChurnScoreRecord[]> {
+        const latestScores = this.latestScoresSubquery({
+            projectUuid,
+            configUuid,
+        });
         const offset = Math.max(filters.offset ?? 0, 0);
         const limit = Math.min(Math.max(filters.limit ?? 50, 1), 500);
         const query = this.database
@@ -180,18 +404,7 @@ export class ChurnScoreModel {
             .limit(limit)
             .offset(offset);
 
-        if (filters.riskBand) {
-            void query.where('risk_band', filters.riskBand);
-        }
-        if (filters.minScore !== undefined) {
-            void query.where('normalized_score', '>=', filters.minScore);
-        }
-        if (filters.maxScore !== undefined) {
-            void query.where('normalized_score', '<=', filters.maxScore);
-        }
-        if (filters.namespace) {
-            void query.where('namespace', 'ilike', `%${filters.namespace}%`);
-        }
+        ChurnScoreModel.applyScoreFilters(query, filters);
 
         ChurnScoreModel.applyScoreSort(query, filters);
 
@@ -255,6 +468,11 @@ export class ChurnScoreModel {
             accountKey: row.account_key,
             namespace: row.namespace,
             cloudUrl: row.cloud_url,
+            sfAccountName: row.sf_account_name,
+            accountOwner: row.account_owner,
+            sfPlanCategory: row.sf_plan_category,
+            sfAccountRegion: row.sf_account_region,
+            sfAccountCountry: row.sf_account_country,
             scoredForDate:
                 row.scored_for_date instanceof Date
                     ? row.scored_for_date.toISOString().slice(0, 10)

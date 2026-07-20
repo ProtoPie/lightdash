@@ -26,7 +26,6 @@ import EChartsReact, {
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import { useProtopieChurnScoreAccountDetails } from './api';
 import classes from './ProtopieFormsPage.module.css';
-import ProtopieSectionTabs from './ProtopieSectionTabs';
 
 const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
     low: 'green',
@@ -259,7 +258,11 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                         >
                             Back to scores
                         </Button>
-                        <Title order={3}>{score.namespace ?? 'Account'}</Title>
+                        <Title order={3}>
+                            {score.sfAccountName ??
+                                score.namespace ??
+                                'Account'}
+                        </Title>
                         <Group gap="xs">
                             <Text c="dimmed" size="sm">
                                 Combined namespace score across all teams for{' '}
@@ -284,21 +287,9 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
                         {score.riskBand} risk
                     </Badge>
                 </Group>
-
-                <ProtopieSectionTabs />
             </Stack>
 
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="md">
-                <Card withBorder className={classes.formPanel}>
-                    <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-                        Churn score
-                    </Text>
-                    <Title order={2}>{score.churnScore.toFixed(2)}</Title>
-                    <Text size="sm" c="dimmed">
-                        100 − health ({score.normalizedScore.toFixed(2)}) ·
-                        higher = more at risk
-                    </Text>
-                </Card>
+            <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
                 <Card withBorder className={classes.formPanel}>
                     <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
                         Health score

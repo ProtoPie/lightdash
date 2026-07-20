@@ -59,19 +59,50 @@ resource "aws_ecr_repository" "lightdash" {
 resource "aws_ecr_lifecycle_policy" "lightdash" {
   repository = aws_ecr_repository.lightdash.name
 
+  # NOTE: rules only ever SELECT images to expire.
+  # - The CI cache tags (`buildcache-dev` / `buildcache-prod`) start with
+  #   `buildcache`, not `dev-` / `prod-`, so no rule below matches them; the
+  #   current cache image is never expired. When the moving cache tag is
+  #   repushed, the old digest becomes untagged and is cleaned by rule 1.
+  # - `dev-latest` / `prod-latest` DO match the `dev-` / `prod-` prefix rules
+  #   and are counted with the SHA images. Because every build repushes them
+  #   onto the newest digest, they always sit at the top of the count and are
+  #   kept in practice — but they are not specially protected, so keep the
+  #   counts comfortably above the number of images a rollback could shift.
   policy = jsonencode({
     rules = [
       {
         rulePriority = 1
-        description  = "Keep only the latest image and the one before it"
+        description  = "Expire untagged images (e.g. digests left behind when a moving tag is repushed) after 1 day"
         selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 2
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 1
         }
-        action = {
-          type = "expire"
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep the 10 most recent dev- images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["dev-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
         }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 3
+        description  = "Keep the 15 most recent prod- images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["prod-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 15
+        }
+        action = { type = "expire" }
       }
     ]
   })
