@@ -12,6 +12,7 @@ type DbChurnScoreConfig = {
     lookback_days: number;
     score_function: Protopie.ChurnScoreFunction;
     risk_band_thresholds: Protopie.ChurnScoreRiskBandThresholds;
+    visibility: Protopie.ChurnScoreConfigVisibility;
     effective_from: Date;
     effective_to: Date | null;
     status: Protopie.ChurnScoreConfigStatus;
@@ -153,6 +154,7 @@ export class ChurnScoreConfigModel {
         lookbackDays,
         scoreFunction,
         riskBandThresholds,
+        visibility = Protopie.DEFAULT_CHURN_SCORE_VISIBILITY,
         status = 'active',
         userUuid,
         trx,
@@ -163,6 +165,7 @@ export class ChurnScoreConfigModel {
         lookbackDays: number;
         scoreFunction: Protopie.ChurnScoreFunction;
         riskBandThresholds: Protopie.ChurnScoreRiskBandThresholds;
+        visibility?: Protopie.ChurnScoreConfigVisibility;
         status?: Protopie.ChurnScoreConfigStatus;
         userUuid: string | null;
         trx: Knex.Transaction;
@@ -175,6 +178,7 @@ export class ChurnScoreConfigModel {
                 lookback_days: lookbackDays,
                 score_function: scoreFunction,
                 risk_band_thresholds: riskBandThresholds,
+                visibility,
                 status,
                 created_by_user_uuid: userUuid,
                 updated_by_user_uuid: userUuid,
@@ -244,6 +248,56 @@ export class ChurnScoreConfigModel {
     }
 
     /**
+     * Load specific config versions by uuid, any status. Used to resolve which
+     * rubrics a caller may read when a result set spans several of them.
+     */
+    async listConfigsByUuids({
+        configUuids,
+        trx,
+    }: {
+        configUuids: string[];
+        trx?: Knex.Transaction;
+    }): Promise<ProtopieChurnScoreConfigRecord[]> {
+        if (configUuids.length === 0) {
+            return [];
+        }
+
+        const rows = await this.query(trx).whereIn('config_uuid', configUuids);
+
+        return rows.map((row) => ChurnScoreConfigModel.toRecord(row));
+    }
+
+    /**
+     * Set visibility on every version of a rubric. Visibility belongs to the
+     * rubric, not to one version — leaving old versions behind would produce a
+     * rubric whose version history is half-shared. Returns rows updated.
+     */
+    async updateVisibilityByName({
+        projectUuid,
+        name,
+        visibility,
+        userUuid,
+        trx,
+    }: {
+        projectUuid: string;
+        name: string;
+        visibility: Protopie.ChurnScoreConfigVisibility;
+        userUuid: string | null;
+        trx: Knex.Transaction;
+    }): Promise<number> {
+        return this.query(trx)
+            .where({
+                project_uuid: projectUuid,
+                name,
+            })
+            .update({
+                visibility,
+                updated_by_user_uuid: userUuid,
+                updated_at: trx.fn.now(),
+            });
+    }
+
+    /**
      * True if any row (any status, including deleted) already uses this name in
      * the project. Rename collision guard: a deleted rubric still owns its
      * (project, name, version) rows, so renaming onto that name would violate the
@@ -285,6 +339,7 @@ export class ChurnScoreConfigModel {
             lookbackDays: Number(row.lookback_days),
             scoreFunction: row.score_function,
             riskBandThresholds: row.risk_band_thresholds,
+            visibility: row.visibility,
             effectiveFrom: row.effective_from,
             effectiveTo: row.effective_to,
             status: row.status,
