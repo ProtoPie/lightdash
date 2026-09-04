@@ -36,6 +36,11 @@ If you are picking this up for the first time, read in order:
 | 14 | [Security & privacy](./14-security-privacy.md) | Data classification, access control, audit logging, retention, threat model. |
 | 15 | [Deployment & infrastructure](./15-deployment.md) | AWS ECS Fargate, Terraform, custom Docker image, env vars, Airflow → RDS network plumbing. |
 | 16 | [Local run and Okta MCP auth](./16-local-run-and-okta-mcp-auth.md) | Local validation checklist plus production Okta/OAuth path for MCP clients. |
+| 17 | [Churn score implementation plan](./17-churn-score-implementation-plan.md) ([KO](./17-churn-score-implementation-plan.ko.md)) | The contractual ChurnZero-parity rubric: config/factor tables, weights, risk bands, versioning. |
+| 18 | [Churn backend logic guide](./18-churn-backend-logic-guide.md) | How a score is actually computed — aggregation, stepwise vs linear, health vs churn direction, freshness gate. |
+| 19 | [Churn recompute Airflow DAG](./19-churn-recompute-airflow-dag.md) | Nightly recompute pipeline: dbt mart sensor → list active configs → submit + poll per config. |
+| 20 | [Churn rubric guide](./20-churn-rubric-guide.md) | **User-facing.** How to create/edit a custom rubric, who is allowed to do what, versioning, and when scores appear. |
+| — | [Churn sales guide](./churn-sales-guide.md) | Plain-language guide for Sales/CS on reading the score (KO). |
 
 ---
 
