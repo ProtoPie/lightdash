@@ -369,6 +369,11 @@
                 "required": ["medium", "low"],
                 "type": "object"
             },
+            "ChurnScoreConfigVisibility": {
+                "type": "string",
+                "enum": ["public", "private"],
+                "description": "Who may read a rubric and the scores computed with it.\n\n- `public`: every project member. The default for a newly created rubric, so\n  sharing is the norm and hiding is the deliberate act.\n- `private`: the creator plus project/organization admins only.\n\nVisibility never widens edit rights — a public rubric is still editable only\nby its owner and admins. The default rubric is always readable by everyone\nregardless of this column."
+            },
             "ChurnScoreConfigStatus": {
                 "type": "string",
                 "enum": ["draft", "active", "archived", "deleted"]
@@ -403,6 +408,9 @@
                         "type": "string",
                         "format": "date-time"
                     },
+                    "visibility": {
+                        "$ref": "#/components/schemas/ChurnScoreConfigVisibility"
+                    },
                     "riskBandThresholds": {
                         "$ref": "#/components/schemas/ChurnScoreRiskBandThresholds"
                     },
@@ -435,6 +443,7 @@
                     "status",
                     "effectiveTo",
                     "effectiveFrom",
+                    "visibility",
                     "riskBandThresholds",
                     "scoreFunction",
                     "lookbackDays",
@@ -700,6 +709,10 @@
                         },
                         "type": "array"
                     },
+                    "visibility": {
+                        "$ref": "#/components/schemas/ChurnScoreConfigVisibility",
+                        "description": "Omitted means \"keep what this rubric already has\" — a new version\ninherits the active version's visibility, and a brand new rubric falls\nback to DEFAULT_CHURN_SCORE_VISIBILITY."
+                    },
                     "riskBandThresholds": {
                         "$ref": "#/components/schemas/ChurnScoreRiskBandThresholds"
                     },
@@ -757,6 +770,18 @@
                     }
                 },
                 "required": ["newName", "currentName"],
+                "type": "object"
+            },
+            "SetChurnScoreConfigVisibilityInput": {
+                "properties": {
+                    "visibility": {
+                        "$ref": "#/components/schemas/ChurnScoreConfigVisibility"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": ["visibility", "name"],
                 "type": "object"
             },
             "ApiSuccess__runUuid-string--status-queued__": {
@@ -35936,6 +35961,57 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/RenameChurnScoreConfigInput"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/projects/{projectUuid}/protopie/churn/config/visibility": {
+            "put": {
+                "operationId": "SetProtopieChurnScoreConfigVisibility",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChurnScoreConfigResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Share or hide a churn score rubric. Applies to every version of it and\ndoes not change who may edit it.",
+                "summary": "Set Protopie churn score rubric visibility",
+                "tags": ["Protopie"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SetChurnScoreConfigVisibilityInput"
                             }
                         }
                     }
