@@ -38,6 +38,10 @@ import {
     EVENT_USAGE_MART,
 } from './churnScore/buildAggregationQuery';
 import {
+    canViewChurnScoreConfig,
+    resolveChurnScoreConfigVisibility,
+} from './churnScore/configVisibility';
+import {
     scoreAccount,
     type ChurnScoreAccountAggregationRow,
 } from './churnScore/scoreAccount';
@@ -156,15 +160,15 @@ export class ChurnScoreService extends BaseService {
             projectUuid,
         });
 
-        if (this.canManageProject(user, projectUuid)) {
-            return ChurnScoreService.sortDefaultFirst(configs);
-        }
+        const canManageProject = this.canManageProject(user, projectUuid);
 
         return ChurnScoreService.sortDefaultFirst(
-            configs.filter(
-                (config) =>
-                    ChurnScoreService.isDefaultConfig(config.name) ||
-                    config.createdByUserUuid === user.userUuid,
+            configs.filter((config) =>
+                canViewChurnScoreConfig({
+                    config,
+                    userUuid: user.userUuid,
+                    canManageProject,
+                }),
             ),
         );
     }
@@ -236,6 +240,11 @@ export class ChurnScoreService extends BaseService {
                 lookbackDays: validated.lookbackDays,
                 scoreFunction: validated.scoreFunction,
                 riskBandThresholds: validated.riskBandThresholds,
+                visibility: resolveChurnScoreConfigVisibility({
+                    requested: validated.visibility,
+                    activeConfig: active,
+                    name,
+                }),
                 userUuid: user.userUuid,
                 trx,
             });
@@ -296,6 +305,16 @@ export class ChurnScoreService extends BaseService {
                 trx,
             });
 
+            // Visibility comes from the version that is live right now, not
+            // from the version being restored — restoring old weights must not
+            // silently re-share (or re-hide) the rubric.
+            const activeConfig =
+                await this.churnScoreConfigModel.getActiveConfig({
+                    projectUuid,
+                    name: sourceConfig.name,
+                    trx,
+                });
+
             await this.churnScoreConfigModel.archiveActive({
                 projectUuid,
                 name: sourceConfig.name,
@@ -310,6 +329,11 @@ export class ChurnScoreService extends BaseService {
                 lookbackDays: sourceConfig.lookbackDays,
                 scoreFunction: sourceConfig.scoreFunction,
                 riskBandThresholds: sourceConfig.riskBandThresholds,
+                visibility: resolveChurnScoreConfigVisibility({
+                    requested: undefined,
+                    activeConfig: activeConfig ?? sourceConfig,
+                    name: sourceConfig.name,
+                }),
                 userUuid: user.userUuid,
                 trx,
             });
@@ -363,6 +387,65 @@ export class ChurnScoreService extends BaseService {
         });
 
         return { deleted: true };
+    }
+
+    /**
+     * Share or hide a rubric. Applies to every version of it (visibility is a
+     * rubric property, not a per-version one) and never changes who may edit
+     * it. The default rubric is readable by everyone by construction, so
+     * hiding it is meaningless and rejected rather than silently ignored.
+     */
+    async setConfigVisibility({
+        projectUuid,
+        name,
+        visibility,
+        user,
+    }: {
+        projectUuid: string;
+        name: string;
+        visibility: Protopie.ChurnScoreConfigVisibility;
+        user: SessionUser;
+    }): Promise<Protopie.ChurnScoreConfigWithFactors> {
+        const trimmedName = name?.trim();
+        if (!trimmedName) {
+            throw new ParameterError('A rubric name is required.');
+        }
+        if (visibility !== 'public' && visibility !== 'private') {
+            throw new ParameterError(
+                'Churn score visibility must be "public" or "private".',
+            );
+        }
+        if (ChurnScoreService.isDefaultConfig(trimmedName)) {
+            throw new ForbiddenError(
+                'The default churn score rubric is always visible to everyone.',
+            );
+        }
+
+        const active = await this.churnScoreConfigModel.getActiveConfig({
+            projectUuid,
+            name: trimmedName,
+        });
+        if (!active) {
+            throw new NotFoundError(
+                `Churn score rubric does not exist: ${trimmedName}`,
+            );
+        }
+        this.requireConfigEdit(user, projectUuid, active, trimmedName);
+
+        await this.database.transaction(async (trx) => {
+            await this.churnScoreConfigModel.updateVisibilityByName({
+                projectUuid,
+                name: trimmedName,
+                visibility,
+                userUuid: user.userUuid,
+                trx,
+            });
+        });
+
+        return this.getActiveConfigByName({
+            projectUuid,
+            name: trimmedName,
+        });
     }
 
     async renameConfig({
@@ -586,11 +669,38 @@ export class ChurnScoreService extends BaseService {
         user: SessionUser;
     }): Promise<ProtopieChurnScoreRecord[]> {
         this.requireProjectView(user, projectUuid);
-        return this.churnScoreModel.getAccountHistory({
+        const history = await this.churnScoreModel.getAccountHistory({
             projectUuid,
             accountKey,
             limit: Math.min(Math.max(limit ?? 30, 1), 365),
         });
+
+        // History spans every rubric this account was ever scored with, so it
+        // has to drop rows from rubrics the caller cannot read — otherwise a
+        // private rubric's scores leak through this endpoint even though every
+        // other score endpoint gates on visibility.
+        const canManageProject = this.canManageProject(user, projectUuid);
+        const readableConfigUuids = new Set(
+            (
+                await this.churnScoreConfigModel.listConfigsByUuids({
+                    configUuids: [
+                        ...new Set(history.map((score) => score.configUuid)),
+                    ],
+                })
+            )
+                .filter((config) =>
+                    canViewChurnScoreConfig({
+                        config,
+                        userUuid: user.userUuid,
+                        canManageProject,
+                    }),
+                )
+                .map((config) => config.configUuid),
+        );
+
+        return history.filter((score) =>
+            readableConfigUuids.has(score.configUuid),
+        );
     }
 
     async getAccountDetails({
@@ -1611,15 +1721,17 @@ export class ChurnScoreService extends BaseService {
     ): void {
         this.requireProjectView(user, projectUuid);
         if (
-            ChurnScoreService.isDefaultConfig(config.name) ||
-            config.createdByUserUuid === user.userUuid ||
-            this.canManageProject(user, projectUuid)
+            canViewChurnScoreConfig({
+                config,
+                userUuid: user.userUuid,
+                canManageProject: this.canManageProject(user, projectUuid),
+            })
         ) {
             return;
         }
 
         throw new ForbiddenError(
-            'You can only view your own churn score rubrics.',
+            'This churn score rubric is private to the person who created it.',
         );
     }
 
@@ -1644,8 +1756,11 @@ export class ChurnScoreService extends BaseService {
             return;
         }
 
+        // Covers two situations with one message: saving under a name someone
+        // else already took, and trying to edit a rubric you do not own. The
+        // old wording ("Choose a different name") misdescribed the second.
         throw new ForbiddenError(
-            `A churn score rubric named "${name}" already exists. Choose a different name.`,
+            `A churn score rubric named "${name}" already exists and belongs to someone else.`,
         );
     }
 

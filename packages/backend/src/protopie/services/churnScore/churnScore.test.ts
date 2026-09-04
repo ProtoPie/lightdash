@@ -276,6 +276,47 @@ describe('validateChurnScoreConfigInput', () => {
             }),
         ).toThrow('Churn score factor weights must total 100');
     });
+
+    test('keeps a supplied visibility', () => {
+        const result = validateChurnScoreConfigInput({
+            name: 'Custom',
+            lookbackDays: 90,
+            scoreFunction: 'stepwise',
+            riskBandThresholds:
+                Protopie.DEFAULT_CHURN_SCORE_RISK_BAND_THRESHOLDS,
+            visibility: 'private',
+            factors: Protopie.DEFAULT_CHURN_SCORE_FACTORS,
+        });
+
+        expect(result.visibility).toBe('private');
+    });
+
+    test('leaves visibility undefined so the service can inherit it', () => {
+        const result = validateChurnScoreConfigInput({
+            name: 'Custom',
+            lookbackDays: 90,
+            scoreFunction: 'stepwise',
+            riskBandThresholds:
+                Protopie.DEFAULT_CHURN_SCORE_RISK_BAND_THRESHOLDS,
+            factors: Protopie.DEFAULT_CHURN_SCORE_FACTORS,
+        });
+
+        expect(result.visibility).toBeUndefined();
+    });
+
+    test('rejects an unknown visibility', () => {
+        expect(() =>
+            validateChurnScoreConfigInput({
+                name: 'Custom',
+                lookbackDays: 90,
+                scoreFunction: 'stepwise',
+                riskBandThresholds:
+                    Protopie.DEFAULT_CHURN_SCORE_RISK_BAND_THRESHOLDS,
+                visibility: 'everyone' as Protopie.ChurnScoreConfigVisibility,
+                factors: Protopie.DEFAULT_CHURN_SCORE_FACTORS,
+            }),
+        ).toThrow('visibility');
+    });
 });
 
 describe('buildAggregationQuery', () => {
