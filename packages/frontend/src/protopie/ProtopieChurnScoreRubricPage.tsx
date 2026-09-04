@@ -25,10 +25,12 @@ import {
     IconDeviceFloppy,
     IconHelpCircle,
     IconHistory,
+    IconLock,
     IconPencil,
     IconPlus,
     IconRefresh,
     IconTrash,
+    IconUsers,
 } from '@tabler/icons-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import MantineIcon from '../components/common/MantineIcon';
@@ -45,6 +47,7 @@ import {
     useRecomputeProtopieChurnScore,
     useRenameProtopieChurnConfig,
     useRestoreProtopieChurnConfigVersion,
+    useSetProtopieChurnConfigVisibility,
     useUpdateProtopieChurnConfig,
 } from './api';
 import classes from './ProtopieFormsPage.module.css';
@@ -113,6 +116,8 @@ const rubricLabels = {
         'How points are awarded. Stepwise (ChurnZero parity) gives integer point buckets per factor (e.g. 51%+ = full points, 26-50% = 66%, 1-25% = 33%); buckets are generated from each factor weight on save. Linear gives proportional partial credit: min(actual / goal, 1) * weight.',
     actions:
         'Remove this factor from the rubric. After removing factors, the remaining weights still must total 100.',
+    visibility:
+        'Who can read this rubric and the scores computed with it. "Everyone in the project" is the default so teammates can compare rubrics; "Only me" hides it from everyone except you and project admins. Either way, only you and admins can edit it.',
 };
 
 const toFactorInput = (
@@ -133,6 +138,11 @@ const toFactorInput = (
 const scoreFunctionOptions = [
     { value: 'stepwise', label: 'Stepwise (ChurnZero)' },
     { value: 'linear', label: 'Linear' },
+];
+
+const visibilityOptions = [
+    { value: 'public', label: 'Everyone in the project' },
+    { value: 'private', label: 'Only me' },
 ];
 
 // ChurnZero parity uses integer step buckets. When a config is saved as
@@ -176,6 +186,7 @@ const ProtopieChurnScoreRubricPage = () => {
     const restoreVersion = useRestoreProtopieChurnConfigVersion(projectUuid);
     const deleteConfig = useDeleteProtopieChurnConfig(projectUuid);
     const renameConfig = useRenameProtopieChurnConfig(projectUuid);
+    const setVisibility = useSetProtopieChurnConfigVisibility(projectUuid);
     const recompute = useRecomputeProtopieChurnScore(projectUuid);
     const [runUuid, setRunUuid] = useState<string | undefined>();
     const runQuery = useProtopieChurnRun({ projectUuid, runUuid });
@@ -193,6 +204,10 @@ const ProtopieChurnScoreRubricPage = () => {
         [],
     );
     const [newRubricName, setNewRubricName] = useState('');
+    const [newRubricVisibility, setNewRubricVisibility] =
+        useState<Protopie.ChurnScoreConfigVisibility>(
+            Protopie.DEFAULT_CHURN_SCORE_VISIBILITY,
+        );
     const [restoreConfigUuid, setRestoreConfigUuid] = useState<string | null>(
         null,
     );
@@ -400,7 +415,16 @@ const ProtopieChurnScoreRubricPage = () => {
                 }),
             )) ??
         false;
-    const defaultRubricBlocked = isDefaultRubric && !canManageProject;
+    // A rubric is editable by its owner and by project/org admins. Everyone
+    // else can open it (when it is public) but only to read and to fork into
+    // their own copy via "Save edits as custom rubric".
+    const isOwnRubric =
+        !!configQuery.data?.config.createdByUserUuid &&
+        configQuery.data.config.createdByUserUuid === user.data?.userUuid;
+    const rubricReadOnly = isDefaultRubric
+        ? !canManageProject
+        : !isOwnRubric && !canManageProject;
+    const visibility = configQuery.data?.config.visibility ?? 'public';
     const trimmedNewRubricName = newRubricName.trim();
     const visibleRubricNameExists = (configsQuery.data ?? []).some(
         (config) =>
@@ -411,7 +435,7 @@ const ProtopieChurnScoreRubricPage = () => {
         trimmedNewRubricName !== DEFAULT_CONFIG_NAME &&
         !visibleRubricNameExists;
 
-    const canManageRubric = !isDefaultRubric && !defaultRubricBlocked;
+    const canManageRubric = !isDefaultRubric && !rubricReadOnly;
     const trimmedRenameValue = renameValue.trim();
     const renameConflict = (configsQuery.data ?? []).some(
         (config) =>
@@ -494,12 +518,16 @@ const ProtopieChurnScoreRubricPage = () => {
                     low: lowThreshold,
                     medium: mediumThreshold,
                 },
+                visibility: newRubricVisibility,
                 factors: withDerivedBuckets(factors, scoreFunction),
             },
             {
                 onSuccess: (response) => {
                     setSelectedConfigName(response.config.name);
                     setNewRubricName('');
+                    setNewRubricVisibility(
+                        Protopie.DEFAULT_CHURN_SCORE_VISIBILITY,
+                    );
                 },
             },
         );
@@ -534,10 +562,44 @@ const ProtopieChurnScoreRubricPage = () => {
                         </Text>
                     </Stack>
                     <Group>
-                        {isDefaultRubric && (
+                        {isDefaultRubric ? (
                             <Badge variant="outline">
                                 Admin-managed default
                             </Badge>
+                        ) : (
+                            <Tooltip
+                                withinPortal
+                                maw={360}
+                                multiline
+                                label={
+                                    visibility === 'public'
+                                        ? 'Every project member can see this rubric and its scores. Only you and admins can edit it.'
+                                        : 'Only you and project admins can see this rubric and its scores.'
+                                }
+                            >
+                                <Badge
+                                    variant="outline"
+                                    color={
+                                        visibility === 'public'
+                                            ? 'green'
+                                            : 'gray'
+                                    }
+                                    leftSection={
+                                        <MantineIcon
+                                            icon={
+                                                visibility === 'public'
+                                                    ? IconUsers
+                                                    : IconLock
+                                            }
+                                            size="sm"
+                                        />
+                                    }
+                                >
+                                    {visibility === 'public'
+                                        ? 'Shared with project'
+                                        : 'Private to you'}
+                                </Badge>
+                            </Tooltip>
                         )}
                         <Badge variant="light">
                             v{configQuery.data?.config.version}
@@ -592,6 +654,23 @@ const ProtopieChurnScoreRubricPage = () => {
                                 setNewRubricName(event.currentTarget.value)
                             }
                         />
+                        <Select
+                            label={
+                                <RubricHelpLabel
+                                    label="Who can see it"
+                                    description={rubricLabels.visibility}
+                                />
+                            }
+                            allowDeselect={false}
+                            data={visibilityOptions}
+                            value={newRubricVisibility}
+                            onChange={(value) =>
+                                setNewRubricVisibility(
+                                    (value ??
+                                        Protopie.DEFAULT_CHURN_SCORE_VISIBILITY) as Protopie.ChurnScoreConfigVisibility,
+                                )
+                            }
+                        />
                         <Button
                             variant="default"
                             disabled={!canCreateRubric || rubricInvalid}
@@ -604,6 +683,32 @@ const ProtopieChurnScoreRubricPage = () => {
 
                     {canManageRubric && (
                         <Group gap="xs">
+                            <Button
+                                variant="default"
+                                leftSection={
+                                    <MantineIcon
+                                        icon={
+                                            visibility === 'public'
+                                                ? IconLock
+                                                : IconUsers
+                                        }
+                                    />
+                                }
+                                loading={setVisibility.isLoading}
+                                onClick={() =>
+                                    setVisibility.mutate({
+                                        name,
+                                        visibility:
+                                            visibility === 'public'
+                                                ? 'private'
+                                                : 'public',
+                                    })
+                                }
+                            >
+                                {visibility === 'public'
+                                    ? 'Make private'
+                                    : 'Share with project'}
+                            </Button>
                             <Button
                                 variant="default"
                                 leftSection={<MantineIcon icon={IconPencil} />}
@@ -919,11 +1024,24 @@ const ProtopieChurnScoreRubricPage = () => {
                         </Alert>
                     )}
 
-                    {defaultRubricBlocked && (
-                        <Alert color="blue" title="Default rubric is shared">
-                            Only project or organization admins can save new
-                            default rubric versions. Create a custom rubric to
-                            test your own weights.
+                    {rubricReadOnly && (
+                        <Alert
+                            color="blue"
+                            title={
+                                isDefaultRubric
+                                    ? 'Default rubric is shared'
+                                    : 'This rubric belongs to someone else'
+                            }
+                        >
+                            {isDefaultRubric
+                                ? 'Only project or organization admins can save new default rubric versions.'
+                                : 'You can read it and try out changes here, but only its creator and project admins can save over it.'}{' '}
+                            Give your edits a name under
+                            <Text span fw={600}>
+                                {' '}
+                                New custom rubric{' '}
+                            </Text>
+                            to keep them as your own rubric.
                         </Alert>
                     )}
 
@@ -969,9 +1087,7 @@ const ProtopieChurnScoreRubricPage = () => {
                                 variant="default"
                                 leftSection={<MantineIcon icon={IconHistory} />}
                                 loading={restoreVersion.isLoading}
-                                disabled={
-                                    !restoreConfigUuid || defaultRubricBlocked
-                                }
+                                disabled={!restoreConfigUuid || rubricReadOnly}
                                 onClick={() => {
                                     if (!restoreConfigUuid) return;
 
@@ -1004,7 +1120,7 @@ const ProtopieChurnScoreRubricPage = () => {
                             variant="default"
                             leftSection={<MantineIcon icon={IconCalculator} />}
                             loading={recompute.isLoading}
-                            disabled={rubricInvalid || defaultRubricBlocked}
+                            disabled={rubricInvalid || rubricReadOnly}
                             onClick={() =>
                                 recompute.mutate({
                                     name,
@@ -1020,7 +1136,7 @@ const ProtopieChurnScoreRubricPage = () => {
                                 <MantineIcon icon={IconDeviceFloppy} />
                             }
                             loading={updateConfig.isLoading}
-                            disabled={rubricInvalid || defaultRubricBlocked}
+                            disabled={rubricInvalid || rubricReadOnly}
                             onClick={handleSave}
                         >
                             Save as new version

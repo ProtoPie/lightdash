@@ -328,6 +328,40 @@ export class ProtopieChurnScoreController extends BaseController {
     }
 
     /**
+     * Share or hide a churn score rubric. Applies to every version of it and
+     * does not change who may edit it.
+     * @summary Set Protopie churn score rubric visibility
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Put('config/visibility')
+    @OperationId('SetProtopieChurnScoreConfigVisibility')
+    async setConfigVisibility(
+        @Path() projectUuid: string,
+        @Body() body: Protopie.SetChurnScoreConfigVisibilityInput,
+        @Request() req: express.Request,
+    ): Promise<ApiChurnScoreConfigResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: await getProtopieServices(
+                this.services,
+            ).churnScoreService.setConfigVisibility({
+                projectUuid,
+                name: body.name,
+                visibility: body.visibility,
+                user: toSessionUser(req.account),
+            }),
+        };
+    }
+
+    /**
      * Enqueue a manual churn score recompute.
      * @summary Recompute Protopie churn scores
      */

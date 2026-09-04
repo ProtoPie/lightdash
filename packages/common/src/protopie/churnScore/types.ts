@@ -21,6 +21,19 @@ export type ChurnScoreConfigStatus =
     // active-status query so it disappears from the editor and name lookups.
     | 'deleted';
 
+/**
+ * Who may read a rubric and the scores computed with it.
+ *
+ * - `public`: every project member. The default for a newly created rubric, so
+ *   sharing is the norm and hiding is the deliberate act.
+ * - `private`: the creator plus project/organization admins only.
+ *
+ * Visibility never widens edit rights — a public rubric is still editable only
+ * by its owner and admins. The default rubric is always readable by everyone
+ * regardless of this column.
+ */
+export type ChurnScoreConfigVisibility = 'public' | 'private';
+
 export type ChurnScoreRunStatus =
     | 'queued'
     | 'running'
@@ -90,6 +103,7 @@ export type ChurnScoreConfig = {
     lookbackDays: number;
     scoreFunction: ChurnScoreFunction;
     riskBandThresholds: ChurnScoreRiskBandThresholds;
+    visibility: ChurnScoreConfigVisibility;
     effectiveFrom: Date;
     effectiveTo: Date | null;
     status: ChurnScoreConfigStatus;
@@ -114,7 +128,18 @@ export type ChurnScoreConfigInput = {
     lookbackDays: number;
     scoreFunction: ChurnScoreFunction;
     riskBandThresholds: ChurnScoreRiskBandThresholds;
+    /**
+     * Omitted means "keep what this rubric already has" — a new version
+     * inherits the active version's visibility, and a brand new rubric falls
+     * back to DEFAULT_CHURN_SCORE_VISIBILITY.
+     */
+    visibility?: ChurnScoreConfigVisibility;
     factors: ChurnScoreFactorInput[];
+};
+
+export type SetChurnScoreConfigVisibilityInput = {
+    name: string;
+    visibility: ChurnScoreConfigVisibility;
 };
 
 export type RenameChurnScoreConfigInput = {

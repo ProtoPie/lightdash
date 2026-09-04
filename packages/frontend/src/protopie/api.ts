@@ -340,6 +340,47 @@ export const useRenameProtopieChurnConfig = (projectUuid?: string) => {
     });
 };
 
+export const useSetProtopieChurnConfigVisibility = (projectUuid?: string) => {
+    const queryClient = useQueryClient();
+    const { showToastApiError, showToastSuccess } = useToaster();
+
+    return useMutation<
+        Protopie.ChurnScoreConfigWithFactors,
+        ApiError,
+        Protopie.SetChurnScoreConfigVisibilityInput
+    >({
+        mutationFn: (body) =>
+            lightdashApi<AnyType>({
+                method: 'PUT',
+                url: `/projects/${projectUuid}/protopie/churn/config/visibility`,
+                body: JSON.stringify(body),
+            }) as Promise<Protopie.ChurnScoreConfigWithFactors>,
+        onSuccess: async (results) => {
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigsQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigQueryKey(projectUuid),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: protopieChurnConfigVersionsQueryKey(projectUuid),
+            });
+            showToastSuccess({
+                title:
+                    results.config.visibility === 'public'
+                        ? 'Churn rubric shared with the project'
+                        : 'Churn rubric is now private to you',
+            });
+        },
+        onError: ({ error }) => {
+            showToastApiError({
+                title: 'Failed to change churn rubric visibility',
+                apiError: error,
+            });
+        },
+    });
+};
+
 export const useRecomputeProtopieChurnScore = (projectUuid?: string) => {
     const queryClient = useQueryClient();
     const { showToastApiError, showToastSuccess } = useToaster();

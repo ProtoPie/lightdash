@@ -24,6 +24,16 @@ export const validateChurnScoreConfigInput = (
     }
 
     if (
+        payload.visibility !== undefined &&
+        payload.visibility !== 'public' &&
+        payload.visibility !== 'private'
+    ) {
+        throw new ParameterError(
+            'Churn score visibility must be "public" or "private".',
+        );
+    }
+
+    if (
         !isFiniteNumber(payload.riskBandThresholds.low) ||
         !isFiniteNumber(payload.riskBandThresholds.medium) ||
         payload.riskBandThresholds.low <= payload.riskBandThresholds.medium

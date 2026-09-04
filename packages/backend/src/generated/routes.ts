@@ -539,6 +539,18 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ChurnScoreConfigVisibility: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'union',
+            subSchemas: [
+                { dataType: 'enum', enums: ['public'] },
+                { dataType: 'enum', enums: ['private'] },
+            ],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     ChurnScoreConfigStatus: {
         dataType: 'refAlias',
         type: {
@@ -586,6 +598,10 @@ const models: TsoaRoute.Models = {
                     required: true,
                 },
                 effectiveFrom: { dataType: 'datetime', required: true },
+                visibility: {
+                    ref: 'ChurnScoreConfigVisibility',
+                    required: true,
+                },
                 riskBandThresholds: {
                     ref: 'ChurnScoreRiskBandThresholds',
                     required: true,
@@ -845,6 +861,7 @@ const models: TsoaRoute.Models = {
                     },
                     required: true,
                 },
+                visibility: { ref: 'ChurnScoreConfigVisibility' },
                 riskBandThresholds: {
                     ref: 'ChurnScoreRiskBandThresholds',
                     required: true,
@@ -891,6 +908,21 @@ const models: TsoaRoute.Models = {
             nestedProperties: {
                 newName: { dataType: 'string', required: true },
                 currentName: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    SetChurnScoreConfigVisibilityInput: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                visibility: {
+                    ref: 'ChurnScoreConfigVisibility',
+                    required: true,
+                },
+                name: { dataType: 'string', required: true },
             },
             validators: {},
         },
@@ -34820,6 +34852,73 @@ export function RegisterRoutes(app: Router) {
 
                 await templateService.apiHandler({
                     methodName: 'renameConfig',
+                    controller,
+                    response,
+                    next,
+                    validatedArgs,
+                    successStatus: 200,
+                });
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    const argsProtopieChurnScoreController_setConfigVisibility: Record<
+        string,
+        TsoaRoute.ParameterSchema
+    > = {
+        projectUuid: {
+            in: 'path',
+            name: 'projectUuid',
+            required: true,
+            dataType: 'string',
+        },
+        body: {
+            in: 'body',
+            name: 'body',
+            required: true,
+            ref: 'SetChurnScoreConfigVisibilityInput',
+        },
+        req: { in: 'request', name: 'req', required: true, dataType: 'object' },
+    };
+    app.put(
+        '/api/v1/projects/:projectUuid/protopie/churn/config/visibility',
+        ...fetchMiddlewares<RequestHandler>(ProtopieChurnScoreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ProtopieChurnScoreController.prototype.setConfigVisibility,
+        ),
+
+        async function ProtopieChurnScoreController_setConfigVisibility(
+            request: ExRequest,
+            response: ExResponse,
+            next: any,
+        ) {
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = templateService.getValidatedArgs({
+                    args: argsProtopieChurnScoreController_setConfigVisibility,
+                    request,
+                    response,
+                });
+
+                const container: IocContainer =
+                    typeof iocContainer === 'function'
+                        ? (iocContainer as IocContainerFactory)(request)
+                        : iocContainer;
+
+                const controller: any =
+                    await container.get<ProtopieChurnScoreController>(
+                        ProtopieChurnScoreController,
+                    );
+                if (typeof controller['setStatus'] === 'function') {
+                    controller.setStatus(undefined);
+                }
+
+                await templateService.apiHandler({
+                    methodName: 'setConfigVisibility',
                     controller,
                     response,
                     next,

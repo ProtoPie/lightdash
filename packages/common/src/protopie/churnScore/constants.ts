@@ -1,6 +1,7 @@
 import assertUnreachable from '../../utils/assertUnreachable';
 import {
     type ChurnScoreAggregation,
+    type ChurnScoreConfigVisibility,
     type ChurnScoreFactorInput,
     type ChurnScoreFunction,
     type ChurnScoreStepThresholds,
@@ -15,6 +16,15 @@ export const DEFAULT_CHURN_SCORE_CONFIG_NAME = 'Default Churn Score';
  * distinct from any realistic Salesforce owner/plan/region/country value.
  */
 export const CHURN_SCORE_FILTER_NONE_VALUE = '__none__';
+
+/**
+ * Visibility a newly created rubric gets when the caller does not choose one.
+ * Sharing is the default so a rubric someone built is useful to the team;
+ * hiding it is the deliberate act. The default rubric is always readable by
+ * everyone irrespective of this value.
+ */
+export const DEFAULT_CHURN_SCORE_VISIBILITY: ChurnScoreConfigVisibility =
+    'public';
 
 export const DEFAULT_CHURN_SCORE_LOOKBACK_DAYS = 90;
 
