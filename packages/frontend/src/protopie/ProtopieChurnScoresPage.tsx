@@ -23,6 +23,7 @@ import { useProjectUuid } from '../hooks/useProjectUuid';
 import {
     useProtopieChurnConfigs,
     useProtopieChurnScoreFilterOptions,
+    useProtopieChurnPageView,
     useProtopieChurnScores,
 } from './api';
 import { buildFacetData, facetValueLabel } from './churnFacetData';
@@ -88,6 +89,11 @@ const parseRiskBand = (
 
 const ProtopieChurnScoresPage = () => {
     const projectUuid = useProjectUuid();
+    useProtopieChurnPageView({
+        projectUuid,
+        page: 'churn_list',
+        accountKey: null,
+    });
     const [searchParams, setSearchParams] = useSearchParams();
 
     // Filter state, initialized once from the URL so links are shareable and
