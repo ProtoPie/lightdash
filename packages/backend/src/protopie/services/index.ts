@@ -10,8 +10,10 @@ import { FormDefinitionModel } from '../models/FormDefinitionModel';
 import { FormSubmissionModel } from '../models/FormSubmissionModel';
 import { ProtopieMcpAuditLogModel } from '../models/McpAuditLogModel';
 import { ProtopieOrganizationSettingsModel } from '../models/OrganizationSettingsModel';
+import { ProtopiePageViewModel } from '../models/PageViewModel';
 import { ChurnScoreService } from './ChurnScoreService';
 import { FormService } from './FormService';
+import { PageViewService } from './PageViewService';
 import { SettingsService } from './SettingsService';
 
 const PROTOPIE_MODELS_CACHE = Symbol.for('lightdash.protopie.models');
@@ -37,12 +39,14 @@ export type ProtopieModels = {
     churnScoreFactorModel: ChurnScoreFactorModel;
     churnScoreModel: ChurnScoreModel;
     churnScoreRunModel: ChurnScoreRunModel;
+    pageViewModel: ProtopiePageViewModel;
 };
 
 export type ProtopieServices = {
     formService: FormService;
     settingsService: SettingsService;
     churnScoreService: ChurnScoreService;
+    pageViewService: PageViewService;
 };
 
 export const getProtopieModels = (
@@ -75,6 +79,9 @@ export const getProtopieModels = (
                 database: repository.database,
             }),
             churnScoreRunModel: new ChurnScoreRunModel({
+                database: repository.database,
+            }),
+            pageViewModel: new ProtopiePageViewModel({
                 database: repository.database,
             }),
         };
@@ -110,6 +117,9 @@ export const getProtopieServices = (
                 churnScoreFactorModel: models.churnScoreFactorModel,
                 churnScoreModel: models.churnScoreModel,
                 churnScoreRunModel: models.churnScoreRunModel,
+            }),
+            pageViewService: new PageViewService({
+                pageViewModel: models.pageViewModel,
             }),
         };
     }
