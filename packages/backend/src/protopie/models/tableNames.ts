@@ -7,4 +7,5 @@ export const ProtopieTableName = {
     ChurnScoreFactors: 'protopie_churn_score_factors',
     ChurnScoreRuns: 'protopie_churn_score_runs',
     ChurnScores: 'protopie_churn_score',
+    PageViews: 'protopie_page_views',
 } as const;
