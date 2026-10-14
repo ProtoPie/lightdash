@@ -834,7 +834,8 @@
                     "accountKey": {
                         "type": "string",
                         "nullable": true,
-                        "description": "Account opened on the detail page; null on the list page."
+                        "description": "Account opened on the detail page; null on the list page.",
+                        "maxLength": 2048
                     },
                     "page": {
                         "$ref": "#/components/schemas/ChurnPageViewPage"

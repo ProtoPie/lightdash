@@ -322,6 +322,9 @@ export type ChurnPageViewPage = 'churn_list' | 'churn_account';
 
 export type ChurnPageViewInput = {
     page: ChurnPageViewPage;
-    /** Account opened on the detail page; null on the list page. */
+    /**
+     * Account opened on the detail page; null on the list page.
+     * @maxLength 2048
+     */
     accountKey: string | null;
 };

@@ -995,6 +995,7 @@ const models: TsoaRoute.Models = {
                         { dataType: 'enum', enums: [null] },
                     ],
                     required: true,
+                    validators: { maxLength: { value: 2048 } },
                 },
                 page: { ref: 'ChurnPageViewPage', required: true },
             },
