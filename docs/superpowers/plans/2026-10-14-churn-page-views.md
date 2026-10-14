@@ -29,8 +29,8 @@
 ## Review Focus
 
 1. **User without `view` on the project posts a view** → expect 403 and no row. Pinned by the `PageViewService` test (Task 3).
-2. **Body with an unknown `page` value** (e.g. `"rubric"`) → expect 400 from TSOA validation and, if it ever bypasses TSOA, a Postgres CHECK violation. Pinned by the manual curl step in Task 4 and the CHECK constraint in Task 1.
-3. **Account detail page with an `accountKey` that fails URL decoding or is empty** → no row should be posted; the page must still render. Pinned by the hook's early return in Task 5.
+2. **Body with an unknown `page` value** (e.g. `"rubric"`) → expect 422 from TSOA validation and, if it ever bypasses TSOA, a Postgres CHECK violation. Pinned by the manual curl step in Task 4 and the CHECK constraint in Task 1.
+3. **Account detail page with an empty `accountKey`** → no row is posted; a key that fails URL decoding falls back to the raw param and IS posted (pre-existing page behavior). The page must still render. Pinned by the hook's early return in Task 5.
 4. **Navigating detail A → detail B without leaving the detail route** → two rows (one per `accountKey`). Pinned by the effect dependency list in Task 5 and the manual psql check.
 5. **Backend down or POST failing** → the churn page must render exactly as before. Pinned by the `.catch(() => {})` in Task 5 and verified manually by posting with the API stopped is NOT required; code review of the catch is sufficient.
 
@@ -666,7 +666,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST \
   "$SITE_URL/api/v1/projects/$PROJECT/protopie/churn/views"
 ```
 
-Expected: `400` (TSOA rejects the literal union).
+Expected: `422` (TSOA ValidateError; this backend maps it to 422).
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" -X POST -H "Content-Type: application/json" \
