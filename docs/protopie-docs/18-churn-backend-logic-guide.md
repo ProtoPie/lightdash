@@ -301,8 +301,10 @@ fired by `useProtopieChurnPageView` in `packages/frontend/src/protopie/api.ts`).
 Scrolling, filtering and background refetches do not insert rows.
 
 A **visit** is derived at query time: consecutive rows from the same user with
-less than 30 minutes between them are one visit. Change the interval in the
-query, not in code.
+30 minutes or less between them are one visit. The gap is measured between
+page *entries*, not activity: a user who filters and scrolls the list for 45
+minutes and then opens an account counts as two visits. Change the interval in
+the query, not in code.
 
 ```sql
 WITH gaps AS (
