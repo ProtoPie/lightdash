@@ -312,3 +312,16 @@ export type ChurnScoreFilterOptions = {
     sfAccountRegion: ChurnScoreFacet;
     sfAccountCountry: ChurnScoreFacet;
 };
+
+/**
+ * Pages whose entries are recorded in `protopie_page_views` for usage
+ * reporting. Keep in sync with the CHECK constraint in the
+ * `create_protopie_page_views` migration.
+ */
+export type ChurnPageViewPage = 'churn_list' | 'churn_account';
+
+export type ChurnPageViewInput = {
+    page: ChurnPageViewPage;
+    /** Account opened on the detail page; null on the list page. */
+    accountKey: string | null;
+};
