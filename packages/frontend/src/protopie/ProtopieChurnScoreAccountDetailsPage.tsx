@@ -24,7 +24,10 @@ import EChartsReact, {
     type EChartsOption,
 } from '../components/EChartsReactWrapper';
 import { useProjectUuid } from '../hooks/useProjectUuid';
-import { useProtopieChurnScoreAccountDetails } from './api';
+import {
+    useProtopieChurnPageView,
+    useProtopieChurnScoreAccountDetails,
+} from './api';
 import classes from './ProtopieFormsPage.module.css';
 
 const riskBandColor: Record<Protopie.ChurnScoreRiskBand, string> = {
@@ -146,6 +149,11 @@ const ProtopieChurnScoreAccountDetailsPage = () => {
             return accountKey;
         }
     }, [accountKey]);
+    useProtopieChurnPageView({
+        projectUuid,
+        page: 'churn_account',
+        accountKey: decodedAccountKey ?? null,
+    });
     const [searchParams, setSearchParams] = useSearchParams();
     const configUuid = searchParams.get('configUuid') ?? undefined;
     const dateFrom = searchParams.get('dateFrom') ?? undefined;

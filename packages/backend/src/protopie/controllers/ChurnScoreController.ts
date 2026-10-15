@@ -1,6 +1,7 @@
 import {
     ApiErrorPayload,
     ApiSuccess,
+    ApiSuccessEmpty,
     assertRegisteredAccount,
     Protopie,
 } from '@lightdash/common';
@@ -394,6 +395,34 @@ export class ProtopieChurnScoreController extends BaseController {
                 triggeredBy: 'manual',
             }),
         };
+    }
+
+    /**
+     * Record that the current user opened a churn page. Fired once per page
+     * mount by the frontend; used only for usage reporting.
+     * @summary Record Protopie churn page view
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('201', 'Created')
+    @Post('views')
+    @OperationId('RecordProtopieChurnPageView')
+    async recordPageView(
+        @Path() projectUuid: string,
+        @Body() body: Protopie.ChurnPageViewInput,
+        @Request() req: express.Request,
+    ): Promise<ApiSuccessEmpty> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(201);
+
+        await getProtopieServices(
+            this.services,
+        ).pageViewService.recordChurnPageView({
+            projectUuid,
+            user: toSessionUser(req.account),
+            input: body,
+        });
+
+        return { status: 'ok', results: undefined };
     }
 
     /**

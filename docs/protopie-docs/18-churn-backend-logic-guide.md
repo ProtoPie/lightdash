@@ -292,3 +292,40 @@ Churn Score는 90일 누적 지표라 1~2일 지연은 영향이 없다. 이 장
 | 채점 기준 테이블 마이그레이션 | [packages/backend/src/protopie/database/migrations/](../../packages/backend/src/protopie/database/migrations/) |
 | 재계산 자동화(Airflow) 설계 | [19-churn-recompute-airflow-dag.md](./19-churn-recompute-airflow-dag.md) |
 | 점수 채점 규칙(루브릭) 설계 | [17-churn-score-rubric.md](./17-churn-score-rubric.md) |
+
+## Page-view usage reporting
+
+Every mount of the churn list page or an account detail page inserts one row
+into `protopie_page_views` (`POST /api/v1/projects/{projectUuid}/protopie/churn/views`,
+fired by `useProtopieChurnPageView` in `packages/frontend/src/protopie/api.ts`).
+Scrolling, filtering and background refetches do not insert rows.
+
+A **visit** is derived at query time: consecutive rows from the same user with
+30 minutes or less between them are one visit. The gap is measured between
+page *entries*, not activity: a user who filters and scrolls the list for 45
+minutes and then opens an account counts as two visits. Change the interval in
+the query, not in code.
+
+```sql
+WITH gaps AS (
+    SELECT user_uuid,
+           page,
+           viewed_at,
+           viewed_at - lag(viewed_at) OVER (
+               PARTITION BY user_uuid ORDER BY viewed_at
+           ) AS gap
+    FROM protopie_page_views
+    WHERE viewed_at >= now() - interval '90 days'
+)
+SELECT viewed_at::date                                             AS day,
+       count(*) FILTER (WHERE gap IS NULL OR gap > interval '30 min') AS visits,
+       count(DISTINCT user_uuid)                                   AS users,
+       count(*) FILTER (WHERE page = 'churn_account')              AS accounts_opened
+FROM gaps
+GROUP BY 1
+ORDER BY 1;
+```
+
+Rows before the deploy that introduced this table do not exist; for earlier
+periods use CloudWatch request counts (`/ecs/lightdash-log-groups`, filter on
+`protopie/churn/scores/`), which count API calls rather than visits.

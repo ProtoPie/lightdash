@@ -5,6 +5,7 @@ import {
     useQuery,
     useQueryClient,
 } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { lightdashApi } from '../api';
 import useToaster from '../hooks/toaster/useToaster';
 
@@ -604,3 +605,31 @@ export const useProtopieChurnScoreFilterOptions = (
             }) as Promise<Protopie.ChurnScoreFilterOptions>;
         },
     });
+
+/**
+ * Records one page view per mount for usage reporting. Depends only on the
+ * page identity, so list-page scrolling, filtering and refetching never
+ * re-fire it; opening a different account on the detail page does.
+ */
+export const useProtopieChurnPageView = ({
+    projectUuid,
+    page,
+    accountKey,
+}: {
+    projectUuid: string | undefined;
+    page: Protopie.ChurnPageViewPage;
+    accountKey: string | null;
+}) => {
+    useEffect(() => {
+        if (!projectUuid) return;
+        if (page === 'churn_account' && !accountKey) return;
+
+        lightdashApi<AnyType>({
+            method: 'POST',
+            url: `/projects/${projectUuid}/protopie/churn/views`,
+            body: JSON.stringify({ page, accountKey }),
+        }).catch(() => {
+            // Best-effort telemetry: never surface a failure to the user.
+        });
+    }, [projectUuid, page, accountKey]);
+};
