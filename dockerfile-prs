@@ -9,7 +9,7 @@
 # ------------------------------
 # Stage 0: install dependencies
 # ------------------------------
-FROM node:24.22.1-bookworm-slim AS pnpm-base
+FROM node:20-bookworm-slim AS pnpm-base
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
