@@ -26,6 +26,9 @@ GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 DEV_IMAGE_TAG ?= dev-$(GIT_SHA)
 DEV_LATEST_TAG ?= dev-latest
 PROD_IMAGE_TAG ?= prod-$(GIT_SHA)
+# Registry build cache written by CI (build-image.yml). Local builds only read it.
+DEV_CACHE_REF ?= $(IMAGE_REPO):buildcache-dev
+PROD_CACHE_REF ?= $(IMAGE_REPO):buildcache-prod
 # Set SKIP_PREFLIGHT=1 to skip the backend typecheck (e.g. clean checkout w/o node_modules).
 SKIP_PREFLIGHT ?=
 # Set BUILD=0 to skip the local image build and deploy an already-pushed tag
@@ -147,6 +150,7 @@ build-dev: preflight docker-mem-check ecr-login ## Build and push the dev image 
 		--target "$(DOCKER_TARGET)" \
 		-t "$(IMAGE_REPO):$(DEV_IMAGE_TAG)" \
 		-t "$(IMAGE_REPO):$(DEV_LATEST_TAG)" \
+		--cache-from "type=registry,ref=$(DEV_CACHE_REF)" \
 		$(SENTRY_BUILD_ARGS) \
 		--push .
 	@echo "Pushed $(IMAGE_REPO):$(DEV_IMAGE_TAG) (and $(DEV_LATEST_TAG))"
@@ -203,6 +207,7 @@ build-prod: preflight docker-mem-check ecr-login ## Build and push a prod-tagged
 		-f "$(DOCKERFILE)" \
 		--target "$(DOCKER_TARGET)" \
 		-t "$(IMAGE_REPO):prod-$(GIT_SHA)" \
+		--cache-from "type=registry,ref=$(PROD_CACHE_REF)" \
 		$(SENTRY_BUILD_ARGS) \
 		--push .
 	@echo "Pushed $(IMAGE_REPO):prod-$(GIT_SHA)"
