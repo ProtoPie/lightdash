@@ -331,12 +331,17 @@ PR 머지 후 `build-image.yml`이 `main`에서 돌아 `prod-<sha>`를 만드는
 
 | 항목 | 값 |
 |---|---|
-| `CI_STATUS` | |
-| CI 미실행 원인 | |
-| dev `dbtConnection.type` / `dbtVersion` | |
-| prod `dbtConnection.type` / `dbtVersion` | |
-| `DBT_KEEP` | |
-| `REQUIRED_CHECKS` | |
-| 이미지 크기 (전 → 후) | |
-| 로컬 `make build-dev` 시간 (캐시 사용) | |
-| dev 롤아웃 시간 (전 → 후) | |
+| `CI_STATUS` | `workflow_dispatch`로 정상 실행됨. 기준선(예전 Dockerfile, 캐시 없음) 총 25분, 빌드 단계 22분 |
+| CI push 트리거 미발동 원인 | 과금 한도가 아님 (리포지토리 public, 표준 러너 정상). 10월 머지 #11, #12는 빌드 대상 파일을 바꿨는데도 run 0건. 원인 미확인, 이 PR 머지 시 자동 실행 여부로 확인 |
+| dev 프로젝트 | `xid` github / `latest`, `tomato skink` (preview) none / `v1.11` |
+| prod 프로젝트 | `Protopie XID` github / `v1.4` (prod는 이 한 행만 확인) |
+| `DBT_KEEP` | 1.4 (prod, 실행 파일 `dbt`) + 1.11 (dev, 기본값 `latest`) |
+| `REQUIRED_CHECKS` | 없음 (main, develop 모두 branch protection 없음) |
+| dev 롤아웃 (ALB 변경 후, 이미지는 기존) | 373초: 이미지 pull 약 197초, 기동~헬스 통과 약 50초, 해제와 안정화 약 62초 |
+
+### 계획과 달라진 점
+
+- Task 3: dbt를 1개가 아니라 1.4와 1.11 두 개로 남김. prod 프로젝트가 v1.4로 고정되어 있고 백엔드가 이를 `dbt` 실행 파일로 호출하기 때문.
+- Task 4: `build-local`에는 `--cache-from`을 붙이지 않음. `ecr-login` 선행이 필요해 AWS 로그인 만료 시 로컬 검증 빌드가 막히기 때문. `build-dev`, `build-prod`에만 적용.
+- Task 5: `unhealthy_threshold`를 3이 아니라 10으로 설정. 확인 간격이 10초로 줄면서 장애 판정이 3분에서 30초로 짧아지는 것을 막기 위함.
+- Task 6: `CLAUDE.md`는 미커밋 수정본이 있어 커밋에서 제외하고 작업 트리만 갱신.
