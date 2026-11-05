@@ -3,10 +3,16 @@ SHELL := /bin/bash
 
 # Lightdash fork — local build/deploy for the ProtoPie custom image.
 #
-# Source of truth for DEV infrastructure is the in-repo infra/ directory.
-# DEV deploy is one command:  make deploy-dev   (build -> push -> plan -> apply)
-# PROD is intentionally NOT deployable from here yet (prod still runs the
-# upstream image; cutover requires a reconciled infra/prod + explicit approval).
+# Source of truth for DEV and PROD infrastructure is the in-repo infra/ directory.
+#
+# Standard flow: push to develop/main -> GitHub Actions (build-image.yml) builds and
+# pushes the ECR image (dev-<sha> / prod-<sha>); a human then deploys it:
+#   make deploy-dev  BUILD=0 DEV_IMAGE_TAG=dev-<sha>
+#   make deploy-prod BUILD=0 PROD_IMAGE_TAG=prod-<sha> CONFIRM=PROD
+#
+# Fallback when CI is unavailable: make deploy-dev builds locally (build -> push ->
+# plan -> apply). Local builds read the ECR buildcache-* tags that CI writes.
+# Always review the terraform plan for destroys before applying.
 #
 # Override any default at invocation, for example:
 #   make build-dev SKIP_PREFLIGHT=1
@@ -26,6 +32,9 @@ GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 DEV_IMAGE_TAG ?= dev-$(GIT_SHA)
 DEV_LATEST_TAG ?= dev-latest
 PROD_IMAGE_TAG ?= prod-$(GIT_SHA)
+# Registry build cache written by CI (build-image.yml). Local builds only read it.
+DEV_CACHE_REF ?= $(IMAGE_REPO):buildcache-dev
+PROD_CACHE_REF ?= $(IMAGE_REPO):buildcache-prod
 # Set SKIP_PREFLIGHT=1 to skip the backend typecheck (e.g. clean checkout w/o node_modules).
 SKIP_PREFLIGHT ?=
 # Set BUILD=0 to skip the local image build and deploy an already-pushed tag
@@ -147,6 +156,7 @@ build-dev: preflight docker-mem-check ecr-login ## Build and push the dev image 
 		--target "$(DOCKER_TARGET)" \
 		-t "$(IMAGE_REPO):$(DEV_IMAGE_TAG)" \
 		-t "$(IMAGE_REPO):$(DEV_LATEST_TAG)" \
+		--cache-from "type=registry,ref=$(DEV_CACHE_REF)" \
 		$(SENTRY_BUILD_ARGS) \
 		--push .
 	@echo "Pushed $(IMAGE_REPO):$(DEV_IMAGE_TAG) (and $(DEV_LATEST_TAG))"
@@ -203,6 +213,7 @@ build-prod: preflight docker-mem-check ecr-login ## Build and push a prod-tagged
 		-f "$(DOCKERFILE)" \
 		--target "$(DOCKER_TARGET)" \
 		-t "$(IMAGE_REPO):prod-$(GIT_SHA)" \
+		--cache-from "type=registry,ref=$(PROD_CACHE_REF)" \
 		$(SENTRY_BUILD_ARGS) \
 		--push .
 	@echo "Pushed $(IMAGE_REPO):prod-$(GIT_SHA)"
