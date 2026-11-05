@@ -3,10 +3,16 @@ SHELL := /bin/bash
 
 # Lightdash fork — local build/deploy for the ProtoPie custom image.
 #
-# Source of truth for DEV infrastructure is the in-repo infra/ directory.
-# DEV deploy is one command:  make deploy-dev   (build -> push -> plan -> apply)
-# PROD is intentionally NOT deployable from here yet (prod still runs the
-# upstream image; cutover requires a reconciled infra/prod + explicit approval).
+# Source of truth for DEV and PROD infrastructure is the in-repo infra/ directory.
+#
+# Standard flow: push to develop/main -> GitHub Actions (build-image.yml) builds and
+# pushes the ECR image (dev-<sha> / prod-<sha>); a human then deploys it:
+#   make deploy-dev  BUILD=0 DEV_IMAGE_TAG=dev-<sha>
+#   make deploy-prod BUILD=0 PROD_IMAGE_TAG=prod-<sha> CONFIRM=PROD
+#
+# Fallback when CI is unavailable: make deploy-dev builds locally (build -> push ->
+# plan -> apply). Local builds read the ECR buildcache-* tags that CI writes.
+# Always review the terraform plan for destroys before applying.
 #
 # Override any default at invocation, for example:
 #   make build-dev SKIP_PREFLIGHT=1
