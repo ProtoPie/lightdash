@@ -1,6 +1,6 @@
 ---
 name: lightdash-deploy-flow
-description: Use when deploying the Lightdash fork or editing the Makefile/infra — clarifies that DEV deploys via `make deploy-dev` from the in-repo infra/, that terraform apply is forbidden until `terraform plan` shows no destroys, and that PROD must never be deployed from these targets.
+description: Use when deploying the Lightdash fork or editing the Makefile/infra — CI (build-image.yml) builds and pushes images; dev and prod deploy via `make deploy-dev|deploy-prod BUILD=0` from the in-repo infra/; terraform apply is forbidden until `terraform plan` shows no destroys; prod needs explicit human approval (CONFIRM=PROD).
 ---
 
 # Lightdash fork — deploy flow
@@ -9,8 +9,12 @@ description: Use when deploying the Lightdash fork or editing the Makefile/infra
 
 | Environment | Image | Infra source of truth | Deploy command |
 |---|---|---|---|
-| **dev** | custom ECR `protopie/lightdash:dev-<sha>` | in-repo `infra/dev/` | `make deploy-dev` |
-| **prod** | upstream `lightdash/lightdash` (NOT the fork yet) | `lightdash_Infra/infra/prod` (separate repo) | **disabled — do not deploy** |
+| **dev** | `protopie/lightdash:dev-<sha>` (CI builds) | in-repo `infra/dev/` | `make deploy-dev BUILD=0 DEV_IMAGE_TAG=dev-<sha>` |
+| **prod** | `protopie/lightdash:prod-<sha>` (CI builds on push to `main`) | in-repo `infra/prod/` | `make deploy-prod BUILD=0 PROD_IMAGE_TAG=prod-<sha> CONFIRM=PROD` |
+
+The image ships **no dbt**. dbt-backed features (project create / "Refresh dbt" on a
+github/gitlab/dbt connection) fail until a venv is added back in `dockerfile` (base and
+prod stages).
 
 Account `750128304405`, region `us-west-2`, profile `xid-prod`. dev + prod share the
 S3 backend bucket `xid-prod-terraform` (keys `lightdash-dev` / `lightdash-prod`).
@@ -49,11 +53,21 @@ git merge upstream/main    # resolve conflicts, then PR sync/* -> main
 
 Never deploy a sync branch to prod without dev verification first.
 
+## CI builds the image
+
+`.github/workflows/build-image.yml` is the only workflow. A push to `main` builds and
+pushes `prod-<sha>`; `workflow_dispatch` on any other ref builds `dev-<sha>`. `docs/**`,
+`**/*.md`, `infra/**` and `Makefile` changes do not trigger it. Wait for the run to finish
+(`gh run watch <id>`), then deploy with `BUILD=0`. Concurrent runs on one ref cancel each other.
+
 ## DEV: the one command
 
 ```bash
-make deploy-dev    # build image -> push to ECR -> terraform plan -> (confirm) -> apply
+make deploy-dev BUILD=0 DEV_IMAGE_TAG=dev-<sha>   # terraform plan -> (confirm) -> apply
 ```
+
+Without `BUILD=0` the target builds locally (fallback when CI is down; reads the ECR
+`buildcache-*` tags that CI writes).
 
 Other dev targets:
 - `make build-dev` — build + push only (no infra change)
@@ -70,12 +84,14 @@ Other dev targets:
    would destroy/replace a resource (e.g. the **browserless sidecar** or the **RDS
    instance**), STOP and report — do not apply. Live dev runs lightdash + browserless;
    a plan that removes browserless means infra drifted.
-2. **Never deploy prod from this repo.** `make deploy-prod` is intentionally disabled.
-   Prod still runs the stock upstream image; cutover needs a reconciled `infra/prod`
-   and explicit human approval (out of scope for routine dev work).
-3. **Build is local + heavy.** The Vite frontend build can OOM (exit 137) if other
-   containers are running. `build-dev` warns via `docker-mem-check`; `docker stop`
-   heavy stacks (e.g. local airflow) before building if warned.
+2. **Prod deploys need explicit human approval.** Take a manual RDS snapshot first
+   (`aws rds create-db-snapshot`, instance `lightdash-db`), read the plan for destroys
+   (a task-definition replacement is expected and fine: "1 to add, 1 to change, 1 to
+   destroy"), then apply. Pass `lightdash_image_repo` as the full
+   `<account>.dkr.ecr.us-west-2.amazonaws.com/protopie/lightdash`; the Makefile's
+   `IMAGE_REPO` is built from Make variables and cannot be copied out with grep.
+3. **Local builds are the fallback, not the default.** The Vite frontend build can OOM
+   (exit 137) if other containers are running; `build-dev` warns via `docker-mem-check`.
 4. **RDS has deletion protection OFF** on both dev and prod (known gap). Be extra
    careful that no plan forces an RDS replacement.
 
@@ -84,7 +100,7 @@ Other dev targets:
 `infra/dev/` was reconciled to byte-match the live dev definition (previously kept in
 the separate `lightdash_Infra` repo). The Makefile's `INFRA_ROOT` points at in-repo
 `infra/`, so `make deploy-dev` operates on the same definition that produced live dev.
-`lightdash_Infra` will be deprecated after the prod cutover.
+`infra/prod/` is the source of truth for prod too; the old `lightdash_Infra` repo is deprecated.
 
 ## Account identity / secrets
 
