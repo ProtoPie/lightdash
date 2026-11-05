@@ -43,24 +43,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     libsystemd0
 
-# Only two dbt versions are installed, each with just the Redshift adapter:
-#  - 1.4: the version the ProtoPie XID Lightdash project is pinned to. It maps to the
-#    plain `dbt` binary (DbtCommands.DBT_1_4 in packages/backend/src/dbt/dbtCliClient.ts).
-#  - 1.11: what the "latest" dbt project setting resolves to (getLatestSupportDbtVersion).
-# A project pinned to any other dbt version needs that venv added back here AND in the prod stage.
-# Use pip cache to speed up subsequent builds
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m venv /usr/local/dbt1.4 \
-    && /usr/local/dbt1.4/bin/pip install \
-    "dbt-redshift~=1.4.0" \
-    "psycopg2-binary==2.9.6" \
-    && ln -s /usr/local/dbt1.4/bin/dbt /usr/local/bin/dbt \
-    && python3 -m venv /usr/local/dbt1.11 \
-    && /usr/local/dbt1.11/bin/pip install \
-    "dbt-core~=1.11.0" \
-    "dbt-redshift~=1.10.0" \
-    && ln -s /usr/local/dbt1.11/bin/dbt /usr/local/bin/dbt1.11
-
 # -----------------------------
 # Stage 1: stop here for dev environment
 # -----------------------------
@@ -286,12 +268,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=prod-builder  /usr/local/dbt1.4 /usr/local/dbt1.4
-COPY --from=prod-builder  /usr/local/dbt1.11 /usr/local/dbt1.11
 COPY --from=build-final /usr/app /usr/app
-
-RUN ln -s /usr/local/dbt1.4/bin/dbt /usr/local/bin/dbt \
-    && ln -s /usr/local/dbt1.11/bin/dbt /usr/local/bin/dbt1.11
 
 
 # Run backend
